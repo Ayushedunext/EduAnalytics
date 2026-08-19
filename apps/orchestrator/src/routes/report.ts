@@ -34,6 +34,30 @@ export const reportRouter = Router();
  */
 const ACADEMIC_YEAR = /^\d{4}-\d{2}$/;
 
+/**
+ * The as-of date: what "overdue" and "on roll" are measured against.
+ *
+ * Optional, defaulting to today, because most readers want today's position and
+ * should not have to say so. Supplying it is what makes a report reproducible —
+ * the same date gives the same aging bands next month, which is the property a
+ * printed PDF needs (docs/06 §5).
+ *
+ * Validated for shape AND for existence: `2026-02-31` matches the pattern and is
+ * not a date, and MySQL would compare against it happily enough to return
+ * something that looks like an answer.
+ */
+const AS_OF_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isRealDate(value: string): boolean {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+}
+
+/** Today, as the reports mean it: a calendar date, not an instant. */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     const session = req.session;
@@ -66,6 +90,17 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
       });
     }
 
+    const rawAsOf = req.query['as_of'];
+    const asOfDate = typeof rawAsOf === 'string' && rawAsOf !== '' ? rawAsOf : today();
+    if (!AS_OF_DATE.test(asOfDate) || !isRealDate(asOfDate)) {
+      throw new PlatformError({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'The "as of" date must be a calendar date.',
+        details: { expected: 'YYYY-MM-DD' },
+        correlationId: req.correlationId,
+      });
+    }
+
     const schoolIds = await resolveRequestedSchools(req);
 
     const dashboard = await buildDashboard({
@@ -73,6 +108,7 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
       schoolIds,
       reportId,
       academicYear,
+      asOfDate,
       correlationId: req.correlationId,
     });
 
@@ -90,7 +126,14 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
       correlation_id: req.correlationId,
       report_id: reportId,
       school_ids: schoolIds,
-      filters: { academic_year: academicYear },
+      /**
+       * Both filters are recorded whichever report was asked for, including the
+       * one that report ignores. The audit trail answers "what did this person
+       * see?", and the resolved as-of date is what makes a defaulter list
+       * reconstructible months later — a defaulted-to-today value that was never
+       * written down is not reconstructible at all.
+       */
+      filters: { academic_year: academicYear, as_of: asOfDate },
     });
 
     res.json(dashboard);

@@ -74,11 +74,45 @@ export interface DashboardResult {
   readonly degraded_schools: readonly { school_id: string; message: string }[];
 }
 
-export const DASHBOARD_IDS = ['enrollment-overview', 'fee-collection'] as const;
+export const DASHBOARD_IDS = [
+  'enrollment-overview',
+  'fee-collection',
+  'fee-defaulters',
+  'staff-overview',
+  'admissions-funnel',
+] as const;
 export type DashboardId = (typeof DASHBOARD_IDS)[number];
 
 export function isDashboardId(value: string): value is DashboardId {
   return (DASHBOARD_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * Which filters each report takes.
+ *
+ * A report is refused outright if it is handed a filter it does not declare
+ * (mcp-server/src/tools/run-predefined.ts), and that refusal is deliberate: a
+ * silently ignored filter would show a pill on screen that narrows nothing. So
+ * the caller has to know which filters apply, and the honest reason they differ
+ * is in the data — `employees_data_set` has no academic year at all, because
+ * staff are not enrolled in one.
+ *
+ * Keyed by report id so adding a report is a table entry, not a new branch
+ * (docs/11 §1: the catalog is data, not screens).
+ */
+const REPORT_FILTERS: Record<DashboardId, { academicYear: boolean; asOf: boolean }> = {
+  'enrollment-overview': { academicYear: true, asOf: false },
+  'fee-collection': { academicYear: true, asOf: false },
+  'fee-defaulters': { academicYear: true, asOf: true },
+  'staff-overview': { academicYear: false, asOf: true },
+  'admissions-funnel': { academicYear: true, asOf: false },
+};
+
+/** Everything a builder is allowed to know about the request it is answering. */
+interface BuildContext {
+  readonly year: string;
+  readonly asOf: string;
+  readonly scope: readonly { school_id: string; school_name: string }[];
 }
 
 export async function buildDashboard(args: {
@@ -86,6 +120,8 @@ export async function buildDashboard(args: {
   schoolIds: readonly string[];
   reportId: DashboardId;
   academicYear: string;
+  /** The date "overdue" and "on roll" are measured against (YYYY-MM-DD). */
+  asOfDate: string;
   correlationId: string;
 }): Promise<DashboardResult> {
   const scope = await schoolNames(args.schoolIds);
@@ -97,20 +133,23 @@ export async function buildDashboard(args: {
     });
   }
 
+  const filters = REPORT_FILTERS[args.reportId];
+  const params: Record<string, string> = {};
+  if (filters.academicYear) params['academic_year'] = args.academicYear;
+  if (filters.asOf) params['as_of_date'] = args.asOfDate;
+
   const result = await withMcp(args.session, args.correlationId, args.schoolIds, async (mcp) =>
     mcp.call<PredefinedResult>('run_predefined', {
       report_id: args.reportId,
       school_ids: [...args.schoolIds],
-      params: { academic_year: args.academicYear },
+      params,
     }),
   );
 
   const merged = new Merged(result);
+  const context: BuildContext = { year: args.academicYear, asOf: args.asOfDate, scope };
 
-  const built =
-    args.reportId === 'enrollment-overview'
-      ? buildEnrollment(merged, args.academicYear)
-      : buildFeeCollection(merged, args.academicYear);
+  const built = BUILDERS[args.reportId](merged, context);
 
   /**
    * A dashboard where nothing could be read is a failure, not an empty report.
@@ -160,7 +199,16 @@ export async function buildDashboard(args: {
     logic: {
       source: result.source,
       scope,
-      filters: [{ label: 'Academic year', value: args.academicYear }],
+      /**
+       * The filters shown are the ones actually BOUND, not the ones the screen
+       * happens to have a control for. A pill claiming "AY 2026-27" on a report
+       * that never filtered by year is a lie the logic panel exists to prevent
+       * (Invariant 6).
+       */
+      filters: [
+        ...(filters.academicYear ? [{ label: 'Academic year', value: args.academicYear }] : []),
+        ...(filters.asOf ? [{ label: 'As of', value: args.asOfDate }] : []),
+      ],
       group_by: built.groupBy,
       charts: built.widgets.map((w) => w.type),
       queries: merged.definitions(),
@@ -184,7 +232,23 @@ interface DashboardBuild {
   notes: string[];
 }
 
-function buildEnrollment(merged: Merged, year: string): DashboardBuild {
+/**
+ * One builder per report, resolved from the id.
+ *
+ * A map rather than a chain of `if`s because docs/11 §1 is explicit that "the
+ * dashboard catalog is implemented as a registry from the first dashboard, not
+ * retrofitted after the fourth" — adding Attendance when its table lands should
+ * be a catalog entry plus an entry here, and nothing else.
+ */
+const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) => DashboardBuild> = {
+  'enrollment-overview': buildEnrollment,
+  'fee-collection': buildFeeCollection,
+  'fee-defaulters': buildFeeDefaulters,
+  'staff-overview': buildStaffOverview,
+  'admissions-funnel': buildAdmissionsFunnel,
+};
+
+function buildEnrollment(merged: Merged, { year }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
 
   const byClass = merged.sumBy('by_class', 'classname', ['students'], 'seq');
@@ -274,7 +338,7 @@ function buildEnrollment(merged: Merged, year: string): DashboardBuild {
   return { widgets, groupBy: ['class', 'section', 'gender', 'category'], notes: [] };
 }
 
-function buildFeeCollection(merged: Merged, year: string): DashboardBuild {
+function buildFeeCollection(merged: Merged, { year }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
 
   const byMonth = merged.sumBy('by_month', 'fee_month', ['collected'], 'mo');
@@ -397,6 +461,463 @@ function buildFeeCollection(merged: Merged, year: string): DashboardBuild {
   };
 }
 
+/**
+ * Fee Defaulters (aging 30/60/90) — docs/06 §2, Phase 1.
+ *
+ * The KPI tiles read from the `totals` result set rather than from the sum of
+ * the aging bands, and the reason is worth stating: one child owes across
+ * several fee heads and several bands, so adding up per-band student counts
+ * would count that child three times. Amounts sum; people do not.
+ */
+function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const totals = merged.sumAll('totals', ['defaulters', 'overdue']);
+  const aging = merged.sumBy('aging', 'bucket', ['students', 'outstanding'], 'seq');
+  const byClass = merged.sumBy('by_class', 'classname', ['students', 'outstanding'], 'seq');
+  const byComponent = merged.sumBy('by_component', 'componentname', ['students', 'outstanding']);
+
+  if (totals !== null) {
+    const defaulters = num(totals['defaulters']);
+    const overdue = num(totals['overdue']);
+    widgets.push(
+      {
+        id: 'kpi-overdue',
+        type: 'kpi',
+        label: `Overdue as of ${asOf}`,
+        value: rupees(overdue),
+        tone: overdue > 0 ? 'warning' : 'positive',
+      },
+      {
+        id: 'kpi-defaulters',
+        type: 'kpi',
+        label: 'Students with overdue fees',
+        value: count(defaulters),
+        tone: 'neutral',
+      },
+      {
+        id: 'kpi-average',
+        type: 'kpi',
+        label: 'Average per student',
+        // Not shown as ₹0 when there are no defaulters: dividing by zero and
+        // printing the result is how a clean school looks like a broken query.
+        value: defaulters > 0 ? rupees(overdue / defaulters) : '—',
+        tone: 'neutral',
+      },
+    );
+  }
+
+  /**
+   * The band the escalation actually happens on. Selected by DAYS (seq is the
+   * minimum days overdue in the band) rather than by matching the label text,
+   * so renaming a band in the catalog cannot silently empty this tile.
+   */
+  const beyond90 = aging
+    .filter((r) => num(r['seq']) > 90)
+    .reduce((total, r) => total + num(r['outstanding']), 0);
+  if (aging.length > 0) {
+    widgets.push({
+      id: 'kpi-90plus',
+      type: 'kpi',
+      label: 'Overdue beyond 90 days',
+      value: rupees(beyond90),
+      tone: beyond90 > 0 ? 'negative' : 'positive',
+    });
+  }
+
+  if (aging.length > 0) {
+    widgets.push(
+      {
+        id: 'bar-aging',
+        type: 'bar',
+        title: 'Outstanding by age of the debt',
+        x: 'bucket',
+        y: 'outstanding',
+        data: aging.map((r) => ({
+          bucket: label(r['bucket']),
+          outstanding: num(r['outstanding']),
+        })),
+      },
+      {
+        id: 'table-aging',
+        type: 'table',
+        title: 'Aging bands',
+        columns: [
+          { field: 'bucket', label: 'Band' },
+          { field: 'students', label: 'Students', align: 'right' },
+          { field: 'outstanding', label: 'Outstanding', align: 'right' },
+        ],
+        rows: aging.map((r) => ({
+          bucket: label(r['bucket']),
+          students: num(r['students']),
+          outstanding: num(r['outstanding']),
+        })),
+      },
+    );
+  }
+
+  if (byClass.length > 0) {
+    widgets.push({
+      id: 'bar-class',
+      type: 'bar',
+      title: 'Overdue by class',
+      x: 'classname',
+      y: 'outstanding',
+      data: byClass.map((r) => ({
+        classname: label(r['classname']),
+        outstanding: num(r['outstanding']),
+      })),
+    });
+  }
+
+  if (byComponent.length > 0) {
+    widgets.push({
+      id: 'table-component',
+      type: 'table',
+      title: 'Overdue by fee head',
+      columns: [
+        { field: 'componentname', label: 'Fee head' },
+        { field: 'students', label: 'Students', align: 'right' },
+        { field: 'outstanding', label: 'Outstanding', align: 'right' },
+      ],
+      rows: byComponent.map((r) => ({
+        componentname: label(r['componentname']),
+        students: num(r['students']),
+        outstanding: num(r['outstanding']),
+      })),
+    });
+  }
+
+  /**
+   * The named list. Each school returns its own top 50, so a multi-school view
+   * merges them and re-ranks — which is correct for "the largest balances in the
+   * trust", and is why the school column appears as soon as there is more than
+   * one of them: a name without a school is not actionable.
+   */
+  const named = merged.concatRows('top_defaulters');
+  if (named.length > 0) {
+    const masked = merged.maskedColumns('top_defaulters');
+    const names = new Map(scope.map((s) => [s.school_id, s.school_name]));
+    const multi = scope.length > 1;
+    const rows = named
+      .map(({ school_id, row }) => ({
+        school: names.get(school_id) ?? school_id,
+        enrollmentno: label(row['enrollmentno']),
+        studentname: label(row['studentname']),
+        classname: `${label(row['classname'])}-${label(row['sectionname'])}`,
+        days_overdue: num(row['days_overdue']),
+        outstanding: num(row['outstanding']),
+      }))
+      .sort((a, b) => b.outstanding - a.outstanding)
+      .slice(0, 50);
+
+    widgets.push({
+      id: 'table-defaulters',
+      type: 'table',
+      /**
+       * The cap is in the title rather than in the `truncated` flag, because
+       * they mean different things: `truncated` says the row cap cut the answer
+       * short (docs/04 §3 rail 4), while this list is trimmed BY DESIGN to the
+       * top 50. Flagging a deliberate top-N as truncation would teach readers to
+       * ignore the flag that matters.
+       */
+      title: 'Largest individual balances (top 50)',
+      columns: [
+        ...(multi ? [{ field: 'school', label: 'School' } as const] : []),
+        {
+          field: 'studentname',
+          label: 'Student',
+          ...(masked.has('studentname') ? { masked: true } : {}),
+        },
+        {
+          field: 'enrollmentno',
+          label: 'Enrolment no.',
+          ...(masked.has('enrollmentno') ? { masked: true } : {}),
+        },
+        { field: 'classname', label: 'Class' },
+        { field: 'days_overdue', label: 'Days overdue', align: 'right' },
+        { field: 'outstanding', label: 'Outstanding', align: 'right' },
+      ],
+      rows,
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['aging band', 'class', 'fee head', 'student'],
+    notes: [
+      `A student is counted as a defaulter when a fee period ended on or before ${asOf} and a balance remains. Dues not yet due are shown as their own band and are excluded from every "overdue" figure.`,
+      /**
+       * The limit of the as-of date, said plainly. Someone will backdate this
+       * report expecting June's position, and the demand ledger cannot give it
+       * to them — better to say so than to let a plausible number be misread.
+       */
+      'The fee ledger holds current balances, so the as-of date decides what counts as overdue and how deep the band is. It does not rebuild the ledger as it stood on that date: a payment made last week is already reflected here.',
+      'Student names and enrolment numbers are masked for sessions without student-data permission; the amounts are not.',
+    ],
+  };
+}
+
+/**
+ * Staff Overview — docs/06 §2, Phase 1.
+ *
+ * No academic-year filter, because `employees_data_set` has no academic year:
+ * staff join on a date and leave on one (mcp-server/src/reports/catalog.ts). The
+ * screen says so rather than showing a pill that does nothing.
+ */
+function buildStaffOverview(merged: Merged, { asOf }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const movement = merged.sumAll('movement', ['on_roll', 'joined_12m', 'left_12m']);
+  const byDepartment = merged.sumBy('by_department', 'departmentname', ['staff']);
+  const byDesignation = merged.sumBy('by_designation', 'designationname', ['staff']);
+  const byType = merged.sumBy('by_stafftype', 'stafftype', ['staff']);
+  const byGender = merged.sumBy('by_gender', 'gender', ['staff']);
+  const reasons = merged.sumBy('leavers_by_reason', 'reason_for_leaving', ['leavers']);
+
+  if (movement !== null) {
+    const onRoll = num(movement['on_roll']);
+    const joined = num(movement['joined_12m']);
+    const left = num(movement['left_12m']);
+    widgets.push(
+      {
+        id: 'kpi-on-roll',
+        type: 'kpi',
+        label: `Staff on roll as of ${asOf}`,
+        value: count(onRoll),
+        tone: 'neutral',
+      },
+      { id: 'kpi-joined', type: 'kpi', label: 'Joined (12 months)', value: count(joined), tone: 'positive' },
+      { id: 'kpi-left', type: 'kpi', label: 'Left (12 months)', value: count(left), tone: 'warning' },
+      {
+        id: 'kpi-attrition',
+        type: 'kpi',
+        /**
+         * Leavers as a share of everyone on the payroll at any point in the
+         * window (`on roll now` + `left during it`). Deliberately the simplest
+         * defensible definition rather than an opening/closing average, because
+         * a rate nobody can reproduce from the tiles beside it is a rate nobody
+         * should act on. Computed from summed totals across schools, never by
+         * averaging each school's rate — that would weight a 20-person school
+         * like a 200-person one.
+         */
+        label: 'Attrition (12 months)',
+        value: onRoll + left > 0 ? `${((left / (onRoll + left)) * 100).toFixed(1)}%` : '—',
+        tone: 'neutral',
+      },
+    );
+  }
+
+  if (byDepartment.length > 0) {
+    widgets.push({
+      id: 'bar-department',
+      type: 'bar',
+      title: 'Headcount by department',
+      x: 'departmentname',
+      y: 'staff',
+      data: byDepartment.map((r) => ({
+        departmentname: label(r['departmentname']),
+        staff: num(r['staff']),
+      })),
+    });
+  }
+
+  if (byType.length > 0) {
+    widgets.push({
+      id: 'donut-stafftype',
+      type: 'donut',
+      title: 'Teaching versus non-teaching',
+      label_field: 'stafftype',
+      value_field: 'staff',
+      data: byType.map((r) => ({ stafftype: label(r['stafftype']), staff: num(r['staff']) })),
+    });
+  }
+
+  if (byGender.length > 0) {
+    widgets.push({
+      id: 'donut-gender',
+      type: 'donut',
+      title: 'Gender mix',
+      label_field: 'gender',
+      value_field: 'staff',
+      data: byGender.map((r) => ({ gender: label(r['gender']), staff: num(r['staff']) })),
+    });
+  }
+
+  if (byDesignation.length > 0) {
+    widgets.push({
+      id: 'table-designation',
+      type: 'table',
+      title: 'Headcount by designation',
+      columns: [
+        { field: 'designationname', label: 'Designation' },
+        { field: 'staff', label: 'Staff', align: 'right' },
+      ],
+      rows: byDesignation
+        .sort((a, b) => num(b['staff']) - num(a['staff']))
+        .map((r) => ({ designationname: label(r['designationname']), staff: num(r['staff']) })),
+    });
+  }
+
+  if (reasons.length > 0) {
+    widgets.push({
+      id: 'table-reasons',
+      type: 'table',
+      title: 'Why staff left, last 12 months',
+      columns: [
+        { field: 'reason_for_leaving', label: 'Reason' },
+        { field: 'leavers', label: 'Staff', align: 'right' },
+      ],
+      rows: reasons
+        .sort((a, b) => num(b['leavers']) - num(a['leavers']))
+        .map((r) => ({ reason_for_leaving: label(r['reason_for_leaving']), leavers: num(r['leavers']) })),
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['department', 'designation', 'staff type', 'gender', 'reason for leaving'],
+    notes: [
+      'Staff records carry no academic year, so this report is not filtered by one. Everything here is measured as of the date above: on roll means joined on or before it and not yet left.',
+      'The 15 largest designations are listed; smaller ones are summarised in the department chart rather than dropped from it.',
+    ],
+  };
+}
+
+/**
+ * Admissions Funnel — docs/06 §2, taken into Phase 1 (docs/11 §1).
+ *
+ * The stages are inferred from which number the ERP issued a candidate, because
+ * the table carries no stage column (mcp-server/src/reports/catalog.ts). Said on
+ * screen, not just in a comment: a funnel is exactly the kind of chart whose
+ * definition changes what it means.
+ */
+function buildAdmissionsFunnel(merged: Merged, { year }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const funnel = merged.sumAll('funnel', [
+    'candidates',
+    'enquiries',
+    'registrations',
+    'applications',
+    'admissions',
+  ]);
+  const byClass = merged.sumBy('by_class', 'classname', ['candidates', 'admissions'], 'seq');
+  const byStatus = merged.sumBy('by_status', 'candidate_statusid', ['candidates']);
+  const byGender = merged.sumBy('by_gender', 'gender', ['candidates', 'admissions']);
+
+  if (funnel !== null) {
+    const candidates = num(funnel['candidates']);
+    const admissions = num(funnel['admissions']);
+    widgets.push(
+      {
+        id: 'kpi-candidates',
+        type: 'kpi',
+        label: `Candidates · ${year}`,
+        value: count(candidates),
+        tone: 'neutral',
+      },
+      { id: 'kpi-admitted', type: 'kpi', label: 'Admitted', value: count(admissions), tone: 'positive' },
+      {
+        id: 'kpi-conversion',
+        type: 'kpi',
+        label: 'Enquiry to admission',
+        value: candidates > 0 ? `${((admissions / candidates) * 100).toFixed(1)}%` : '—',
+        tone: 'neutral',
+      },
+    );
+
+    widgets.push({
+      id: 'bar-funnel',
+      type: 'bar',
+      title: 'Candidates reaching each stage',
+      x: 'stage',
+      y: 'candidates',
+      data: [
+        { stage: 'Enquiry', candidates: num(funnel['enquiries']) },
+        { stage: 'Registration', candidates: num(funnel['registrations']) },
+        { stage: 'Application', candidates: num(funnel['applications']) },
+        { stage: 'Admission', candidates: admissions },
+      ],
+    });
+  }
+
+  if (byClass.length > 0) {
+    widgets.push(
+      {
+        id: 'bar-class',
+        type: 'bar',
+        title: 'Candidates by class applied for',
+        x: 'classname',
+        y: 'candidates',
+        data: byClass.map((r) => ({
+          classname: label(r['classname']),
+          candidates: num(r['candidates']),
+        })),
+      },
+      {
+        id: 'table-class',
+        type: 'table',
+        title: 'Conversion by class',
+        columns: [
+          { field: 'classname', label: 'Class' },
+          { field: 'candidates', label: 'Candidates', align: 'right' },
+          { field: 'admissions', label: 'Admitted', align: 'right' },
+          { field: 'conversion', label: 'Conversion', align: 'right' },
+        ],
+        rows: byClass.map((r) => {
+          const candidates = num(r['candidates']);
+          const admissions = num(r['admissions']);
+          return {
+            classname: label(r['classname']),
+            candidates,
+            admissions,
+            conversion: candidates > 0 ? `${((admissions / candidates) * 100).toFixed(1)}%` : '—',
+          };
+        }),
+      },
+    );
+  }
+
+  if (byGender.length > 0) {
+    widgets.push({
+      id: 'donut-gender',
+      type: 'donut',
+      title: 'Candidates by gender',
+      label_field: 'gender',
+      value_field: 'candidates',
+      data: byGender.map((r) => ({ gender: label(r['gender']), candidates: num(r['candidates']) })),
+    });
+  }
+
+  if (byStatus.length > 0) {
+    widgets.push({
+      id: 'table-status',
+      type: 'table',
+      title: "Candidates by the ERP's own status",
+      columns: [
+        { field: 'candidate_statusid', label: 'Status id' },
+        { field: 'candidates', label: 'Candidates', align: 'right' },
+      ],
+      rows: byStatus
+        .sort((a, b) => num(b['candidates']) - num(a['candidates']))
+        .map((r) => ({
+          candidate_statusid: label(r['candidate_statusid']),
+          candidates: num(r['candidates']),
+        })),
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['stage', 'class', 'status', 'gender'],
+    notes: [
+      'The stages are read from the numbers the ERP issued each candidate — an enquiry number means the enquiry stage was reached, an admission number means admitted. The table has no stage column and no stage dates, so this is a reading of the data rather than a field in it.',
+      'Status ids are shown as ids because no status lookup was supplied with this dataset. Compare them against the inferred stages above rather than assuming the two agree.',
+    ],
+  };
+}
+
 // -- Merging ------------------------------------------------------------------
 
 class Merged {
@@ -442,6 +963,42 @@ class Merged {
     const rows = [...acc.values()];
     if (orderField !== undefined) rows.sort((a, b) => num(a[orderField]) - num(b[orderField]));
     return rows;
+  }
+
+  /**
+   * Rows kept as rows, tagged with the school they came from.
+   *
+   * The counterpart to `sumBy`: a list of named students is not summable — two
+   * schools' top-50 lists are two lists, not one list of totals — so the caller
+   * gets them side by side and decides the ranking. The school id travels with
+   * each row because a child's name without a school is not actionable in a
+   * trust view.
+   */
+  concatRows(key: string): { school_id: string; row: Record<string, unknown> }[] {
+    const out: { school_id: string; row: Record<string, unknown> }[] = [];
+    for (const school of this.result.schools) {
+      if (school.status !== 'ok') continue;
+      for (const query of school.queries ?? []) {
+        if (query.key !== key || query.status !== 'ok') continue;
+        for (const row of query.rows ?? []) out.push({ school_id: school.school_id, row });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Columns rail 6 masked, for any school.
+   *
+   * Unioned rather than intersected: if one school's rows came back masked, the
+   * column is masked on screen for the whole table. Showing a column as clear
+   * because SOME school could read it would mislabel the masked rows beside it.
+   */
+  maskedColumns(key: string): Set<string> {
+    const masked = new Set<string>();
+    for (const query of this.queriesFor(key)) {
+      for (const name of query.masked_columns ?? []) masked.add(name);
+    }
+    return masked;
   }
 
   /** A single-row result set summed across schools. */

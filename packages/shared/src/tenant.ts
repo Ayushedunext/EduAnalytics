@@ -56,6 +56,26 @@ export const tenantRegistryRowSchema = z
 
     /** e.g. 'erp-v4.2'. Schema + prompt caches key on this (ADR-014). */
     schema_version: safeSchemaVersionSchema,
+
+    /**
+     * Row-level tenant discriminator — docs/02 §5.
+     *
+     * NULL under the assumed model, where `db_name` separates tenants (docs/03
+     * §1). Non-null where a schema version consolidates an org's schools into
+     * one database distinguished by a column; the MCP server binds this value
+     * into every statement as a PARAMETER.
+     *
+     * Deliberately NOT `safeIdSchema`: this is a data value compared against a
+     * column, never interpolated as an identifier, so identifier-safety rules do
+     * not apply to it and imposing them would reject legitimate keys from an ERP
+     * that formats them differently.
+     *
+     * Equally deliberately a separate column rather than an assumed equality
+     * with `school_id`. They coincide in the first real dataset, and code that
+     * leaned on that coincidence would query the wrong school — silently, and
+     * with a plausible-looking answer — on the first deployment where they part.
+     */
+    tenant_key: z.string().min(1).max(128).nullable(),
   })
   .strict();
 
@@ -87,6 +107,7 @@ export interface ResolvedTenant {
   readonly replica_host: string;
   readonly db_name: string;
   readonly schema_version: string;
+  readonly tenant_key: string | null;
 }
 
 export function toResolvedTenant(row: TenantRegistryRow): ResolvedTenant {
@@ -96,5 +117,6 @@ export function toResolvedTenant(row: TenantRegistryRow): ResolvedTenant {
     replica_host: row.replica_host,
     db_name: row.db_name,
     schema_version: row.schema_version,
+    tenant_key: row.tenant_key,
   });
 }

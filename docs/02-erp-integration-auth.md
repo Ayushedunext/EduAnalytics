@@ -72,9 +72,12 @@ TENANT REGISTRY (platform-owned)
   replica_host · db_name              ← points at the READ REPLICA
   secret_arn                          ← credentials live in AWS Secrets Manager
   schema_version                      ← e.g. 'erp-v4.2'
+  tenant_key                          ← row-level discriminator; NULL normally
 ORG REGISTRY
   org_id PK · org_name · school_count
 ```
+
+**`tenant_key`** exists for schema versions whose tenant isolation is a column rather than a database. Under the assumed model — one database per school (doc 03 §1) — `db_name` separates tenants and `tenant_key` is NULL. Where an ERP deployment consolidates an org's schools into one database distinguished by a column (the first real dataset does; see `db/platform/seed/stmarks.sql`), `tenant_key` carries the value that column must equal, and the MCP server binds it into every query as a parameter. It is a data value, not an identifier, and it is deliberately a separate column rather than an assumed equality with `school_id`: the two coincide in the current dataset by coincidence, and code that relies on that coincidence would silently query the wrong school on the first deployment where they differ. A school whose schema version needs a `tenant_key` and has none is refused, not guessed at.
 
 Sync-time onboarding steps for a new school: ensure a read-only `analytics_ro` MySQL user exists on its DB; create/refresh the Secrets Manager entry; insert/update the registry row; health-check (connect → `SELECT 1` → verify grants are SELECT-only) → `status = active`. **A new school in the ERP is analytics-ready within one sync cycle with zero deployments** — the registry *is* the configuration.
 

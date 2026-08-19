@@ -5,9 +5,14 @@
     "composite": false,
     "declaration": false,
     "declarationMap": false,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler"
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }

@@ -1,0 +1,21 @@
+{
+  "name": "@sap/mcp-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The MCP server: the only path to school data (ADR-006). Stateless, read-only, private-network, scope-enforcing.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "probe": "tsx scripts/probe.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@sap/shared": "*",
+    "dotenv": "^16.4.7",
+    "jose": "^5.9.6",
+    "mysql2": "^3.11.5",
+    "node-sql-parser": "^5.4.0",
+    "zod": "^3.23.8"
+  }
+}

@@ -16,11 +16,14 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --build --force",
+    "typecheck": "tsc --build --force && tsc -p apps/orchestrator && tsc -p apps/mcp-server && tsc -p apps/web",
     "db:migrate": "node db/scripts/migrate.mjs",
     "db:reset": "node db/scripts/migrate.mjs --seed",
     "erp:dev": "npm run dev -w @sap/erp-stub",
-    "api:dev": "npm run dev -w @sap/orchestrator"
+    "api:dev": "npm run dev -w @sap/orchestrator",
+    "mcp:dev": "npm run dev -w @sap/mcp-server",
+    "mcp:probe": "npm run probe -w @sap/mcp-server",
+    "web:dev": "npm run dev -w @sap/web"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
@@ -29,6 +32,10 @@
     "tsx": "^4.23.12",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
+    "zod": "^3.25.76",
     "zod-to-json-schema": "^3.23.5"
+  },
+  "overrides": {
+    "zod": "$zod"
   }
 }

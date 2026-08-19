@@ -27,6 +27,12 @@ The MCP server is the **only path to school data** in the entire platform. Every
 6. **PII masking rules** — column-level masking (phone/email) applied unless the session role permits; drill leaf policies (doc 06) build on this.
 7. **Query logging per tenant** — every executed statement recorded with school_id, caller, rows returned (audit chain — doc 08).
 
+### 3.1 How the allowed set travels (rail 3, concretely)
+
+The set rides an `X-SAP-Mcp-Context` header on the streamable-HTTP request: a short-lived (120 s) HS256 JWT the orchestrator signs, carrying `sub`, `org_id`, `role`, `school_ids[]`, `perms[]`, `permission_class` and the correlation id. The MCP server verifies it before it constructs the tool surface for that request, so a call without a valid context never reaches a tool. Contract and helpers live in `@sap/shared` (`mcp-context.ts`) so both sides cannot drift.
+
+Be precise about what the signature buys. It binds the set to a caller holding the shared secret and makes it tamper-evident in flight, so nothing else on the private network can invent a scope. It does **not** make this layer independent of an orchestrator that lies — the orchestrator holds the signing key. The independence ADR-007 asks for comes from elsewhere: the MCP server resolves every tenant from the registry itself, re-runs the ⊆ check with the same shared rule, and injects the tenant filter from its own resolution, never accepting a database name, host or filter value from the caller. Two layers, one rule, checked twice.
+
 *Why belt-and-braces (1+2, orchestrator+MCP scope):* the threat model includes AI-generated SQL under adversarial prompting and ordinary engineering mistakes. No single check is trusted alone.
 
 ## 4. Connection & tenancy model
@@ -49,6 +55,10 @@ Drill levels are ordinary parameterized queries: the orchestrator's `POST /api/r
 2. The AST validator covers the MySQL dialect in use across all supported `schema_version`s.
 
 **No longer an assumption — a rule.** Agent trigger evaluation (doc 07) reads school data through **this tool surface only**; there is no second data path and no "MCP-style" parallel layer (ADR-006, confirmed as a decision). Note the scope of the rule: it governs *school-data reads*. An agent's IMAP polling and its ERP-webhook receiver are ingestion, not school-data reads, and correctly sit outside the MCP surface.
+
+### 7.1 Build status (slice 1)
+
+Four of the six tools are implemented: `get_schema`, `get_dimensions`, `run_query`, `run_multi`. `run_rollup` and `run_predefined` are **not registered** — they read stores that do not exist yet (the Rollup Store, whose engine is still an open decision in CODING_GUIDELINES §23, and the predefined report catalog of doc 06). They are deliberately absent rather than stubbed: a registered tool is a promise to the model that it works, and one that always errors teaches it to route around a path the product depends on. The tool *surface* is unchanged (ADR-006); only its coverage is partial.
 
 ## 8. Extensibility
 

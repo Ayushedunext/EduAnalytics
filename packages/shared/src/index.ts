@@ -12,3 +12,4 @@ export * from './scope.js';
 export * from './tenant.js';
 export * from './errors.js';
 export * from './audit.js';
+export * from './mcp-context.js';

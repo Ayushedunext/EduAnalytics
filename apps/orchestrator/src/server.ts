@@ -20,6 +20,8 @@ import { requireCsrfToken } from './middleware/csrf.js';
 import { errorHandler, notFoundHandler } from './middleware/errors.js';
 import { launchRouter } from './routes/launch.js';
 import { sessionRouter } from './routes/session.js';
+import { homeRouter } from './routes/home.js';
+import { reportRouter } from './routes/report.js';
 
 const app = express();
 
@@ -71,6 +73,8 @@ app.get('/healthz', (_req, res) => {
 app.use(requireCsrfToken);
 app.use('/api', requireSession);
 app.use(sessionRouter);
+app.use(homeRouter);
+app.use(reportRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -93,3 +97,4 @@ app.listen(config.ORCHESTRATOR_PORT, () => {
   console.log(`[orchestrator] ERP JWKS    ${config.ERP_JWKS_URL}`);
   console.log(`[orchestrator] secure cookies: ${String(isProduction)}`);
 });
+

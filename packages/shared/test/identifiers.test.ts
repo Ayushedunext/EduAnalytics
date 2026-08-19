@@ -117,10 +117,27 @@ describe('registry rows reject unsafe topology', () => {
     db_name: 'stmarksmb',
     secret_arn: 'arn:aws:secretsmanager:ap-south-1:1:secret:x',
     schema_version: 'erp-v4.2',
+    // NULL is the expected production value: one database per school means
+    // db_name is the tenant boundary and no row-level filter exists (docs/02 §5).
+    tenant_key: null,
   };
 
   it('accepts a well-formed row', () => {
     expect(tenantRegistryRowSchema.safeParse(row).success).toBe(true);
+  });
+
+  it('accepts a row-level tenant key for a consolidated schema version', () => {
+    expect(tenantRegistryRowSchema.safeParse({ ...row, tenant_key: 'stmarksmb' }).success).toBe(
+      true,
+    );
+  });
+
+  it('requires tenant_key to be stated, not merely omitted', () => {
+    // Strict about presence because "absent" and "no row-level filter needed"
+    // must not be the same thing: a sync that forgot the column would otherwise
+    // look identical to a school that legitimately has no filter (docs/02 §5).
+    const { tenant_key: _omitted, ...withoutKey } = row;
+    expect(tenantRegistryRowSchema.safeParse(withoutKey).success).toBe(false);
   });
 
   it('rejects an injected db_name even though the sync is "trusted"', () => {

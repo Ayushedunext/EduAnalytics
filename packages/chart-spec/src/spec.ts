@@ -193,6 +193,16 @@ export const tableWidgetSchema = z
   })
   .strict();
 
+/**
+ * The individual widget types, exported so a renderer can take exactly the
+ * widget it draws rather than the whole union plus a cast.
+ */
+export type KpiWidget = z.infer<typeof kpiWidgetSchema>;
+export type BarWidget = z.infer<typeof barWidgetSchema>;
+export type LineWidget = z.infer<typeof lineWidgetSchema>;
+export type DonutWidget = z.infer<typeof donutWidgetSchema>;
+export type TableWidget = z.infer<typeof tableWidgetSchema>;
+
 export const widgetSchema = z.discriminatedUnion('type', [
   kpiWidgetSchema,
   barWidgetSchema,

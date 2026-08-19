@@ -1,0 +1,271 @@
+@import 'tailwindcss';
+
+/**
+ * Design tokens -- docs/10 §1 is the binding spec.
+ *
+ * [MANDATORY] CODING_GUIDELINES §4: no hard-coded hex values in components,
+ * tokens only. Tenant theming (docs/10 §1.3) gives each school an accent colour
+ * and logo from this same system, so a component that hard-codes a colour is a
+ * component that cannot be themed.
+ *
+ * The component classes below mirror the UX prototype (docs/11, Artifacts) so
+ * the built screen matches the design that was signed off. They live here rather
+ * than as Tailwind utility soup in each component for one reason: every value in
+ * them is a token, so the whole visual language can be re-themed per tenant by
+ * changing this file and nothing else. Layout stays on Tailwind utilities.
+ */
+@theme {
+  --color-teal: #028090;      /* primary actions, primary chart series */
+  --color-teal-dark: #046e7c;
+  --color-ink: #032e36;       /* headings, sidebar, dark bands */
+  --color-seafoam: #00a896;   /* secondary series and accents */
+  --color-mint: #02c39a;      /* success, active/ON states */
+  --color-amber: #f2a93b;     /* warnings, fees outstanding */
+  --color-red: #e05252;       /* errors, defaulter counts */
+  --color-slate: #334155;     /* body text */
+  --color-muted: #64748b;     /* captions */
+  --color-line: #cbd5e1;      /* borders */
+  --color-canvas: #f1f5f9;    /* page background */
+  --color-card: #ffffff;
+  --color-chip: #e6f4f1;      /* soft teal fill: avatars, icon tiles */
+  --color-chip-warm: #fbefd8; /* director-tier icon tiles */
+  --color-hairline: #e2e8f0;
+  --color-nav-hover: #0a4a55;
+  --color-nav-text: #9fc1c7;
+  --color-nav-faint: #557e86;
+  --color-nav-sub: #6e9aa1;
+  --color-disabled: #c3cdd8;
+  --color-locked-bg: #f8fafc;
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --radius-card: 10px;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-slate);
+  font-family: var(--font-sans);
+  font-size: 14px;                 /* docs/10: body/table 14 */
+  -webkit-font-smoothing: antialiased;
+}
+
+/** docs/10 §1: tabular figures for all numbers, so columns align. */
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ---------- surfaces ---------- */
+
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  box-shadow: 0 2px 10px rgba(15, 42, 56, 0.08), 0 1px 3px rgba(15, 42, 56, 0.06);
+}
+
+/* ---------- sidebar ---------- */
+
+.sidebar {
+  width: 216px;
+  background: var(--color-ink);
+  color: var(--color-nav-text);
+  padding: 18px 12px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+.brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px 18px; }
+.brand .mark {
+  width: 34px; height: 34px; border-radius: 9px; background: var(--color-teal);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.brand b { color: #fff; font-size: 14px; display: block; line-height: 1.2; }
+.brand span { font-size: 10.5px; color: var(--color-nav-sub); }
+
+.nav { list-style: none; flex: 1; margin: 0; padding: 0; }
+.nav li {
+  padding: 10px 12px; border-radius: 8px; font-size: 13.5px; margin-bottom: 2px;
+  display: flex; gap: 10px; align-items: center; color: var(--color-nav-text);
+}
+.nav li.clickable { cursor: pointer; }
+.nav li.clickable:hover { background: var(--color-nav-hover); color: #fff; }
+.nav li.active { background: var(--color-teal); color: #fff; font-weight: 600; }
+.nav li.muted { color: var(--color-nav-faint); cursor: not-allowed; }
+.nav li .trail { margin-left: auto; font-size: 11px; }
+
+.sidebar .foot {
+  font-size: 10.5px; color: var(--color-nav-faint);
+  padding: 10px 8px 2px; border-top: 1px solid var(--color-nav-hover); line-height: 1.5;
+}
+
+/* ---------- topbar ---------- */
+
+.topbar {
+  background: var(--color-card); border-bottom: 1px solid var(--color-hairline);
+  padding: 12px 24px; display: flex; align-items: center; gap: 14px;
+  position: sticky; top: 0; z-index: 20;
+}
+.topbar .crumb { font-size: 15px; font-weight: 700; color: var(--color-ink); }
+
+.picker-btn {
+  background: var(--color-teal); color: #fff; border-radius: 8px; padding: 8px 14px;
+  font-weight: 600; font-size: 13px; display: flex; gap: 8px; align-items: center;
+  border: none; cursor: pointer; font-family: var(--font-sans);
+}
+.picker-menu {
+  position: absolute; right: 0; top: 44px; background: var(--color-card);
+  border: 1px solid var(--color-line); border-radius: var(--radius-card);
+  box-shadow: 0 2px 10px rgba(15, 42, 56, 0.08), 0 1px 3px rgba(15, 42, 56, 0.06);
+  width: 250px; padding: 10px; z-index: 30;
+}
+.picker-menu label {
+  display: flex; gap: 9px; align-items: center; padding: 8px; border-radius: 7px;
+  font-size: 13.5px; color: var(--color-slate); cursor: pointer;
+}
+.picker-menu label:hover { background: var(--color-canvas); }
+
+.ay {
+  border: 1px solid var(--color-line); border-radius: 8px; padding: 8px 12px;
+  font-size: 12.5px; color: var(--color-slate); background: var(--color-card);
+}
+.avatar {
+  width: 34px; height: 34px; border-radius: 50%; background: var(--color-chip);
+  color: var(--color-teal); font-weight: 700; display: flex; align-items: center;
+  justify-content: center; font-size: 13px;
+}
+
+/* ---------- page ---------- */
+
+.page-title { font-size: 21px; color: var(--color-ink); letter-spacing: -0.01em; margin-bottom: 2px; }
+.page-sub { font-size: 12.5px; color: var(--color-muted); margin-bottom: 18px; }
+
+.sect {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.12em; color: var(--color-muted);
+  margin: 22px 0 10px; text-transform: uppercase;
+}
+
+/* ---------- KPI tiles ---------- */
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+.kpi { padding: 16px 18px; }
+.kpi b {
+  display: block; font-size: 24px; letter-spacing: -0.02em; margin-bottom: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.kpi span { font-size: 12px; color: var(--color-muted); }
+.kpi.unavailable b { color: var(--color-line); }
+
+.pill {
+  display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;
+  border-radius: 999px; padding: 2px 8px; text-transform: uppercase;
+}
+.pill.soon { background: var(--color-canvas); color: var(--color-muted); }
+.pill.nodata { background: var(--color-chip-warm); color: #8a5a0b; }
+.pill.live { background: #e2f8f1; color: #067a5b; }
+
+/* ---------- ask bar ---------- */
+
+.askbar {
+  display: flex; align-items: center; gap: 12px; background: var(--color-card);
+  border: 1.5px solid var(--color-teal); border-radius: 12px; padding: 12px 16px;
+}
+.askbar.locked { border-color: var(--color-line); background: var(--color-locked-bg); cursor: default; }
+.askbar .bot {
+  width: 32px; height: 32px; border-radius: 8px; background: var(--color-chip);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.askbar .ph { flex: 1; color: var(--color-muted); font-style: italic; font-size: 13.5px; }
+.askbar .go {
+  background: var(--color-teal); color: #fff; border-radius: 8px; padding: 8px 16px;
+  font-weight: 600; font-size: 13px;
+}
+.askbar.locked .go { background: var(--color-disabled); }
+
+/* ---------- dashboard gallery ---------- */
+
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.dcard {
+  padding: 16px; display: flex; gap: 12px; align-items: flex-start;
+  transition: transform 0.12s, box-shadow 0.12s; text-align: left; width: 100%;
+  font-family: var(--font-sans);
+}
+.dcard.enabled { cursor: pointer; }
+.dcard.enabled:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(15, 42, 56, 0.12); }
+.dcard.disabled { cursor: not-allowed; }
+.dcard.disabled .ic, .dcard.disabled b, .dcard.disabled .blurb { opacity: 0.55; }
+.dcard .ic {
+  width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center;
+  justify-content: center; font-size: 17px; flex-shrink: 0; background: var(--color-chip);
+}
+.dcard .ic.dir { background: var(--color-chip-warm); }
+.dcard b { display: block; font-size: 13.5px; color: var(--color-ink); margin-bottom: 3px; }
+.dcard .blurb { font-size: 11.5px; color: var(--color-muted); line-height: 1.45; display: block; }
+.dcard .why { font-size: 11px; color: #8a5a0b; line-height: 1.45; display: block; margin-top: 6px; }
+
+/* ---------- notices ---------- */
+
+.notice {
+  border-radius: var(--radius-card); padding: 12px 16px; font-size: 13px;
+  border: 1px solid var(--color-chip-warm); background: #fdf8ee; color: #8a5a0b;
+}
+
+/* ---------- chart-spec panels (rendered by @sap/chart-spec/react) ---------- */
+
+.specPanels { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.specPanel { padding: 18px 20px; min-width: 0; }
+.specPanelTitle { font-size: 14.5px; color: var(--color-ink); font-weight: 600; margin-bottom: 12px; }
+.specNarrative {
+  background: #fbfdfe; border: 1px solid #e2ecf0; border-left: 3px solid var(--color-seafoam);
+  border-radius: 8px; padding: 12px 14px; font-size: 13px; margin: 0 0 16px;
+}
+.specNote { font-size: 11.5px; color: #8a5a0b; margin-top: 8px; }
+
+/* Wide tables scroll inside the panel rather than stretching the page. */
+.specTableWrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+.specTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.specTable th {
+  background: var(--color-canvas); text-align: left; padding: 9px 12px; color: var(--color-slate);
+  font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--color-hairline);
+  position: sticky; top: 0;
+}
+.specTable td {
+  padding: 8px 12px; border-bottom: 1px solid #eef2f6; color: var(--color-slate);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.specTable tr:last-child td { border-bottom: none; }
+
+/* ---------- report affordances & logic panel (docs/06 §3) ---------- */
+
+.affordances { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 18px; }
+.chipbtn {
+  background: var(--color-card); border: 1px solid var(--color-seafoam); color: var(--color-teal);
+  border-radius: 999px; padding: 6px 14px; font-size: 12.5px; font-weight: 600;
+  font-family: var(--font-sans); cursor: pointer;
+}
+.chipbtn:hover:not(.disabled) { background: var(--color-chip); }
+.chipbtn.disabled {
+  border-color: var(--color-line); color: var(--color-disabled); cursor: not-allowed;
+}
+
+.backLink {
+  background: none; border: none; padding: 0; font-family: var(--font-sans);
+  font-size: 12.5px; color: var(--color-teal); cursor: pointer; font-weight: 500;
+}
+.backLink:hover { text-decoration: underline; }
+
+.logicPanel { padding: 18px 20px; margin-top: 18px; }
+.logicChips { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.logicChip { background: var(--color-canvas); border-radius: 8px; padding: 8px 12px; }
+.logicChip dt { font-size: 10.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-muted); }
+.logicChip dd { margin: 3px 0 0; font-size: 12.5px; color: var(--color-ink); }
+.logicNote { font-size: 12px; color: var(--color-muted); line-height: 1.55; margin-bottom: 6px; }
+.logicSqlHeading { font-size: 12px; font-weight: 700; color: var(--color-ink); margin: 16px 0 8px; }
+.logicQuery { margin-bottom: 12px; }
+.logicQueryTitle { font-size: 11.5px; color: var(--color-muted); margin-bottom: 4px; }
+.logicSql {
+  background: var(--color-ink); color: #cfe9ec; border-radius: 8px; padding: 12px 14px;
+  font-size: 11.5px; line-height: 1.6; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 0;
+}

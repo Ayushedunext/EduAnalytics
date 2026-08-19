@@ -46,7 +46,7 @@ function isFresh(entry: CacheEntry): boolean {
 async function loadAll(): Promise<Map<string, TenantRegistryRow>> {
   const [raw] = await platformDb.query(
     `SELECT school_id, org_id, school_name, region, status,
-            replica_host, db_name, secret_arn, schema_version
+            replica_host, db_name, secret_arn, schema_version, tenant_key
        FROM tenant_registry`,
   );
 

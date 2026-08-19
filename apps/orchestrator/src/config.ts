@@ -10,8 +10,22 @@
  * environment here, and in production from Secrets Manager.
  */
 
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+
+/**
+ * The repo-root `.env`, named explicitly.
+ *
+ * `import 'dotenv/config'` resolves `.env` against the process working
+ * directory, and `npm run -w <workspace>` runs a script FROM the workspace
+ * directory — so the bare import silently finds nothing and the service dies at
+ * boot claiming every variable is unset. Naming the file relative to this module
+ * makes local startup independent of where it was started from. Production
+ * configuration comes from the environment and Secrets Manager, where there is
+ * no `.env` to find and this is a no-op.
+ */
+dotenv.config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)), quiet: true });
 
 const schema = z.object({
   ORCHESTRATOR_PORT: z.coerce.number().int().positive().default(3000),
@@ -42,6 +56,21 @@ const schema = z.object({
   /** docs/03 §2: registry lookups are cached ~5 minutes. */
   REGISTRY_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 
+  /**
+   * The MCP server -- the only path to school data (ADR-006). Private network
+   * only (docs/04 §6), so this is a loopback or VPC-internal address and never
+   * a public hostname.
+   */
+  MCP_URL: z.string().url().default('http://127.0.0.1:3100/mcp'),
+
+  /**
+   * Signs the out-of-band call context the MCP server verifies (@sap/shared
+   * mcp-context.ts). Deliberately distinct from SESSION_SECRET: the session
+   * cookie and the MCP call context are different artifacts with different
+   * lifetimes and audiences, and one compromised secret should not be two.
+   */
+  MCP_CONTEXT_SECRET: z.string().min(16, 'MCP_CONTEXT_SECRET must be at least 16 characters'),
+
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 });
 
@@ -56,6 +85,8 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+export const mcpContextSecret = new TextEncoder().encode(config.MCP_CONTEXT_SECRET);
 
 /** True when cookies may be marked Secure (i.e. we are on HTTPS). */
 export const isProduction = config.NODE_ENV === 'production';

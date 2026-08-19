@@ -22,18 +22,22 @@
 --
 --   Note that school_id and the school_db filter value coincide here. That is a
 --   convenience of this dataset, not a rule -- do not collapse the two concepts.
+--   The filter value is therefore stored explicitly in `tenant_key` (migration
+--   0004, docs/02 §5) rather than derived from school_id, so the day an ERP
+--   names them differently the configuration changes and the code does not.
 
 INSERT INTO org_registry (org_id, org_name, school_count) VALUES
   ('stmarks', 'St Marks Society', 3)
 ON DUPLICATE KEY UPDATE org_name = VALUES(org_name), school_count = VALUES(school_count);
 
 INSERT INTO tenant_registry
-  (school_id, org_id, school_name, region, status, replica_host, db_name, secret_arn, schema_version)
+  (school_id, org_id, school_name, region, status, replica_host, db_name, secret_arn, schema_version, tenant_key)
 VALUES
-  ('stmarksg',  'stmarks', 'World School', 'local', 'active', '127.0.0.1', 'ai_analysis', 'env://SCHOOL_DB_CREDENTIALS', 'erp-v1'),
-  ('stmarksj',  'stmarks', 'Janakpuri',    'local', 'active', '127.0.0.1', 'ai_analysis', 'env://SCHOOL_DB_CREDENTIALS', 'erp-v1'),
-  ('stmarksmb', 'stmarks', 'Meera Bagh',   'local', 'active', '127.0.0.1', 'ai_analysis', 'env://SCHOOL_DB_CREDENTIALS', 'erp-v1')
+  ('stmarksg',  'stmarks', 'World School', 'local', 'active', '127.0.0.1', 'ai_analysis', 'env://SCHOOL_DB_CREDENTIALS', 'erp-v1', 'stmarksg'),
+  ('stmarksj',  'stmarks', 'Janakpuri',    'local', 'active', '127.0.0.1', 'ai_analysis', 'env://SCHOOL_DB_CREDENTIALS', 'erp-v1', 'stmarksj'),
+  ('stmarksmb', 'stmarks', 'Meera Bagh',   'local', 'active', '127.0.0.1', 'ai_analysis', 'env://SCHOOL_DB_CREDENTIALS', 'erp-v1', 'stmarksmb')
 ON DUPLICATE KEY UPDATE
   school_name = VALUES(school_name),
   status      = VALUES(status),
-  db_name     = VALUES(db_name);
+  db_name     = VALUES(db_name),
+  tenant_key  = VALUES(tenant_key);

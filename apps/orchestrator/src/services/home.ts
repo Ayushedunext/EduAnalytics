@@ -158,7 +158,7 @@ const DASHBOARDS: readonly DashboardCard[] = [
   {
     id: 'staff-overview',
     title: 'Staff Overview',
-    blurb: 'Headcount by department, teaching mix, joiners and attrition',
+    blurb: 'Headcount by department and employment type, joiners and attrition',
     icon: '👥',
     group: 'school',
     status: 'available',

@@ -396,7 +396,15 @@ const STAFF_OVERVIEW: PredefinedReport = {
     },
     {
       key: 'by_stafftype',
-      description: 'Teaching versus non-teaching mix',
+      /**
+       * Employment type, NOT teaching versus non-teaching. In the real extract
+       * `stafftype` holds CONFIRMATION / CONTRACTUAL / PROBATION alongside
+       * opaque codes (S0011, S004AD) — 19 distinct values across three schools.
+       * Teaching staff cannot be separated from the rest without a mapping
+       * nobody has confirmed (the same finding already recorded in the Home
+       * summary, services/home.ts), so this reports what the column is.
+       */
+      description: "Headcount by employment type (the ERP's stafftype)",
       sql:
         'SELECT stafftype, COUNT(*) AS staff FROM employees_data_set ' +
         'WHERE (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +

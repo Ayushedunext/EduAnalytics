@@ -723,12 +723,20 @@ function buildStaffOverview(merged: Merged, { asOf }: BuildContext): DashboardBu
   }
 
   if (byType.length > 0) {
+    /**
+     * A bar, and titled "employment type", because that is what the column
+     * holds: CONFIRMATION / CONTRACTUAL / PROBATION plus opaque codes, 19
+     * distinct values in the real extract. A donut labelled "teaching versus
+     * non-teaching" was both the wrong shape (19 slices) and the wrong claim —
+     * `employees_data_set` cannot separate teaching staff without a mapping
+     * nobody has confirmed (the same finding as services/home.ts's staff KPI).
+     */
     widgets.push({
-      id: 'donut-stafftype',
-      type: 'donut',
-      title: 'Teaching versus non-teaching',
-      label_field: 'stafftype',
-      value_field: 'staff',
+      id: 'bar-stafftype',
+      type: 'bar',
+      title: 'Headcount by employment type',
+      x: 'stafftype',
+      y: 'staff',
       data: byType.map((r) => ({ stafftype: label(r['stafftype']), staff: num(r['staff']) })),
     });
   }
@@ -776,9 +784,10 @@ function buildStaffOverview(merged: Merged, { asOf }: BuildContext): DashboardBu
 
   return {
     widgets,
-    groupBy: ['department', 'designation', 'staff type', 'gender', 'reason for leaving'],
+    groupBy: ['department', 'designation', 'employment type', 'gender', 'reason for leaving'],
     notes: [
       'Staff records carry no academic year, so this report is not filtered by one. Everything here is measured as of the date above: on roll means joined on or before it and not yet left.',
+      'There is no teaching versus non-teaching split here because the ERP data cannot support one: designations are free text and the staff-type column mixes employment types with internal codes. Headcount is reported for everyone, by department and by employment type, rather than published as a teacher count that would be quietly wrong.',
       'The 15 largest designations are listed; smaller ones are summarised in the department chart rather than dropped from it.',
     ],
   };

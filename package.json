@@ -1,0 +1,26 @@
+{
+  "name": "school-analytics-platform",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "AI-powered analytics and automation module embedded in the school ERP. See CLAUDE.md and docs/.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --build --force"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "zod-to-json-schema": "^3.23.5",
+    "@types/node": "^22.9.0"
+  }
+}

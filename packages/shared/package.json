@@ -1,0 +1,21 @@
+{
+  "name": "@sap/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cross-service contracts: launch-token claims, scope, tenant registry, error taxonomy, audit events.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  }
+}

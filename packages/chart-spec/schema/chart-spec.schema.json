@@ -1,0 +1,419 @@
+{
+  "$ref": "#/definitions/ChartSpec",
+  "definitions": {
+    "ChartSpec": {
+      "type": "object",
+      "properties": {
+        "spec_version": {
+          "type": "number",
+          "const": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "narrative": {
+          "type": "string"
+        },
+        "widgets": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "kpi"
+                  },
+                  "label": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "delta": {
+                    "type": "string"
+                  },
+                  "tone": {
+                    "type": "string",
+                    "enum": [
+                      "neutral",
+                      "positive",
+                      "warning",
+                      "negative"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "label",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "x": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "y": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "drillable": {
+                    "type": "boolean"
+                  },
+                  "drill_context": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "dim": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "dim",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 3
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "bar"
+                  }
+                },
+                "required": [
+                  "id",
+                  "x",
+                  "y",
+                  "data",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "x": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "y": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "drillable": {
+                    "type": "boolean"
+                  },
+                  "drill_context": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "dim": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "dim",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 3
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "line"
+                  },
+                  "series": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "id",
+                  "x",
+                  "y",
+                  "data",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "donut"
+                  },
+                  "label_field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "value_field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "data": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "drillable": {
+                    "type": "boolean"
+                  },
+                  "drill_context": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "dim": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "dim",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 3
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "label_field",
+                  "value_field",
+                  "data"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "table"
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "align": {
+                          "type": "string",
+                          "enum": [
+                            "left",
+                            "right",
+                            "center"
+                          ]
+                        },
+                        "masked": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "label"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "id",
+                  "type",
+                  "columns",
+                  "rows"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "minItems": 1
+        },
+        "meta": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "school_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "school_name": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "school_id",
+                  "school_name"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1
+            },
+            "generated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "as_of": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "served_from": {
+              "type": "string",
+              "enum": [
+                "cache",
+                "rollup",
+                "replica"
+              ]
+            },
+            "report_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "scope",
+            "generated_at",
+            "served_from"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "spec_version",
+        "title",
+        "widgets",
+        "meta"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

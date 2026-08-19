@@ -1,0 +1,14 @@
+{
+  "name": "@sap/erp-stub",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DEVELOPMENT ONLY. Stands in for the EduNext ERP's launch-token endpoint and JWKS until the ERP team ships theirs (docs/11 §2 item 3). Not product code.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  }
+}

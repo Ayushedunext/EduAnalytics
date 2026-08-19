@@ -61,6 +61,7 @@ Default layout, mapped 1:1 to the module boundaries in `docs/01` (layout changes
 ## 5. Backend conventions (orchestrator, agent-runtime)
 
 - Node.js services; WebSocket for streaming (AI status steps, `ai_status` broadcasts, agent-run progress).
+- **HTTP framework: Express 5** (decided 2026-08-19). Nothing in the docs fixed one — `PROJECT_CONTEXT.md` §7 says only "Node.js orchestrator" — so this is recorded here rather than left implicit. Chosen as the least surprising option for an engineer picking the project up; it is a technology choice, not a contract (§20), so no ADR. WebSocket streaming is added alongside it when the AI path needs it, not replaced by it.
 - Services are stateless (ADR-013 context; docs/01 §5): session state in the signed cookie/JWT, shared state in Redis/platform DB/queues. No in-process state a restart would lose — agent runs are persisted state machines and Waits are delayed queue jobs (ADR-022), never timers or sleeping threads.
 - **[MANDATORY]** The orchestrator and agent-runtime reach school data **only through MCP tools** (ADR-006). No `mysql2`/driver import outside `apps/mcp-server` may point at a school database. Platform-owned DBs (registry, report_definitions, agents, rollup store) are accessed by their owning service only.
 - Every request/run carries a correlation id propagated through MCP calls, queue messages, and logs.

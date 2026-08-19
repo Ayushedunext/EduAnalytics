@@ -1,0 +1,24 @@
+{
+  "name": "@sap/orchestrator",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node.js orchestrator: token verification, sessions, scope enforcement, dashboard service, PDF. The only component the SPA talks to.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@sap/shared": "*",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^5.0.1",
+    "jose": "^5.9.6",
+    "mysql2": "^3.11.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.0"
+  }
+}

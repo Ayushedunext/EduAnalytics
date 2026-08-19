@@ -45,8 +45,28 @@ import { z } from 'zod';
 export const cellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 export type Cell = z.infer<typeof cellSchema>;
 
+/**
+ * Keys that must never appear in externally-shaped records. Assigning to
+ * `__proto__` while building row objects pollutes Object.prototype for the
+ * whole process; in a shared orchestrator serving many tenants that is a
+ * cross-tenant problem, not a local one.
+ *
+ * Field names originate in SQL result-set column names, so this is defence in
+ * depth rather than a live hole -- but a hand-edited custom report (ADR-019
+ * allows `SELECT x AS __proto__`) is a plausible route, which is exactly the
+ * kind of thing the read-only plane is not designed to catch.
+ */
+const DANGEROUS_ROW_KEYS = ['__proto__', 'constructor', 'prototype'];
+
+const safeFieldName = z
+  .string()
+  .min(1)
+  .refine((k) => !DANGEROUS_ROW_KEYS.includes(k), {
+    message: 'field name would pollute the prototype chain',
+  });
+
 /** One row of a widget's dataset, keyed by field name. */
-export const dataRowSchema = z.record(z.string(), cellSchema);
+export const dataRowSchema = z.record(safeFieldName, cellSchema);
 export type DataRow = z.infer<typeof dataRowSchema>;
 
 /** Which serving tier answered. The strict three-tier order of ADR-028. */
@@ -150,7 +170,7 @@ export const donutWidgetSchema = z
 
 export const tableColumnSchema = z
   .object({
-    field: z.string().min(1),
+    field: safeFieldName,
     label: z.string().min(1),
     align: z.enum(['left', 'right', 'center']).optional(),
     /**

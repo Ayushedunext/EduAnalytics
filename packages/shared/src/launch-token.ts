@@ -12,6 +12,7 @@
  */
 
 import { z } from 'zod';
+import { safeIdSchema } from './identifiers.js';
 
 /**
  * Roles as enumerated in docs/02 §3.
@@ -49,8 +50,16 @@ export const permSchema = z
   .string()
   .regex(/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/, 'perm must look like "domain.action"');
 
-/** Identifiers are the ERP's own ids (docs/02 §3: "the same IDs the ERP uses"). */
-const idSchema = z.string().min(1).max(128);
+/**
+ * Identifiers are the ERP's own ids (docs/02 §3: "the same IDs the ERP uses").
+ *
+ * Allowlisted, not merely length-checked: `school_id` reaches the Tenant
+ * Registry and from there a FROM clause, where it cannot be parameterized
+ * (see identifiers.ts). A signed token is trusted for AUTHENTICITY, not for
+ * CONTENT -- the ERP could emit an id we cannot safely handle, and the claim
+ * that it "came from a signed token" is not a reason to skip validation.
+ */
+const idSchema = safeIdSchema;
 
 export const launchTokenClaimsSchema = z
   .object({

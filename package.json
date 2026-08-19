@@ -15,12 +15,16 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --build --force"
+    "typecheck": "tsc --build --force",
+    "db:migrate": "node db/scripts/migrate.mjs",
+    "db:reset": "node db/scripts/migrate.mjs --seed"
   },
   "devDependencies": {
+    "@types/node": "^22.9.0",
+    "dotenv": "^17.4.2",
+    "mysql2": "^3.23.3",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
-    "zod-to-json-schema": "^3.23.5",
-    "@types/node": "^22.9.0"
+    "zod-to-json-schema": "^3.23.5"
   }
 }

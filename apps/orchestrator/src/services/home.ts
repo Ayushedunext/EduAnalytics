@@ -137,8 +137,37 @@ const DASHBOARDS: readonly DashboardCard[] = [
   {
     id: 'fee-collection',
     title: 'Fee Collection',
-    blurb: 'Collected vs due, class-wise, payment modes, defaulters',
+    /**
+     * Defaulters used to be listed here, from the UX prototype. They are their
+     * own dashboard now (docs/11 §1), and a card promising something another
+     * card actually delivers sends people to the wrong screen.
+     */
+    blurb: 'Collected vs due, class-wise, payment modes',
     icon: '₹',
+    group: 'school',
+    status: 'available',
+  },
+  {
+    id: 'fee-defaulters',
+    title: 'Fee Defaulters',
+    blurb: 'Overdue by 30/60/90 bands, by class and fee head, largest balances',
+    icon: '⏳',
+    group: 'school',
+    status: 'available',
+  },
+  {
+    id: 'staff-overview',
+    title: 'Staff Overview',
+    blurb: 'Headcount by department, teaching mix, joiners and attrition',
+    icon: '👥',
+    group: 'school',
+    status: 'available',
+  },
+  {
+    id: 'admissions-funnel',
+    title: 'Admissions Funnel',
+    blurb: 'Enquiry → registration → application → admission, and where it leaks',
+    icon: '📝',
     group: 'school',
     status: 'available',
   },

@@ -80,11 +80,15 @@ export function DashboardPage({
             <h1 className="page-title mt-3">{report.spec.title}</h1>
 
             {/* docs/10 §3: scope on screen, and "as of" because docs/03
-                assumption 2 only accepts replica lag if it is labelled. */}
+                assumption 2 only accepts replica lag if it is labelled.
+
+                The filters are whatever the SERVER says it bound, not a fixed
+                "AY …" label. Staff records carry no academic year, so a hardcoded
+                year here would print a filter that report never applied. */}
             <div className="page-sub">
-              {report.logic.scope.map((s) => s.school_name).join(' · ')} · AY{' '}
-              {report.logic.filters.find((f) => f.label === 'Academic year')?.value ?? '—'} · data as
-              of {asOf(report.spec.meta.as_of ?? report.spec.meta.generated_at)}
+              {report.logic.scope.map((s) => s.school_name).join(' · ')}
+              {report.logic.filters.map((f) => ` · ${f.label} ${f.value}`).join('')} · data as of{' '}
+              {asOf(report.spec.meta.as_of ?? report.spec.meta.generated_at)}
               {loading && ' · refreshing…'}
             </div>
 

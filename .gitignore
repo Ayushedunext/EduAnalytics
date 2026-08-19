@@ -132,3 +132,6 @@ dumps/
 !**/schema/*.sql
 !**/seed/*.sql
 !**/queries/*.sql
+
+# Stub ERP dev signing keys (generated, never committed)
+tools/erp-stub/.keys/

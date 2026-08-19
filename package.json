@@ -6,7 +6,8 @@
   "description": "AI-powered analytics and automation module embedded in the school ERP. See CLAUDE.md and docs/.",
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "tools/*"
   ],
   "engines": {
     "node": ">=20.0.0"
@@ -17,12 +18,14 @@
     "test:watch": "vitest",
     "typecheck": "tsc --build --force",
     "db:migrate": "node db/scripts/migrate.mjs",
-    "db:reset": "node db/scripts/migrate.mjs --seed"
+    "db:reset": "node db/scripts/migrate.mjs --seed",
+    "erp:dev": "npm run dev -w @sap/erp-stub"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "dotenv": "^17.4.2",
     "mysql2": "^3.23.3",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
     "zod-to-json-schema": "^3.23.5"

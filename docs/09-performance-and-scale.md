@@ -12,7 +12,7 @@
 | Query load on ERP DBs | All SQL runs on **read replicas**; replication is storage/binlog-level, so replica load never becomes primary CPU. The registry stores replica hosts only — primaries are unaddressable from platform code. |
 | Replica cost at 1,500 DBs | Replicas are per **RDS instance**, not per database: ~1,500 schools consolidated on ~30 instances ≈ 30 replicas. On Aurora, existing readers ≈ near-zero marginal cost. |
 | ERP app-server load | The platform runs on its own EC2/ECS; the ERP's per-session work is signing one JWT (~1 ms). |
-| ERP API/network load | No runtime calls; config arrives via the 15-min background sync + webhooks (the sync itself reads an ERP replica). |
+| ERP API/network load | No runtime calls **on the read path** for data, config or authorization; config arrives via the 15-min background sync + webhooks (the sync itself reads an ERP replica). Two sanctioned off-path exceptions — outbound agent ERP-notify and inbound ERP event webhooks — are excluded from this measurement basis and are load on *us*, not the ERP, except for the notify API's own limits (ADR-027). |
 | A "bad" AI or hand-written query | Contained to a replica by 10 s timeout, 5,000-row cap, per-tenant rate limit, circuit breaker. |
 | Agent trigger load | Trigger evaluation queries the replicas on ticks with the same caps; action work happens in the platform's own queue/workers. |
 
@@ -32,14 +32,20 @@
 
 ## 4. Caching tiers (strict order)
 
+Three result-serving tiers, in strict order (ADR-028):
+
 ```
-① Redis result cache   key = report + level + drill-context + filters + school-set
+① Redis result cache   key = report + level + drill-context + filters
+                              + school-set + permission_class
                         TTL 5–15 min · serves repeats in ms
 ② Rollup Store          pre-computed answers for ~90% of Director questions
                         and drill L1/L2 (ETL every 15–30 min from replicas)
-③ Schema/dimension cache  per schema_version (3–5 docs total) / per school daily
-④ Replica               the only place raw SQL ever runs
+③ Replica               the only place raw SQL ever runs
 ```
+
+Separately — **not a tier in the order above** — the **schema/dimension cache** holds schema metadata per `schema_version` (3–5 documents total) and dimension values per school (daily TTL). It serves AI SQL generation and prompt caching (docs/03 §5, ADR-014); it never answers a report query, so it cannot sit between the rollup store and the replica in a serving sequence.
+
+`permission_class` is in the key because PII masking is role-dependent (docs/04 rail 6, docs/08 §4.4/§5.1) — see ADR-028.
 
 ## 5. Keeping the AI at the low end of 3–10 s
 

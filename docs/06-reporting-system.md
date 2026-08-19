@@ -19,6 +19,8 @@ report_definitions(id, owner_user, school_scope, name,
 
 Enrollment Overview · Attendance Analytics · Fee Collection · Fee Defaulters (aging 30/60/90) · Exam Performance · Subject Deep-Dive · Student Progress · Staff Overview · Transport Analytics · Library & Textbooks · Admissions Funnel · Principal's Snapshot (default single-school landing) · **Director set:** Group Overview · Cross-School Attendance (students AND teachers) · School Comparison.
 
+*Build order note (2026-08-19):* the catalog above is unchanged, but **Phase 1 ships Enrollment Overview · Fee Collection · Fee Defaulters · Staff Overview** — selected for data availability in the first real ERP dataset, where attendance and exam data were absent. Attendance Analytics and Exam Performance move to Phase 3, conditional on that data existing in the per-school databases (docs/11 §1 and §2 item 6).
+
 Serving: vetted parameterized SQL + layout JSON; Redis-cached per school-set + filters (TTL 5–15 min); filters (AY, class/section, date range, term) are bound parameters. Zero AI tokens. Director dashboards answer from the Rollup Store (100–500 ms at any school count). Every dashboard carries filter pills, PDF, "🧠 View logic", "⧉ Clone & customize", and "🤖 Ask AI about this data".
 
 ## 3. Clone-to-edit & logic transparency

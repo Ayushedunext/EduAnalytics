@@ -29,7 +29,7 @@ School ERPs are excellent systems of record and poor systems of *insight*. The d
 5. **The "will it slow our ERP?" objection.** The architecture makes zero ERP load a *mechanism*, not a promise (see §5) — the decisive argument for the ERP vendor and its 1,500 customers.
 ## 3. How does it integrate with the existing ERP?
  
-The ERP contributes exactly two things — **identity** and **configuration** — and is never called at query time.
+The ERP contributes exactly two things — **identity** and **configuration** — and is never called at query time for data, configuration, or authorization. (Two sanctioned off-path exceptions exist: outbound ERP-notify from agent action nodes, and inbound ERP event webhooks — ADR-027.)
  
 ```
 ┌────────────── EXISTING ERP ──────────────┐
@@ -61,7 +61,7 @@ Key properties (full detail: `docs/02`):
  
 Violating any of these is a design regression requiring an ADR amendment *before* code:
  
-1. **Zero ERP load.** Analytics and agents NEVER query an ERP primary database and NEVER call ERP services at query time. All reads: replicas + rollups + cache. The ERP's runtime cost is one ~1 ms JWT signature per session.
+1. **Zero ERP load (data path).** Analytics and agents NEVER query an ERP primary database and NEVER call an ERP service for **data, configuration, or authorization** at query time. All reads: replicas + rollups + cache. On the read path the ERP's runtime cost is one ~1 ms JWT signature per session. Sanctioned off-path exceptions — outbound ERP-notify from agent action nodes, inbound ERP event webhooks — are excluded from the zero-load measurement basis (**ADR-027**).
 2. **Scope is law.** Every data access is constrained to the token's `school_ids`, enforced at the orchestrator AND independently at the MCP layer (out-of-band allowed set). The AI model never supplies tenant identifiers.
 3. **Read-only data plane.** All school-data access is SELECT-only (read-only DB users + AST validation), row/time-capped. Nothing on the platform — including agents and hand-edited custom-report SQL — writes to school databases.
 4. **Spec-driven rendering.** The AI emits **chart-spec JSON**, never renderable code. The frontend renders specs; the PDF renderer reads the same specs. One visual language everywhere.
@@ -126,7 +126,7 @@ Query serving order (strict): **Redis → Rollup Store → replica**. Cross-scho
 | Frontend | React SPA + Tailwind; Recharts/Chart.js-class chart layer rendering chart-spec; React Flow for the agent canvas | |
 | Backend | Node.js orchestrator; WebSocket streaming | |
 | Data access | **MCP server (TypeScript SDK, streamable HTTP)** — the only path to school data | Invariant-adjacent |
-| Databases | Schools' existing MySQL on AWS RDS/Aurora (given); platform DB for registry/reports/agents; **Rollup Store** (Aurora MySQL or ClickHouse) | |
+| Databases | Schools' existing MySQL on AWS RDS/Aurora (given); **platform DB: MySQL 8** (registry, report definitions, agents, runs, message log) — decided 2026-08-19; **Rollup Store** (Aurora MySQL or ClickHouse — **this choice is still open**, see CODING_GUIDELINES §23; resolve by ADR before Phase 2) | Platform-DB engine chosen for dialect consistency: school DBs, read replicas and the platform DB are then all MySQL — one driver, one SQL dialect, one set of ops knowledge, and no second dialect in the AST validator's blast radius. MySQL 8's JSON type covers `def_json` / `graph_json` / `dims_json`. |
 | Caching | Redis | |
 | Secrets | AWS Secrets Manager (+ KMS master key for BYOK vault) | |
 | AI | Anthropic API (Claude; Haiku-first, Sonnet escalation), prompt caching, BYOK keys | Bedrock/Vertex adapters are a planned extension, not v1 |
@@ -151,7 +151,7 @@ Any of the following requires a new ADR in `DECISIONS.md` (Proposed → reviewed
 - Server-side `ai_status` gating of every AI endpoint (ADR-017).
 ## 9. Implementation philosophy
  
-1. **Docs lead, code follows.** `project-docs/` is the single source of truth; if code and docs disagree, the doc wins until amended. Amendments happen via ADRs.
+1. **Docs lead, code follows.** `docs/` is the single source of truth; if code and docs disagree, the doc wins until amended. Amendments happen via ADRs.
 2. **Deterministic before intelligent.** Ship and harden the cached/vetted-SQL path first; the AI path layers on top and is always optional (the product must be excellent with AI locked).
 3. **Guardrails are mechanisms, not policies.** Prefer designs where the wrong thing is *unaddressable* (replica-only hosts, out-of-band scope, template-only sending) over designs that rely on discipline.
 4. **One model, many features.** Reuse the unified report definition, the chart-spec, and the MCP tool surface rather than minting parallel paths — that reuse is why clone/drill/PDF/AI compose into each other.

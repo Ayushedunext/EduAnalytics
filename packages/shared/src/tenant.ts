@@ -9,6 +9,12 @@
  */
 
 import { z } from 'zod';
+import {
+  safeDbNameSchema,
+  safeHostnameSchema,
+  safeIdSchema,
+  safeSchemaVersionSchema,
+} from './identifiers.js';
 
 /** docs/02 §6: non-active schools are excluded from scope, shown disabled. */
 export const TENANT_STATUSES = ['active', 'suspended', 'migrating'] as const;
@@ -16,8 +22,8 @@ export type TenantStatus = (typeof TENANT_STATUSES)[number];
 
 export const tenantRegistryRowSchema = z
   .object({
-    school_id: z.string().min(1),
-    org_id: z.string().min(1),
+    school_id: safeIdSchema,
+    org_id: safeIdSchema,
     school_name: z.string().min(1),
     region: z.string().min(1),
     status: z.enum(TENANT_STATUSES),
@@ -29,8 +35,17 @@ export const tenantRegistryRowSchema = z
      * zero-ERP-load from a policy into a guarantee. There is deliberately no
      * `primary_host` field, and one must not be added.
      */
-    replica_host: z.string().min(1),
-    db_name: z.string().min(1),
+    replica_host: safeHostnameSchema,
+
+    /**
+     * [MANDATORY] Allowlisted because this value is interpolated into SQL as an
+     * identifier -- `USE \`db\`` / `FROM \`db\`.students` -- where a bound
+     * parameter is not legal syntax. It is the one unavoidable
+     * string-concatenation site in the data path, so it is constrained at the
+     * point it enters the registry rather than trusted at the point it is used.
+     * Always emit it through quoteMySqlIdentifier(), never a raw template.
+     */
+    db_name: safeDbNameSchema,
 
     /**
      * Pointer only. Credentials live in AWS Secrets Manager (ADR-013): the
@@ -40,7 +55,7 @@ export const tenantRegistryRowSchema = z
     secret_arn: z.string().min(1),
 
     /** e.g. 'erp-v4.2'. Schema + prompt caches key on this (ADR-014). */
-    schema_version: z.string().min(1),
+    schema_version: safeSchemaVersionSchema,
   })
   .strict();
 
@@ -48,7 +63,7 @@ export type TenantRegistryRow = z.infer<typeof tenantRegistryRowSchema>;
 
 export const orgRegistryRowSchema = z
   .object({
-    org_id: z.string().min(1),
+    org_id: safeIdSchema,
     org_name: z.string().min(1),
     school_count: z.number().int().nonnegative(),
   })

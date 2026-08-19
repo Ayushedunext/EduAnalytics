@@ -6,6 +6,7 @@
  * §3: services must not re-declare them.
  */
 
+export * from './identifiers.js';
 export * from './launch-token.js';
 export * from './scope.js';
 export * from './tenant.js';

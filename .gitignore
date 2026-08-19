@@ -120,5 +120,15 @@ AGENTS.md
 *.mysql
 data/
 dumps/
+
+# ...but SQL that is SOURCE CODE is tracked. The blanket rule above targets
+# DATA (dumps, extracts, exports); these directories hold schema and
+# configuration, which must be in the repo or a fresh clone cannot build.
+#
+# [MANDATORY] Anything under these paths must contain schema, topology or
+# configuration ONLY -- never row-level school data. A seed file that grows
+# student rows belongs in data/ and stays untracked (CODING_GUIDELINES §21).
 !**/migrations/*.sql
 !**/schema/*.sql
+!**/seed/*.sql
+!**/queries/*.sql

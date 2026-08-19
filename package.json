@@ -19,7 +19,8 @@
     "typecheck": "tsc --build --force",
     "db:migrate": "node db/scripts/migrate.mjs",
     "db:reset": "node db/scripts/migrate.mjs --seed",
-    "erp:dev": "npm run dev -w @sap/erp-stub"
+    "erp:dev": "npm run dev -w @sap/erp-stub",
+    "api:dev": "npm run dev -w @sap/orchestrator"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

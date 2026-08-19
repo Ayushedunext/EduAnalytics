@@ -20,7 +20,7 @@
 | ADR-009 | Read-replica strategy — ERP primaries are unaddressable | Accepted (pending A1) |
 | ADR-010 | Rollup Store for cross-school aggregates (no PII) | Accepted |
 | ADR-011 | Fan-out querying (`run_multi`) for cross-school row-level detail | Accepted |
-| ADR-012 | Redis result caching as tier 1 of a strict cache order | Accepted |
+| ADR-012 | Redis result caching as tier 1 of a strict cache order | Accepted (amended by ADR-028) |
 | ADR-013 | Multi-tenant model: Tenant Registry + Secrets Manager + lazy LRU pools | Accepted |
 | ADR-014 | Schema versioning: cache per `schema_version`, not per school | Accepted |
 | ADR-015 | Chart-Spec JSON — spec-driven rendering; the AI never emits code | Accepted |
@@ -35,6 +35,9 @@
 | ADR-024 | Messaging channels are school-owned; approved-template-only sending | Accepted |
 | ADR-025 | Idempotency and guardrails are platform-level, not per-agent options | Accepted |
 | ADR-026 | Model strategy: Haiku-first with Sonnet escalation + prompt caching | Accepted |
+| ADR-027 | Invariant 1 scope: no ERP on the data path | Accepted |
+| ADR-028 | Result-cache contract: permission class in the key; three-tier serving order | Accepted (amends ADR-012) |
+| ADR-029 | Launch transport, webhook authentication, CSRF posture | Accepted |
 
 ---
 
@@ -156,7 +159,7 @@
 **Alternatives considered.** No result cache (rollups only) — rejected: single-school dashboard repeats would hit replicas needlessly; long TTLs — rejected: staleness beyond the "as of" framing.
 **Trade-offs.** Cache invalidation is TTL-based, not event-based (acceptable at these TTLs); Redis becomes operationally required.
 **Future impact.** Prefetch features (drill top-3 bars) are cache warmers, not new paths.
-**Status.** Accepted.
+**Status.** Accepted — **amended by ADR-028**: the cache key gains the caller's permission class, and the tier list is corrected to three result-serving tiers (the schema/dimension caches are not tiers in that order). Everything else in this ADR stands.
 
 ## ADR-013 — Multi-tenant model: registry + secrets + lazy LRU pools
 
@@ -265,7 +268,7 @@
 **Reasoning.** An agent bug becomes an annoying message, never corrupted fees; zero ERP load extends to automation; the ADR-008 read-only plane stays universal.
 **Alternatives considered.** Whitelisted write-back actions (e.g., mark "parent informed" in the ERP DB) — rejected: state changes belong to the ERP; the ERP-notify API is the sanctioned channel for anything the ERP should record.
 **Trade-offs.** Some desirable automations require future ERP APIs rather than direct writes.
-**Status.** Accepted.
+**Status.** Accepted. *Clarified 2026-08-17 (not amended): this ADR's phrase "the same replica/MCP-style layer" predates ADR-006's formalization and must be read as "the MCP server's tool surface" — there is no parallel read-only layer, and none may be built (docs/04 §7, docs/07 §3). The outbound ERP-notify call sanctioned here is a named off-read-path exception to Invariant 1 under ADR-027, and remains contingent on that API existing (docs/11 §2 item 7).*
 
 ## ADR-024 — Messaging channels are school-owned; approved-template-only
 
@@ -293,6 +296,76 @@
 **Alternatives considered.** Always-Sonnet — rejected: cost/latency on the org's bill without proportional quality gain for typical queries; fine-tuned/self-hosted models — out of scope and against the BYOK model.
 **Trade-offs.** Escalation heuristics to tune; model names/prices drift (assumption A9 — meters and selectors are data-driven).
 **Status.** Accepted.
+
+## ADR-027 — Invariant 1 scope: no ERP on the data path
+
+**Context.** Invariant 1 is stated absolutely in `CLAUDE.md` and `PROJECT_CONTEXT.md` §3/§4: analytics and agents "NEVER call ERP services at query time", and "the ERP's only runtime involvement is signing one launch JWT per session." Two Accepted decisions contradict that literal text. ADR-023 sanctions **outbound ERP-notify API calls** as an agent action — explicitly, as the alternative to database write-backs ("the ERP-notify API is the sanctioned channel for anything the ERP should record"). ADR-005 and docs/07 §2 accept **inbound ERP event webhooks** (school create/update; later admission and fee events). The invariant is quoted verbatim in four documents and is the decisive commercial argument to the ERP vendor, so both failure modes are live: a literal reading cuts the 🔔 action node, while a loose reading licenses a read-path ERP call.
+
+**Decision.** Invariant 1 governs **the data/read path**. Restated: no component of the platform may query an ERP primary database, and no component may call an ERP service to obtain **data, configuration, or authorization at query time**. Two runtime interactions are sanctioned exceptions, neither on the read path:
+
+1. **Outbound ERP-notify** — agent action nodes may call the ERP's notification API to raise an in-app notification (ADR-023), subject to the ADR-025 guardrails.
+2. **Inbound ERP webhooks** — the platform may receive ERP-originated events, authenticated per ADR-029. An inbound event never *satisfies* a read: it invalidates cache or enqueues work, and the data is then read from the data plane.
+
+Both exceptions are excluded from the "zero ERP load" measurement basis. The GA gate's `ERP primary CPU delta = 0` measures the read path; notification-API load is measured separately against limits the ERP team specifies.
+
+**Reasoning.** The invariant exists to make it impossible for analytics to degrade ERP primaries or to put the ERP in the latency path of a user's query. Neither exception does either: ERP-notify is asynchronous, queued and guardrailed, off the query path entirely; inbound webhooks cost the platform, not the ERP. Stating the boundary precisely protects the *mechanism*. The absolute wording protected only the slogan — and left two Accepted ADRs contradicting the text of the invariant they were reviewed against.
+
+**Alternatives considered.** (a) Keep the absolute wording and cut ERP-notify plus event webhooks — rejected: removes ADR-023's sanctioned alternative to write-backs and reduces agents to polling only, for no isolation gain. (b) Leave the wording and treat the exceptions as understood — rejected: the invariant is quoted in four documents as a hard rule, and undocumented exceptions to hard rules are precisely how drift begins. (c) Route everything through messaging channels and never touch the ERP — rejected: some events belong in the ERP's own record, which is ADR-023's reasoning.
+
+**Trade-offs.** The invariant is no longer expressible in one sentence; readers carry a two-clause rule. The notification path introduces an ERP dependency inside agent action workers, so an ERP outage degrades the 🔔 node — a logged, retryable node failure per docs/07 §6, not a platform failure.
+
+**Future impact.** Every *new* ERP interaction must be classified against this ADR before it is built: on the read path it is forbidden; off it, it requires an ADR naming it as an exception. Note that exception 1 is contingent on the ERP notification API existing at all — still an unconfirmed input (docs/11 §2). If it does not exist, ADR-023's rejection of write-backs loses its stated alternative and that trade-off must be re-examined, not merely the node.
+
+**Status.** Accepted. Amends the Invariant 1 wording in `CLAUDE.md`, `PROJECT_CONTEXT.md` §3/§4, `docs/01` §2, and `docs/09` §2. Touches an invariant, so it carries the explicit sign-off the amendment process requires; recorded as given.
+
+## ADR-028 — Result-cache contract: permission class in the key; three-tier serving order
+
+**Context.** ADR-012 fixes the result-cache key as `report + level + drill-context + filters + school-set` and declares the tier order law. Two defects surfaced in the documentation audit:
+
+- **Masking is role-dependent, the key is not.** PII masking is applied per session role (docs/04 §3 rail 6) and drill leaves are gated on student-data rights (docs/08 §4.5), but the key carries no permission component. Two users of the same school with different `perms[]` therefore collide: a Principal warming the cache would serve unmasked rows to a class teacher on an identical key.
+- **The tier order was stated four ways** — docs/03 §4 (three tiers), docs/09 §4 and ADR-012 (four, inserting the schema/dimension cache), CODING_GUIDELINES §15 (three). Placing the schema/dimension cache inside the *result-serving* order is a category error: per ADR-014 it serves schema metadata for AI SQL generation and never answers a report query.
+
+Separately, the Redis result cache is the only store where row-level PII leaves a school database, and docs/08 did not mention it — while ADR-010's no-PII rule for the Rollup Store carried the entire data-minimisation argument.
+
+**Decision.**
+
+1. **Cache key.** The result-cache key is `report + level + drill-context + filters + school-set + permission_class`, where `permission_class` is a deterministic digest of the caller's effective data-visibility rights — masking state and drill-leaf eligibility as derived from token `role` and `perms[]`. Callers with different effective visibility can never share a cache entry.
+2. **Serving order.** Exactly three result-serving tiers: ① Redis result cache → ② Rollup Store → ③ read replica. The schema and dimension caches are AI-path metadata caches (docs/03 §5, ADR-014), documented separately and never part of this order.
+3. **Cache PII policy.** The result cache may hold row-level PII. It is therefore encrypted at rest and in transit; on private subnets, never internet-reachable; TTL-bounded 5–15 min as already specified; excluded from operational logs; and in scope for the compliance review's retention decisions (docs/11 §4.5) alongside audit and message_log.
+
+**Reasoning.** A masking rule enforced at query time and discarded at cache time is not enforced at all. Making `permission_class` part of the key keeps the two consistent structurally rather than by discipline — the guardrails-as-mechanism principle (PROJECT_CONTEXT §9.3). Correcting the tier list removes an instruction CODING_GUIDELINES §15 requires engineers to mirror "in code structure, not just intent", and which would have produced a nonsensical lookup. Naming Redis in the PII policy closes the one gap in an otherwise complete data-minimisation story.
+
+**Alternatives considered.** (a) Cache only fully-masked results and re-resolve masking per request — rejected: forfeits the cache for privileged users, who are the heaviest dashboard users. (b) Key by user id — rejected: destroys hit rates for no additional safety, since what varies is visibility, not identity. (c) Forbid PII in the cache entirely, mirroring ADR-010 — rejected: excludes Fee Defaulters and every drill leaf from caching, breaking the 50–200 ms budget for the reports schools use most; the permission-class key achieves the isolation that rule was reaching for.
+
+**Trade-offs.** Marginally lower hit rates where a school's users hold heterogeneous permissions. `permission_class` must be derived deterministically or entries fragment silently — one function, unit-tested. Redis becomes in-scope for the compliance review.
+
+**Future impact.** Any future per-user visibility feature (finer PII policies via `perms[]`, per-domain redaction) extends `permission_class` rather than the key's structure. Cache-warming and drill prefetch must warm per permission class, not per school.
+
+**Status.** Accepted — amends ADR-012, which otherwise stands. Updates docs/03 §4, docs/08 §5, docs/09 §4, CODING_GUIDELINES §8/§15.
+
+## ADR-029 — Launch transport, webhook authentication, CSRF posture
+
+**Context.** Three security surfaces were unspecified across the doc set:
+
+- **Launch transport.** docs/02 §2 showed the token in a URL query string (`/launch?token=…`). Query strings land in proxy and server logs and in `Referer` headers, which the platform cannot redact upstream — while CODING_GUIDELINES §13 declares launch tokens a log-forbidden value. The 60-second single-use window narrows the exposure but does not remove it.
+- **Webhook authentication.** The ERP→platform webhooks of docs/02 §5 and docs/07 §2 specified no authentication, although the receiver writes to the Tenant Registry — the table that determines which replica a school's queries reach.
+- **CSRF.** ADR-004's 8-hour cookie session fronts state-changing POSTs (drill, save report, publish agent) with no documented defense, and iframe embedding forces `SameSite=None` (docs/02 §4, docs/08 §2), removing the default protection in exactly the mode that most needs it.
+
+**Decision.**
+
+1. **Launch transport.** The launch token is delivered by an **auto-submitting POST form** to `https://analytics.<domain>/launch`, body parameter `token` — never as a URL query parameter. The handler responds with a redirect to the SPA, so the token never enters a URL, a history entry, or a `Referer` header. `Referrer-Policy: no-referrer` is set on the launch route regardless.
+2. **Webhook authentication.** ERP→platform webhooks carry `X-Signature: HMAC-SHA256(body, shared_secret)` and `X-Timestamp`. The platform rejects signatures failing constant-time comparison, timestamps outside a 5-minute window, and replayed `(timestamp, signature)` pairs within that window. The shared secret lives in Secrets Manager and rotates with an overlap period. Webhooks remain advisory: every event they carry is also reachable via the 15-minute sync, so a rejected webhook degrades freshness, never correctness.
+3. **CSRF.** Session cookies are `httpOnly; Secure; SameSite=Lax` in new-tab mode and `SameSite=None` in iframe mode. **Independently of cookie policy**, every state-changing request carries a double-submit CSRF token — a cookie-readable value echoed in a request header and compared server-side. GET/HEAD endpoints are side-effect-free by contract.
+
+**Reasoning.** Each measure removes a class of exposure rather than narrowing it. POST transport makes the token unloggable upstream instead of trusting a 60-second window against unknown log retention. HMAC plus a replay window makes registry writes unforgeable rather than merely obscure. A cookie-policy-independent CSRF token means iframe mode's mandatory `SameSite=None` is not a security regression. All three are conventional and cheap — and cheapest *before* the ERP team builds its side.
+
+**Alternatives considered.** (a) Query string plus `Referrer-Policy` and log scrubbing — rejected: the platform cannot scrub the ERP's or an intermediary's logs. (b) Fragment transport (`#token=`) — rejected: keeps the token out of logs but moves verification into client-side JavaScript, contradicting ADR-002's no-credential-handling-in-the-browser posture. (c) mTLS or IP allowlisting for webhooks instead of HMAC — rejected as the sole mechanism (brittle across ERP deployments and NAT changes); available later as defense in depth. (d) `SameSite=Strict` with no CSRF token — rejected: incompatible with iframe embedding, a supported mode.
+
+**Trade-offs.** POST launch means the ERP builds a form-post handoff rather than a link — marginally more work on their side, and it must be specified before they build (docs/11 §2 item 3). A shared webhook secret is one more rotatable credential to operate. The CSRF token adds a header to every mutating request in the SPA's API layer.
+
+**Future impact.** A second ERP integrating under ADR-003's contract inherits the POST handoff and HMAC scheme unchanged. A future `user_disabled` revocation webhook (ADR-004, docs/02 §8) authenticates under clause 2 with no new mechanism.
+
+**Status.** Accepted. Updates docs/02 §2/§4/§5 and docs/08 §2, and adds the transport requirement to the ERP-side build in docs/11 §2.
 
 ---
 

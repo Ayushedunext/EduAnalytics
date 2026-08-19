@@ -41,8 +41,8 @@
 
 ## 2. The two golden rules (and why)
 
-**Rule 1 — Zero ERP load.** The platform never queries an ERP primary and never calls ERP services at query time.
-*Why:* 1,500 schools' daily operations run on those primaries; any coupling means an analytics bug or a heavy AI-generated query could take fee counters offline. Read replicas isolate load at the storage/binlog level; the config sync removes the runtime API dependency (an ERP outage does not take analytics down, and an analytics surge cannot slow the ERP). The ERP's total runtime cost is signing one JWT (~1 ms) per session.
+**Rule 1 — Zero ERP load (data path).** The platform never queries an ERP primary, and never calls an ERP service to obtain data, configuration, or authorization at query time. Outbound ERP-notify calls from agent action nodes and inbound ERP event webhooks are sanctioned exceptions — off the read path, and excluded from the zero-load measurement basis (ADR-027).
+*Why:* 1,500 schools' daily operations run on those primaries; any coupling means an analytics bug or a heavy AI-generated query could take fee counters offline. Read replicas isolate load at the storage/binlog level; the config sync removes the runtime API dependency (an ERP outage does not take analytics down, and an analytics surge cannot slow the ERP). On the read path, the ERP's total runtime cost is signing one JWT (~1 ms) per session.
 
 **Rule 2 — Scope is law.** Every data access is constrained to the `school_ids` inside the verified launch token, enforced twice: at the orchestrator (business logic) and again inside the MCP layer (defense in depth).
 *Why:* the AI generates SQL; prompts can be adversarial; UI code can have bugs. Double enforcement means no single compromised layer can cross tenant boundaries. The model is structurally unable to pick tenants because tenant identity travels out-of-band with the tool call, never inside model-generated content.

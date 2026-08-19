@@ -11,8 +11,13 @@
 Default layout, mapped 1:1 to the module boundaries in `docs/01` (layout changes that preserve these boundaries need no ADR; changes that merge boundaries do):
 
 ```
-/CLAUDE.md  /PROJECT_CONTEXT.md  /DECISIONS.md  /CODING_GUIDELINES.md
-/docs/                     # binding engineering docs (00–11)
+/CLAUDE.md                 # session orientation + the six invariants
+/PROJECT_CONTEXT.md        # whole-platform understanding
+/AUDIT_REPORT.md           # open doc findings + questions awaiting decision
+/docs/                     # binding engineering docs
+  00-…-11-….md             #   module deep dives
+  DECISIONS.md             #   the ADRs (ADR-001…029)
+  CODING_GUIDELINES.md     #   this file
 /apps/
   web/                     # React SPA (gallery, Ask-AI, editor, agent builder)
   orchestrator/            # Node.js API: sessions, scope, services, PDF, drill endpoint
@@ -80,6 +85,7 @@ Default layout, mapped 1:1 to the module boundaries in `docs/01` (layout changes
 - **[MANDATORY] Never trust tenant/school/org ids, roles, or permissions from client input.** The only source is the verified launch token → platform session (ADR-002/003). Request-supplied school selections are validated `⊆ token.school_ids` at the orchestrator *and* re-checked at MCP (ADR-007). The AI model never supplies tenant identifiers.
 - **[MANDATORY]** Custom-report scope, drill-context filters, and agent trigger scopes are **injected** server-side; they are displayed read-only (logic panel) and are not editable inputs — including in the advanced SQL tab (ADR-019/020).
 - Cache keys, dedup keys, audit rows, and queue messages always embed the school-set/org so cross-tenant cache hits or replays are structurally impossible (docs/09 §4, ADR-025).
+- **[MANDATORY]** Result-cache keys additionally embed the caller's `permission_class` — a deterministic digest of effective data visibility (masking state + drill-leaf eligibility from `role`/`perms[]`). Masking is role-dependent (docs/04 rail 6, docs/08 §4.4/§5.1), so a key without it serves one role's unmasked rows to another. Derive it in one shared, unit-tested function; a non-deterministic digest fragments the cache silently (ADR-028).
 - Rollup ETL writes aggregates only — code review must reject any PII column entering `rollup_daily` (ADR-010).
 
 ## 9. Database access rules
@@ -88,6 +94,7 @@ Default layout, mapped 1:1 to the module boundaries in `docs/01` (layout changes
 - **[MANDATORY]** All SQL — vetted, AI-generated, hand-edited, trigger — is parameterized. String-concatenated values into SQL are forbidden everywhere; drill clicks are bound parameters by contract (ADR-020).
 - School-DB connections use the per-school `analytics_ro` user from Secrets Manager (ADR-008/013). No shared users, no widened grants "temporarily".
 - Platform DBs (registry, reports, agents, rollups) follow the schemas documented in docs/03/06/07; schema changes update the doc in the same PR (§21).
+- **The platform DB is MySQL 8** (decided 2026-08-19, `PROJECT_CONTEXT.md` §7) — the same engine as the school DBs and replicas, so there is exactly one SQL dialect in the codebase. Use the JSON column type for `def_json`, `graph_json` and `dims_json`. This is a technology choice, not a contract (§20), so it did not require an ADR; the **Rollup Store** engine remains separately open (§23).
 - ORM adoption is *not decided* (§23); until it is, use the driver with parameterized statements.
 
 ## 10. Validation & error handling
@@ -127,7 +134,7 @@ Framework choice is *not decided* (§23). What must be tested is:
 
 ## 15. Performance
 
-- Respect the serving order — **cache → rollup → replica** — in code structure, not just intent: a report/drill handler asks Redis first, rollups where the dims exist, replicas last (ADR-012; docs/09 §4). Cache keys include report + level + drill-context + filters + school-set.
+- Respect the serving order — **cache → rollup → replica**, exactly three tiers — in code structure, not just intent: a report/drill handler asks Redis first, rollups where the dims exist, replicas last (ADR-012/028; docs/09 §4). Cache keys include report + level + drill-context + filters + school-set + `permission_class`. The schema/dimension cache is *not* a tier in this order — it is AI-path metadata (ADR-014) and never answers a report query.
 - Fan-out obeys the caps (concurrency ~10, ≤25 schools) and returns partial-failure annotations (ADR-011).
 - AI path: schema block positioned for Anthropic prompt caching (ADR-014/026); Haiku default with escalation; stream widgets — first render ~2 s is a product number, not an aspiration (docs/09 §3/§5).
 - Never "optimize" by adding a direct DB path around MCP or a primary-DB read "just for this feature" — that is the drift these guidelines exist to prevent.
@@ -196,3 +203,5 @@ These require a project decision (small ones in a PR touching this file; contrac
 - Formal accessibility target (WCAG level) and localization approach beyond message-template language options.
 - Monorepo tooling (workspaces/turbo/nx) — the §1 layout is tool-agnostic.
 - Choice of queue (SQS vs BullMQ), WhatsApp BSP, and SMS/DLT provider — architecture fixes the *model*; vendors are open inputs (docs/11 §2).
+- **Rollup Store technology — Aurora MySQL vs ClickHouse.** Listed among the "fixed" choices in `PROJECT_CONTEXT.md` §7 but never resolved; ADR-010 says only "a small platform DB". The two differ materially for the ETL, `dims_json` access patterns and ops load. Resolve by ADR before Phase 2 builds on it.
+- Validation library for the trust-boundary parsing required by §3/§10, and the JSON Schema artifact for chart-spec (§18 seam) — one choice should serve both; it touches a contract seam, so §19 makes it ADR-gated.

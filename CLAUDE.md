@@ -14,7 +14,7 @@
 
 ## Non-negotiable invariants (violating any of these is a design regression)
 
-1. **Zero ERP load.** Analytics/agents NEVER query an ERP primary database and NEVER call ERP services at query time. All reads go to read replicas, the rollup store, or cache. The ERP's only runtime involvement is signing one launch JWT per session.
+1. **Zero ERP load (data path).** Analytics/agents NEVER query an ERP primary database and NEVER call an ERP service to obtain **data, configuration, or authorization** at query time. All reads go to read replicas, the rollup store, or cache. On the read path the ERP's only runtime involvement is signing one launch JWT per session. Two off-path interactions are sanctioned and excluded from the zero-load measurement: outbound ERP-notify calls from agent action nodes, and inbound ERP event webhooks (**ADR-027**).
 2. **Scope is law.** Every query is constrained to the `school_ids` in the verified launch token. Enforced at the orchestrator AND independently at the MCP layer. The AI model never supplies tenant/school identifiers.
 3. **Read-only data plane.** All school-data access is SELECT-only (AST-validated), through read-only DB users, with row/time caps. Agents and reports write nothing to school databases.
 4. **Spec-driven rendering.** The AI outputs structured **chart-spec JSON**, never renderable code. The frontend renders specs; the PDF renderer reads the same specs.
@@ -37,6 +37,9 @@
 | `docs/09-performance-and-scale.md` | Zero-ERP-load mechanics, latency budgets, caching tiers, load-test gates |
 | `docs/10-ui-ux-design-system.md` | Screen inventory, design tokens, UX conventions, locked/empty states |
 | `docs/11-roadmap-and-open-items.md` | Phased delivery, assumptions register, inputs owed by the ERP team |
+| `docs/DECISIONS.md` | **The binding ADRs (ADR-001…029) — read before proposing anything.** Code contradicting an Accepted ADR is wrong until the ADR is amended |
+| `docs/CODING_GUIDELINES.md` | Repo layout, naming, the `[MANDATORY]` rules, review checklist, and §23's intentionally-undecided list |
+| `AUDIT_REPORT.md` | Open documentation findings and the questions still awaiting an architectural decision |
 
 ## Ground rules for engineers (and Claude Code) working in this repo
 

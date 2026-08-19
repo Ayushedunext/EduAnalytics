@@ -1,0 +1,23 @@
+{
+  "name": "@sap/chart-spec",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The chart-spec contract (ADR-015): the only rendering vocabulary, shared by the SPA renderer and the PDF renderer.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": "./schema/chart-spec.schema.json"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "schema": "node scripts/emit-schema.mjs"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  }
+}

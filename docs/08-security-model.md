@@ -7,7 +7,10 @@
 ## 2. Identity & session
 
 - **Launch token:** RS256-signed by the ERP, 60 s expiry, one-time nonce (jti replay cache), verified against the ERP's JWKS with key-rotation support. Carries `role`, `org_id`, `school_ids[]`, `perms[]` (contract in doc 02).
-- **Platform session:** httpOnly + Secure cookie / 8-hour JWT issued after verification; the ERP is not consulted again during the session.
+- **Launch transport (ADR-029):** delivered by auto-submitting **POST form**, never a URL query parameter — a token in a URL reaches ERP, proxy and browser logs plus the `Referer` header, none of which this platform can scrub, while CODING_GUIDELINES §13 makes tokens a log-forbidden value. `Referrer-Policy: no-referrer` on the launch route.
+- **Platform session:** httpOnly + Secure cookie / 8-hour JWT issued after verification; the ERP is not consulted again during the session. `SameSite=Lax` in new-tab mode, `SameSite=None` in iframe mode.
+- **CSRF (ADR-029):** because iframe mode requires `SameSite=None`, cookie policy alone cannot carry the defense. Independently of embedding mode, every state-changing request carries a **double-submit CSRF token** (cookie-readable value echoed in a header, compared server-side); GET/HEAD endpoints are side-effect-free by contract.
+- **Webhook authentication (ADR-029):** ERP→platform webhooks carry `X-Signature: HMAC-SHA256(body, secret)` + `X-Timestamp`, constant-time compared, 5-minute window, replay-rejected. The receiver writes to the Tenant Registry, so it is authenticated rather than merely private; webhooks stay advisory (the 15-min sync covers every event), so failures cost freshness, never correctness.
 - **Iframe hardening (when embedded):** strict `frame-ancestors` CSP naming the ERP domain; `SameSite=None; Secure` cookies; origin-checked `postMessage`.
 
 ## 3. Scope enforcement — the double check
@@ -33,6 +36,14 @@ request(school_ids requested)
 
 - **Rollup Store holds aggregates only — no student names/PII.** Director-level cross-school views therefore never move row-level personal data out of school DBs. Row-level detail requires an explicit scoped query (fan-out/drill leaf) that is role-checked and audited.
 - Agent messaging uses the minimum record fields mapped into approved templates; message_log stores rendered content for compliance under the same access controls.
+
+### 5.1 The Redis result cache — the one store where row-level PII leaves a school DB (ADR-028)
+
+The rollup rule above carries most of the minimisation argument, but it does not cover the result cache. Redis holds **rendered report results** for 5–15 minutes, and those include Fee Defaulters rows, `student(top-N)` drill leaves and fan-out row-level output — names, phone numbers, amounts. It is therefore governed explicitly:
+
+- **PII is permitted in the cache** (forbidding it would exclude the most-used reports from caching and break the 50–200 ms budget), but the cache is encrypted at rest and in transit, on private subnets, never internet-reachable, and excluded from operational logs.
+- **`permission_class` is part of every cache key.** Masking is role-dependent (§4.4, doc 04 rail 6) and drill leaves are rights-gated (§4.5); a key without a permission component would let a privileged user's cache entry be served to a restricted one. A masking rule enforced at query time and discarded at cache time is not enforced.
+- **Retention** is TTL-bounded at 5–15 min and is in scope for the compliance review (doc 11 §4.5) alongside audit and message_log retention.
 
 ## 6. BYOK key protection
 

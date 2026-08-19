@@ -47,7 +47,8 @@ Drill levels are ordinary parameterized queries: the orchestrator's `POST /api/r
 
 1. Streamable HTTP transport between orchestrator and MCP server on the private network.
 2. The AST validator covers the MySQL dialect in use across all supported `schema_version`s.
-3. Agent trigger evaluation (doc 07) uses this same tool surface (`run_query`/`run_predefined`-style vetted queries); it introduces no second data path.
+
+**No longer an assumption — a rule.** Agent trigger evaluation (doc 07) reads school data through **this tool surface only**; there is no second data path and no "MCP-style" parallel layer (ADR-006, confirmed as a decision). Note the scope of the rule: it governs *school-data reads*. An agent's IMAP polling and its ERP-webhook receiver are ingestion, not school-data reads, and correctly sit outside the MCP surface.
 
 ## 8. Extensibility
 

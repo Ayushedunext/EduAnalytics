@@ -34,12 +34,17 @@ Capacity math: 200 pools × 3 connections = 600 max connections per instance; re
 ## 4. The data plane (three stores, strict order)
 
 ```
-Query path (predefined/custom reports):
-  ① Redis result cache      key = report + level + drill-context + filters + school-set
+Query path (predefined/custom reports) — exactly three result-serving tiers:
+  ① Redis result cache      key = report + level + drill-context + filters
+                                  + school-set + permission_class
   ② Rollup Store            cross-school aggregates, drill L1/L2
   ③ Read replica            raw SELECT (single school) or fan-out (multi)
 Never: ERP primary.
 ```
+
+The schema and dimension caches (§5) are **not** tiers in this order — they serve schema metadata for AI SQL generation and never answer a report query (ADR-028).
+
+**Why `permission_class` is in the key (ADR-028):** PII masking is applied per session role (doc 04 §3 rail 6) and drill leaves are gated on student-data rights (doc 08 §4.5). A key without a permission component lets two users of the same school with different `perms[]` collide — a Principal warming the cache would serve unmasked rows to a class teacher on an identical key. `permission_class` is a deterministic digest of the caller's effective data visibility, so callers who may see different data can never share an entry. It must be derived deterministically or entries fragment silently.
 
 ### 4.1 Read replicas — the zero-load mechanism
 

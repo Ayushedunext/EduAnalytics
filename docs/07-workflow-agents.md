@@ -35,8 +35,10 @@ BUILDER (React Flow canvas) ──publish──► agent_definitions (versioned;
 SCHEDULER (per-agent cron; ticks default 5 min or exact time)
    ▼
 TRIGGER EVALUATOR
-   · data conditions: SQL on READ REPLICA via the MCP-style read-only layer (capped)
+   · data conditions: SQL on READ REPLICA via THE MCP SERVER'S TOOLS (capped)
+     — ADR-006; there is no parallel read-only layer ("MCP-style" is retired)
    · IMAP poll ~2 min for mail triggers · webhook receiver for ERP events
+     (ingestion, not school-data reads — correctly outside the MCP surface)
    ▼ matched rows
 RUN ORCHESTRATOR (queue: SQS/BullMQ) — one RUN per record
    · walks the graph as a PERSISTED STATE MACHINE
@@ -49,7 +51,7 @@ run_log / run_steps / message_log  (per-node input/output/status)
 ```
 
 **Design rules:**
-1. **Read from replicas, write nowhere** — the only "writes" are messages and ERP-API notifications; agents structurally cannot corrupt school data, and trigger load never touches ERP primaries.
+1. **Read from replicas through the MCP tools, write nowhere** — all school-data reads go through the MCP server's tool surface, inheriting its seven rails (ADR-006/008); the only "writes" are messages and ERP-API notifications. Agents structurally cannot corrupt school data, and trigger load never touches ERP primaries. The outbound ERP notification is a sanctioned off-read-path exception to the zero-load invariant (ADR-027).
 2. **Poll + event hybrid** — ticks for schedule/data triggers; webhooks for instant ERP events.
 3. **Idempotency by default** — overlapping ticks can never double-message a parent for the same event.
 4. **Versioned + auditable** — publish creates version N; running agents pin versions; every run logs every node ("prove we informed the parent at 10:31").
@@ -63,6 +65,11 @@ Storage (platform DB, never school DBs): `agents(id, school_or_org_id, name, sta
 **Per-node channel selection:** every message action node presents checkboxes of the school's channels; the first checked is **PRIMARY**; a **fallback channel** dropdown handles delivery failure (e.g., WhatsApp failed → SMS). **Only connected channels are selectable**; publishing an agent that references a disconnected channel is refused; a later disconnect flags dependent agents until reconnected or edited.
 
 **India compliance is a first-class constraint:** SMS requires DLT-registered sender + approved templates; WhatsApp requires BSP/WABA-approved templates. Hence the **Template Manager** (create → submit → approved library); message nodes reference approved templates only — free text cannot be sent on those channels. Template variable slots map to node variables. *Open item:* BSP/SMS provider choice gates approval timelines more than any code (doc 11).
+
+**⚠️ Provisioning burden at 1,500-school scale (open item, not yet costed).** School-owned channels are the right call legally — sender reputation, DLT attribution and WABA quality ratings belong to the school. But the consequence is that channel onboarding is **per school**, not per platform: each school needs its own DLT entity and header registration, its own WABA setup and business verification, and its own template approvals, each with rejection-and-retry loops and initially-throttled messaging tiers. That is calendar time no engineering effort compresses, and it is an **operations programme, not a platform feature** — currently costed nowhere in this doc set. Two things follow:
+
+1. **Ask first whether the ERP already sends SMS/WhatsApp today.** School ERPs usually do (fee reminders, absence notices). An existing provider relationship, DLT entity registration, or approved template library would change this from a provisioning programme into a configuration exercise. This is the highest-value unknown in the messaging area and is now an owed input (doc 11 §2).
+2. **Assumption A7 may be a prerequisite rather than an evolution.** Trust-level provider accounts with per-school overrides (one BSP account, per-school sender IDs) is the mechanism that makes per-school onboarding tractable at scale. If so, it is not a "later schema decision" — it gates agent GA.
 
 ## 5. Always-on guardrails (platform-level, every agent)
 

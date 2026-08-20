@@ -22,6 +22,7 @@ import { launchRouter } from './routes/launch.js';
 import { sessionRouter } from './routes/session.js';
 import { homeRouter } from './routes/home.js';
 import { reportRouter } from './routes/report.js';
+import { settingsRouter } from './routes/settings.js';
 
 const app = express();
 
@@ -75,6 +76,7 @@ app.use('/api', requireSession);
 app.use(sessionRouter);
 app.use(homeRouter);
 app.use(reportRouter);
+app.use(settingsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

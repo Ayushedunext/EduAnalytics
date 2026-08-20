@@ -71,6 +71,31 @@ const schema = z.object({
    */
   MCP_CONTEXT_SECRET: z.string().min(16, 'MCP_CONTEXT_SECRET must be at least 16 characters'),
 
+  /**
+   * The master key the BYOK vault encrypts org API keys under (ADR-017).
+   * Base64 of exactly 32 bytes: `openssl rand -base64 32`.
+   *
+   * A third distinct secret, for the third distinct audience — the session
+   * cookie is ours, the MCP context is between two of our services, and this
+   * one guards someone else's billable credential. Rotating any of them must
+   * not force rotating the others.
+   *
+   * In production this comes from KMS/Secrets Manager, which is what ADR-017
+   * specifies; what matters either way is that it is never in the database that
+   * holds the ciphertext.
+   */
+  AI_KEY_ENCRYPTION_KEY: z
+    .string()
+    .min(1, 'AI_KEY_ENCRYPTION_KEY is required (base64 of 32 random bytes)'),
+
+  /**
+   * How long to wait for the provider while validating a key (docs/05 §4.1's
+   * live test call). Short: an admin is watching a spinner, and "we could not
+   * reach Anthropic" is a more useful answer at 10 seconds than a correct one
+   * at 60.
+   */
+  AI_VALIDATION_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 });
 

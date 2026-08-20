@@ -14,6 +14,7 @@
  * the MCP server (ADR-006/013), which performs its own resolution.
  */
 
+import type { RowDataPacket } from 'mysql2';
 import { tenantRegistryRowSchema, type TenantRegistryRow } from '@sap/shared';
 import { config } from '../config.js';
 import { platformDb } from './platform-db.js';
@@ -100,4 +101,22 @@ export async function schoolNames(
 /** Drop the cache. Used by tests and, later, by the ERP sync webhook. */
 export function invalidateRegistryCache(): void {
   cache = null;
+}
+
+/**
+ * The org's display name.
+ *
+ * Read here rather than carried in the launch token: docs/02's token contract
+ * has no org-name claim, and inventing one in the SPA would be the client
+ * asserting an identity the server never gave it (CODING_GUIDELINES §8). Falls
+ * back to the id, which is always true even when it is not pretty — a screen
+ * saying "stmarks" is a worse label and a correct one.
+ */
+export async function orgName(orgId: string): Promise<string> {
+  const [rows] = await platformDb.query<RowDataPacket[]>(
+    'SELECT org_name FROM org_registry WHERE org_id = ?',
+    [orgId],
+  );
+  const name = rows[0]?.['org_name'];
+  return typeof name === 'string' && name !== '' ? name : orgId;
 }

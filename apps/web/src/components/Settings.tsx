@@ -1,0 +1,475 @@
+/**
+ * Settings — AI configuration (org) and messaging channels (school).
+ *
+ * Contract source: docs/05 §5 (the 3-step wizard; admin-only, org-level) ·
+ * docs/10 §2 rows 47–48 · ADR-017 · ADR-024. The layout follows the UX
+ * prototype (docs/11, Artifacts) so the built screen matches what was designed.
+ *
+ * -- Three things this screen must never do -----------------------------------
+ *
+ * 1. Show the key. The input is `type="password"`, so it is dots while being
+ *    typed or pasted; after saving, the server returns only `sk-ant-…1G4a` and
+ *    there is no endpoint that would return more. The value is held in component
+ *    state for the length of one submit and cleared — never localStorage, never
+ *    a URL, never a re-render of what was typed.
+ *
+ * 2. Decide who may configure. `can_configure` is the server's answer
+ *    (services/ai-config.ts). Non-admins get "contact your admin" here AND a 403
+ *    if they call the endpoint anyway — this panel is the polite half of a rule
+ *    enforced somewhere it cannot be bypassed, exactly like the AI lock itself
+ *    (Invariant 5).
+ *
+ * 3. Claim a state it has not been told about. "Connected" appears only when the
+ *    server says a channel is connected; the not-connected row states what the
+ *    school would have to provision, because that is the actionable fact
+ *    (docs/07 §4).
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import {
+  disableAi,
+  disconnectChannel,
+  getSettings,
+  saveAiKey,
+  type AiConfig,
+  type ChannelRow,
+  type SettingsResponse,
+  type SessionResponse,
+} from '../api/client';
+
+/** docs/05 §4.2's state machine, as the four things a reader needs to know. */
+const STATUS_LABEL: Record<AiConfig['ai_status'], { text: string; tone: string }> = {
+  not_configured: { text: 'Not configured', tone: 'nodata' },
+  pending_validation: { text: 'Could not verify', tone: 'nodata' },
+  active: { text: 'Active', tone: 'live' },
+  error: { text: 'Needs attention', tone: 'nodata' },
+};
+
+const CONSOLE_URL = 'https://console.anthropic.com';
+
+interface Props {
+  session: SessionResponse;
+  onAiStatusChange: (status: string) => void;
+}
+
+export function Settings({ session, onAiStatusChange }: Props): JSX.Element {
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    getSettings()
+      .then((data) => {
+        setSettings(data);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        // Fail loud (§10): an empty settings page would read as "nothing to set up".
+        setError(err instanceof Error ? err.message : 'Could not load settings.');
+      });
+  }, []);
+
+  useEffect(load, [load]);
+
+  return (
+    <main className="flex-1 overflow-y-auto">
+      <div className="px-7 py-6 max-w-[980px]">
+        <h1 className="page-title">Settings · AI &amp; Messaging</h1>
+
+        {error !== null && <div className="notice mt-4">{error}</div>}
+
+        {settings === null ? (
+          <div className="mt-10 text-[13px] text-[var(--color-muted)] animate-pulse">
+            {error === null ? 'Loading your configuration…' : ''}
+          </div>
+        ) : (
+          <>
+            <AiPanel
+              settings={settings}
+              onChanged={(ai) => {
+                setSettings({ ...settings, ai });
+                onAiStatusChange(ai.ai_status);
+              }}
+            />
+            <ChannelsPanel
+              settings={settings}
+              canConfigure={session.can_configure_ai}
+              onChanged={(channels) => { setSettings({ ...settings, channels }); }}
+            />
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
+
+function AiPanel({
+  settings,
+  onChanged,
+}: {
+  settings: SettingsResponse;
+  onChanged: (ai: AiConfig) => void;
+}): JSX.Element {
+  const { ai, can_configure: canConfigure } = settings;
+  const status = STATUS_LABEL[ai.ai_status];
+  const active = ai.ai_status === 'active';
+
+  /**
+   * `replacing` exists because an active org must not be shown a key field by
+   * default. docs/05 §5: "after activation the page becomes a status panel" —
+   * the form comes back only when someone deliberately chooses to replace the
+   * key, which also makes an accidental overwrite a two-step action.
+   */
+  const [replacing, setReplacing] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState(ai.model);
+  const [cap, setCap] = useState(String(ai.monthly_query_cap));
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(ai.last_error);
+  const [done, setDone] = useState<string | null>(null);
+
+  const showForm = canConfigure && (!active || replacing);
+
+  function submit(): void {
+    setBusy(true);
+    setProblem(null);
+    setDone(null);
+    saveAiKey({ api_key: apiKey, model, monthly_query_cap: Number(cap) })
+      .then((result) => {
+        // Cleared on every outcome: the key has done its one journey, and
+        // holding it in state past that is holding a secret for no reason.
+        setApiKey('');
+        onChanged(result.ai);
+        if (result.error === null) {
+          setReplacing(false);
+          setDone('Verified. AI reports are unlocked for every school and user in this org.');
+        } else {
+          setProblem(result.error);
+        }
+      })
+      .catch((err: unknown) => {
+        setApiKey('');
+        setProblem(err instanceof Error ? err.message : 'The key could not be saved.');
+      })
+      .finally(() => { setBusy(false); });
+  }
+
+  function turnOff(): void {
+    setBusy(true);
+    disableAi()
+      .then((result) => {
+        onChanged(result.ai);
+        setDone(null);
+        setProblem(null);
+        setReplacing(false);
+      })
+      .catch((err: unknown) => {
+        setProblem(err instanceof Error ? err.message : 'AI could not be disabled.');
+      })
+      .finally(() => { setBusy(false); });
+  }
+
+  return (
+    <section className="mt-5">
+      <div className="settingsHead">
+        <div>
+          <h2 className="settingsTitle">AI Configuration — {settings.org_name}</h2>
+          <p className="settingsSub">
+            One key unlocks AI reports for all {settings.school_count}{' '}
+            {settings.school_count === 1 ? 'school' : 'schools'} &amp; every user
+          </p>
+        </div>
+        <span className={`pill ${status.tone}`}>● {status.text}</span>
+      </div>
+
+      {/* ① The Console account. Guidance only — nothing here touches the API. */}
+      <div className="card stepCard">
+        <div className="stepRow">
+          <span className="stepNum">1</span>
+          <div className="stepBody">
+            <h3 className="stepTitle">Create the trust’s Anthropic account</h3>
+            <p className="stepText">
+              <a
+                className="stepLink"
+                href={CONSOLE_URL}
+                /* Opens in a new tab, and `noopener` with it: a bare
+                   target="_blank" hands the opened page a live `window.opener`
+                   reference back into this session's tab. */
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                console.anthropic.com
+              </a>{' '}
+              → sign up free → <b>Billing</b>: add a card or prepaid credits (even $5 ≈ hundreds of
+              reports) → <b>API Keys</b> → Create Key → copy it — it’s shown only once and starts
+              with <code>sk-ant-…</code>
+            </p>
+            <div className="stepActions">
+              <a
+                className="btn btnOutline"
+                href={CONSOLE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Anthropic Console ↗
+              </a>
+              <button
+                type="button"
+                className="btn btnGhost"
+                disabled
+                title="The illustrated setup guide (docs/05 §5) is not written yet"
+              >
+                📄 PDF guide
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ② The key itself. */}
+      <div className="card stepCard">
+        <div className="stepRow">
+          <span className="stepNum">2</span>
+          <div className="stepBody">
+            <h3 className="stepTitle">Connect the key to this dashboard</h3>
+
+            {!canConfigure && (
+              /**
+               * The non-admin path. Stated plainly and without a disabled form
+               * behind it: showing the field greyed out invites someone to
+               * hunt for the permission that would enable it, when the answer
+               * is a person, not a setting.
+               */
+              <div className="adminOnly">
+                <span className="adminOnlyIcon">🔒</span>
+                <div>
+                  <b>{settings.contact_admin}</b>
+                  <p className="stepText mt-1">
+                    The Anthropic key is billed to the whole organisation, so only an admin can
+                    connect or replace it. Every dashboard on the left works without it.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {canConfigure && active && !replacing && (
+              <div className="keyStatus">
+                <div>
+                  <div className="keyMasked">{ai.key_hint ?? 'sk-ant-…'}</div>
+                  <p className="stepText">
+                    {ai.last_validated_at === null
+                      ? 'Verified.'
+                      : `Verified ${new Date(ai.last_validated_at).toLocaleString()}.`}{' '}
+                    Model: {modelLabel(settings, ai.model)} · cap{' '}
+                    {ai.monthly_query_cap.toLocaleString('en-IN')} queries/month.
+                  </p>
+                </div>
+                <div className="stepActions">
+                  <button
+                    type="button"
+                    className="btn btnOutline"
+                    onClick={() => { setReplacing(true); }}
+                    disabled={busy}
+                  >
+                    Replace key
+                  </button>
+                  <button type="button" className="btn btnGhost" onClick={turnOff} disabled={busy}>
+                    Disable AI
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {showForm && (
+              <>
+                <input
+                  /* Dots, not text — the key is never legible on screen, not
+                     even to the person pasting it. */
+                  type="password"
+                  className="keyInput"
+                  placeholder="sk-ant-…"
+                  value={apiKey}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(e) => { setApiKey(e.target.value); }}
+                  aria-label="Anthropic API key"
+                />
+                <div className="keyRow">
+                  <div className="modelChoice">
+                    {settings.models.map((option) => (
+                      <label key={option.id}>
+                        <input
+                          type="radio"
+                          name="ai-model"
+                          value={option.id}
+                          checked={model === option.id}
+                          onChange={() => { setModel(option.id); }}
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                  </div>
+                  <label className="capField">
+                    Monthly cap
+                    <input
+                      type="number"
+                      min={1}
+                      value={cap}
+                      onChange={(e) => { setCap(e.target.value); }}
+                    />
+                    queries
+                  </label>
+                </div>
+                <div className="stepActions mt-3">
+                  <button
+                    type="button"
+                    className="btn btnPrimary"
+                    onClick={submit}
+                    disabled={busy || apiKey.trim() === ''}
+                  >
+                    {busy ? 'Testing…' : 'Test & Save Connection'}
+                  </button>
+                  {active && (
+                    <button
+                      type="button"
+                      className="btn btnGhost"
+                      onClick={() => { setReplacing(false); setApiKey(''); }}
+                      disabled={busy}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {problem !== null && <div className="notice mt-3">{problem}</div>}
+            {done !== null && <div className="okNotice mt-3">{done}</div>}
+          </div>
+        </div>
+      </div>
+
+      {/* ③ What happens after activation. */}
+      <div className="card stepCard">
+        <div className="stepRow">
+          <span className="stepNum">3</span>
+          <div className="stepBody">
+            <h3 className="stepTitle">
+              Usage &amp; control <span className="stepMuted">· appears after activation</span>
+            </h3>
+            <p className="stepText">
+              Once active: per-school usage meter, estimated cost, replace-key and disable controls.
+              If the key is revoked or credit runs out, chat auto-locks with a fix-it banner —
+              dashboards keep working.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* The security posture, stated where the key is entered rather than in a
+          policy document nobody reading this screen will open (ADR-017). */}
+      <p className="settingsFine">
+        Key stored AES-256 encrypted · masked after save · never logged · revocable anytime from the
+        Anthropic Console.
+      </p>
+    </section>
+  );
+}
+
+function modelLabel(settings: SettingsResponse, id: string): string {
+  return settings.models.find((m) => m.id === id)?.label ?? id;
+}
+
+function ChannelsPanel({
+  settings,
+  canConfigure,
+  onChanged,
+}: {
+  settings: SettingsResponse;
+  canConfigure: boolean;
+  onChanged: (channels: ChannelRow[]) => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const bySchool = new Map<string, ChannelRow[]>();
+  for (const row of settings.channels) {
+    const list = bySchool.get(row.school_id) ?? [];
+    list.push(row);
+    bySchool.set(row.school_id, list);
+  }
+
+  function disconnect(row: ChannelRow): void {
+    const id = `${row.school_id}:${row.channel}`;
+    setBusy(id);
+    disconnectChannel(row.school_id, row.channel)
+      .then((result) => { onChanged(result.channels); })
+      .finally(() => { setBusy(null); });
+  }
+
+  return (
+    <section className="mt-8">
+      <h2 className="settingsTitle">Messaging Channels — configured by your school</h2>
+      <p className="settingsSub">
+        Workflow-agent message steps can only use channels connected here
+      </p>
+
+      {[...bySchool.entries()].map(([schoolId, rows]) => (
+        <div key={schoolId} className="card channelCard">
+          {/* Named per school because the connection belongs to the school, not
+              the trust: sender reputation, DLT attribution and WABA quality
+              ratings are per school (docs/07 §4). */}
+          {bySchool.size > 1 && <div className="channelSchool">{rows[0]?.school_name}</div>}
+          {rows.map((row) => (
+            <div key={row.channel} className="channelRow">
+              <span className="channelIcon">{row.icon}</span>
+              <div className="channelBody">
+                <b>{row.title}</b>
+                <p className="channelDetail">
+                  {row.status === 'connected' ? (row.detail ?? 'Connected') : row.requirement}
+                </p>
+              </div>
+              {row.status === 'connected' ? (
+                <>
+                  <span className="pill live">● Connected</span>
+                  <button
+                    type="button"
+                    className="btn btnOutline"
+                    disabled={!canConfigure || busy === `${row.school_id}:${row.channel}`}
+                    title={canConfigure ? undefined : 'Only an admin can change messaging channels'}
+                    onClick={() => { disconnect(row); }}
+                  >
+                    Disconnect
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="pill nodata">Not connected</span>
+                  {/**
+                   * Deliberately inert. Connecting needs an SMTP password, a
+                   * DLT registration or a BSP token, and the platform has
+                   * nowhere safe to put those yet — a button that flipped the
+                   * flag without them would tell a school it can send messages
+                   * it cannot. Shown rather than hidden, per "locked ≠ hidden".
+                   */}
+                  <button
+                    type="button"
+                    className="btn btnGhost"
+                    disabled
+                    title="Provider credential storage is not built yet (docs/07 §4)"
+                  >
+                    Connect
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+
+      <p className="settingsFine">
+        SMS and WhatsApp can only send templates approved by the DLT registrar and the WhatsApp
+        Business provider — that approval is a per-school process, not a setting on this page
+        (ADR-024).
+      </p>
+    </section>
+  );
+}

@@ -9,6 +9,7 @@
     "start": "tsx src/server.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@sap/chart-spec": "*",
     "@sap/shared": "*",

@@ -17,7 +17,8 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { ERROR_CODES, PlatformError, effectiveScope } from '@sap/shared';
-import { schoolNames, servableSchoolIds } from '../db/registry.js';
+import { orgName, schoolNames, servableSchoolIds } from '../db/registry.js';
+import { canConfigureAi, readAiStatus } from '../services/ai-config.js';
 
 export const sessionRouter = Router();
 
@@ -37,6 +38,8 @@ sessionRouter.get('/api/session', (req: Request, res: Response, next: NextFuncti
     res.json({
       user: { name: session.name, role: session.role },
       org_id: session.org_id,
+      /** The registry's name for the org, so no screen has to display an id. */
+      org_name: await orgName(session.org_id),
       scope: await schoolNames(effective),
       default_school: session.default_school,
       /** Domain permissions, so the SPA can render locked states honestly. */
@@ -47,11 +50,20 @@ sessionRouter.get('/api/session', (req: Request, res: Response, next: NextFuncti
        */
       dropped_from_scope: dropped,
       /**
-       * AI is gated per org and nothing here activates it (Invariant 5,
-       * ADR-017). Reported as locked so the SPA can render locked-not-hidden
-       * states (docs/10 §3) on top of what is already a server-side truth.
+       * The org's real gating state, read from the key vault (ADR-017). The SPA
+       * renders locked-not-hidden states (docs/10 §3) from it, and those locks
+       * stay cosmetic: every `/api/ai/*` endpoint re-checks this server-side,
+       * so a client that lies to itself about the value gains nothing
+       * (Invariant 5).
        */
-      ai_status: 'not_configured',
+      ai_status: await readAiStatus(session.org_id),
+      /**
+       * Whether THIS user can fix an unconfigured org. docs/10 §2: an admin is
+       * offered "Set up now →" and everyone else "ask your administrator" —
+       * two different sentences for two different people, decided on the server
+       * because the client does not get to interpret roles.
+       */
+      can_configure_ai: canConfigureAi(session.role),
     });
   })().catch(next);
 });

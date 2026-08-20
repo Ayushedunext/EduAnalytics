@@ -89,6 +89,29 @@ export const IDENTITIES: Identity[] = [
       perms: ['fees.read'],
     },
   },
+  {
+    /**
+     * The only identity that may configure the org's Anthropic key.
+     *
+     * docs/05 §5 makes BYOK setup admin-only and ADR-017 puts the key at ORG
+     * level, so this is the one role that can spend the trust's money with a
+     * provider. Every other identity above sees "contact your admin" on that
+     * panel — which is worth being able to demonstrate, hence a real identity
+     * rather than a flag on the Director.
+     */
+    key: 'admin',
+    label: 'N. Iyer — IT Admin, St Marks Society',
+    note: 'Org admin. The only role that can configure the AI key.',
+    claims: {
+      sub: 'erp-user-4001',
+      name: 'N. Iyer',
+      role: 'ADMIN',
+      org_id: 'stmarks',
+      school_ids: ['stmarksg', 'stmarksj', 'stmarksmb'],
+      default_school: 'stmarksmb',
+      perms: ['fees.read', 'students.read', 'staff.read'],
+    },
+  },
 ];
 
 export function findIdentity(key: string): Identity | undefined {

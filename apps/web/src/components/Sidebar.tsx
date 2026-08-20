@@ -109,10 +109,15 @@ export function Sidebar({ orgName, role, dashboards, active, onNavigate }: Props
           <span className="flex-1">My Reports</span>
           <span className="trail">SOON</span>
         </li>
-        <li className="muted" title="Not built yet">
+        {/* Real, and reachable by everyone: what a non-admin sees there is the
+            "contact your admin" state, which is information they need. Hiding
+            the page from them would hide the reason AI is locked. */}
+        <li
+          className={`clickable ${active === 'settings' ? 'active' : ''}`}
+          onClick={() => { onNavigate('settings'); }}
+        >
           <span className="w-4 text-center opacity-80">⚙️</span>
           <span className="flex-1">Settings</span>
-          <span className="trail">SOON</span>
         </li>
       </ul>
 

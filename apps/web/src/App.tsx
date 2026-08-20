@@ -27,6 +27,7 @@ import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { Home } from './components/Home';
 import { DashboardPage } from './components/DashboardPage';
+import { Settings } from './components/Settings';
 
 type State =
   | { kind: 'loading' }
@@ -50,9 +51,9 @@ export function App(): JSX.Element {
    * them — that is the moment to choose one deliberately rather than by
    * accident here.
    */
-  const [route, setRoute] = useState<{ kind: 'home' } | { kind: 'report'; id: string }>({
-    kind: 'home',
-  });
+  const [route, setRoute] = useState<
+    { kind: 'home' } | { kind: 'report'; id: string } | { kind: 'settings' }
+  >({ kind: 'home' });
 
   useEffect(() => {
     let cancelled = false;
@@ -152,9 +153,15 @@ export function App(): JSX.Element {
         orgName={orgLabel(state.session)}
         role={titleCase(state.session.user.role)}
         dashboards={home?.dashboards ?? []}
-        active={route.kind === 'home' ? 'home' : route.id}
+        active={route.kind === 'report' ? route.id : route.kind}
         onNavigate={(id) => {
-          setRoute(id === 'home' ? { kind: 'home' } : { kind: 'report', id });
+          setRoute(
+            id === 'home'
+              ? { kind: 'home' }
+              : id === 'settings'
+                ? { kind: 'settings' }
+                : { kind: 'report', id },
+          );
         }}
       />
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -163,7 +170,13 @@ export function App(): JSX.Element {
           selected={selected}
           onSelect={setSelected}
           academicYear={home?.academic_year ?? null}
-          crumb={route.kind === 'home' ? 'Home' : titleOf(route.id)}
+          crumb={
+            route.kind === 'home'
+              ? 'Home'
+              : route.kind === 'settings'
+                ? 'Settings'
+                : titleOf(route.id)
+          }
         />
 
         {homeError !== null && (
@@ -172,7 +185,22 @@ export function App(): JSX.Element {
           </div>
         )}
 
-        {route.kind === 'report' ? (
+        {route.kind === 'settings' ? (
+          <Settings
+            session={state.session}
+            /**
+             * The lock on Ask AI is read from the session, so activating a key
+             * has to update it here — otherwise an admin finishes setup and the
+             * padlock beside "Ask AI" is still there until they reload, which
+             * reads as "it didn't work". ADR-017 pushes this over a WebSocket to
+             * every user of the org; this is the same update for the one user
+             * who caused it.
+             */
+            onAiStatusChange={(ai_status) => {
+              setState({ kind: 'ready', session: { ...state.session, ai_status } });
+            }}
+          />
+        ) : route.kind === 'report' ? (
           <DashboardPage
             session={state.session}
             reportId={route.id}
@@ -200,13 +228,13 @@ export function App(): JSX.Element {
 }
 
 /**
- * The org's display name. The registry carries school names but the session does
- * not yet carry an org name, so the id is shown rather than a guess -- inventing
- * "St Marks Society" in the client would be the SPA asserting an identity the
- * server never gave it (CODING_GUIDELINES §8).
+ * The org's display name, as the REGISTRY holds it (the session route resolves
+ * it server-side). Still never invented here: if the registry has no name, the
+ * server sends the id back and the sidebar shows that -- a worse label and a
+ * true one (CODING_GUIDELINES §8).
  */
 function orgLabel(session: SessionResponse): string {
-  return session.org_id;
+  return session.org_name;
 }
 
 /** The crumb for a report route, before its spec has loaded. */

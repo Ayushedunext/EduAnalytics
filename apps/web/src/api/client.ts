@@ -87,6 +87,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export interface SessionResponse {
   user: { name: string; role: string };
   org_id: string;
+  /** The registry's display name for the org; never invented client-side. */
+  org_name: string;
   scope: { school_id: string; school_name: string }[];
   default_school: string;
   perms: string[];
@@ -94,6 +96,12 @@ export interface SessionResponse {
   dropped_from_scope: string[];
   /** Per-org AI gating state (ADR-017). The server decides; the UI only reflects. */
   ai_status: string;
+  /**
+   * Whether THIS user could fix an unconfigured org. Also the server's answer,
+   * not a role check the client makes for itself — docs/10 §2 gives admins
+   * "Set up now →" and everyone else "ask your administrator".
+   */
+  can_configure_ai: boolean;
 }
 
 export function getSession(): Promise<SessionResponse> {
@@ -219,4 +227,88 @@ export function getReport(
 export function getHome(schoolIds: readonly string[]): Promise<HomeResponse> {
   const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
   return request<HomeResponse>(`/api/home${query}`);
+}
+
+// -- Settings ----------------------------------------------------------------
+
+/**
+ * The AI configuration as the SERVER reports it.
+ *
+ * Note what is absent: the API key. It can be written and never read back —
+ * `key_hint` (`sk-ant-…1G4a`) is the only key-derived value that crosses this
+ * boundary, which is what makes ADR-017's "operators cannot read tenant keys in
+ * plaintext" true of the API and not only of the database.
+ */
+export interface AiConfig {
+  ai_status: 'not_configured' | 'pending_validation' | 'active' | 'error';
+  model: string;
+  billing_mode: 'byok' | 'platform';
+  monthly_query_cap: number;
+  key_hint: string | null;
+  last_validated_at: string | null;
+  last_error: string | null;
+}
+
+export interface ChannelRow {
+  school_id: string;
+  school_name: string;
+  channel: 'email' | 'sms' | 'whatsapp';
+  title: string;
+  icon: string;
+  status: 'connected' | 'not_connected';
+  detail: string | null;
+  requirement: string;
+}
+
+export interface SettingsResponse {
+  org_id: string;
+  org_name: string;
+  school_count: number;
+  ai: AiConfig;
+  /** Server-decided: may this session configure the key at all? */
+  can_configure: boolean;
+  /** The platform's wording for a non-admin, so screen and 403 body agree. */
+  contact_admin: string;
+  models: { id: string; label: string }[];
+  channels: ChannelRow[];
+}
+
+/** `error` is the PROVIDER's verdict in plain language, not a transport error. */
+export interface AiSaveResponse {
+  ai: AiConfig;
+  error: string | null;
+}
+
+export function getSettings(): Promise<SettingsResponse> {
+  return request<SettingsResponse>('/api/settings');
+}
+
+/**
+ * The key leaves the browser exactly once, over the same credentialed request
+ * as everything else, and is never stored client-side — not in state that
+ * outlives the submit, not in localStorage, not in the URL.
+ */
+export function saveAiKey(body: {
+  api_key: string;
+  model: string;
+  monthly_query_cap: number;
+}): Promise<AiSaveResponse> {
+  return request<AiSaveResponse>('/api/settings/ai', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function disableAi(): Promise<AiSaveResponse> {
+  return request<AiSaveResponse>('/api/settings/ai/disable', { method: 'POST' });
+}
+
+export function disconnectChannel(
+  schoolId: string,
+  channel: string,
+): Promise<{ channels: ChannelRow[] }> {
+  return request<{ channels: ChannelRow[] }>(
+    `/api/settings/channels/${encodeURIComponent(schoolId)}/${encodeURIComponent(channel)}/disconnect`,
+    { method: 'POST' },
+  );
 }

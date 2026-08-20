@@ -41,3 +41,31 @@ ON DUPLICATE KEY UPDATE
   status      = VALUES(status),
   db_name     = VALUES(db_name),
   tenant_key  = VALUES(tenant_key);
+
+-- -- Messaging channels (migration 0005) ---------------------------------------
+--
+-- Seeded as NOT CONNECTED, and that is a decision rather than laziness.
+--
+-- The UX prototype shows all three rows Connected with plausible detail
+-- ("Provider: MSG91 · Sender ID: SUNRIS"). Seeding that here would put a claim
+-- on a real screen -- "this school can send WhatsApp" -- that is false, and a
+-- Principal who reads it and builds a fee-reminder agent on top finds out at
+-- the moment the messages do not arrive. It is the same reasoning that kept
+-- synthetic attendance data out of Phase 1 (docs/11 §1): a demo number that
+-- cannot be traced to something real becomes a trust problem, not a shortcut.
+--
+-- Not-connected is also the TRUE state: no DLT entity, no WABA and no SMTP host
+-- has been registered for these schools, and the screen showing exactly that is
+-- what tells someone the provisioning programme in docs/07 §4 has not started.
+
+INSERT INTO school_channels (school_id, channel, status) VALUES
+  ('stmarksg',  'email',    'not_connected'),
+  ('stmarksg',  'sms',      'not_connected'),
+  ('stmarksg',  'whatsapp', 'not_connected'),
+  ('stmarksj',  'email',    'not_connected'),
+  ('stmarksj',  'sms',      'not_connected'),
+  ('stmarksj',  'whatsapp', 'not_connected'),
+  ('stmarksmb', 'email',    'not_connected'),
+  ('stmarksmb', 'sms',      'not_connected'),
+  ('stmarksmb', 'whatsapp', 'not_connected')
+ON DUPLICATE KEY UPDATE status = status;

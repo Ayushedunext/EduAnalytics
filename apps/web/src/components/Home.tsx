@@ -78,10 +78,18 @@ export function Home({ session, home, loading, onOpen }: Props): JSX.Element {
 
         <div className={`askbar mb-5 ${aiActive ? '' : 'locked'}`}>
           <div className="bot">🤖</div>
+          {/**
+           * docs/10 §2: "admins get 'Set up now →', others 'ask your
+           * administrator'". Two sentences for two people — telling a Teacher to
+           * complete a setup they have no permission to perform sends them
+           * looking for a screen that will refuse them.
+           */}
           <div className="ph">
             {aiActive
               ? 'Ask anything about your schools… e.g. “school-wise strength, gender-wise”'
-              : '🔒 AI reports are locked — complete AI setup in Settings (predefined dashboards work now)'}
+              : session.can_configure_ai
+                ? '🔒 AI reports are locked — connect your Anthropic key in Settings to unlock them (predefined dashboards work now)'
+                : '🔒 AI reports are locked — ask your administrator to set up the AI key (predefined dashboards work now)'}
           </div>
           <div className="go">{aiActive ? 'Ask AI' : 'Locked'}</div>
         </div>

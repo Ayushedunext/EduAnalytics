@@ -87,6 +87,10 @@ Ask-AI chat and artifact canvas; "Modify with AI" in the report editor; "Describ
 
 ## 5. Setup UX (admin-only, org-level)
 
+*"Admin" means the `ADMIN` role, decided 2026-08-20.* The launch token carries one of DIRECTOR · PRINCIPAL · TEACHER · ACCOUNTANT · ADMIN, and only `ADMIN` may save, replace or disable the key. The narrower reading is deliberate: the key is a **billable credential for the whole org**, so "who may spend the trust's money with a provider" is a smaller question than "who may read the trust's numbers" — a Director sees every school's data and still cannot connect a key. Everyone else is shown *"Contact your admin for key configuration."* and receives the same sentence as a 403 if they call the endpoint directly; the screen is the polite half of a rule enforced in the service layer (`services/ai-config.ts`), never a client-side role check.
+
+*Key handling on the screen (2026-08-20).* The key field is a password input, so the value is never legible even to the person pasting it; it is held in component state for one submit and cleared on every outcome. After save the API returns `key_hint` (`sk-ant-…1G4a`) and **no endpoint returns the key to any caller at any role** — which is what makes docs/08 §6's "platform operators cannot read tenant keys in plaintext" true of the API surface and not only of the database. "Open Anthropic Console" opens in a new tab with `rel="noopener"`.
+
 A 3-step wizard: ① create the Anthropic Console account (guided, with an illustrated PDF guide; billing added by the org) → ② paste key, choose model (Economical–Haiku / Best–Sonnet), optional monthly cap → **Test & Save** → ③ verification result; on success "AI Reports UNLOCKED for all schools & users". After activation the page becomes a status panel: usage meter, Replace Key, Disable AI; on later key failure, an explanatory banner with a fix-it path (never a silent failure).
 
 ## 6. Assumptions

@@ -508,52 +508,78 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
   }
 
   /**
-   * The band the escalation actually happens on. Selected by DAYS (seq is the
-   * minimum days overdue in the band) rather than by matching the label text,
-   * so renaming a band in the catalog cannot silently empty this tile.
+   * Bands 2–5 are the escalation; 0 and 1 are context (see the `aging` query).
+   * Selected by the band ORDINAL, never by matching the label text, so renaming
+   * a band in the catalog cannot silently empty a tile or a chart.
    */
+  const overdueBands = aging.filter((r) => num(r['seq']) >= 2);
   const beyond90 = aging
-    .filter((r) => num(r['seq']) > 90)
+    .filter((r) => num(r['seq']) === 5)
     .reduce((total, r) => total + num(r['outstanding']), 0);
-  if (aging.length > 0) {
-    widgets.push({
-      id: 'kpi-90plus',
-      type: 'kpi',
-      label: 'Overdue beyond 90 days',
-      value: rupees(beyond90),
-      tone: beyond90 > 0 ? 'negative' : 'positive',
-    });
-  }
+  const notYetDue = aging
+    .filter((r) => num(r['seq']) === 1)
+    .reduce((total, r) => total + num(r['outstanding']), 0);
 
   if (aging.length > 0) {
     widgets.push(
       {
-        id: 'bar-aging',
-        type: 'bar',
-        title: 'Outstanding by age of the debt',
-        x: 'bucket',
-        y: 'outstanding',
-        data: aging.map((r) => ({
-          bucket: label(r['bucket']),
-          outstanding: num(r['outstanding']),
-        })),
+        id: 'kpi-90plus',
+        type: 'kpi',
+        label: 'Overdue beyond 90 days',
+        value: rupees(beyond90),
+        tone: beyond90 > 0 ? 'negative' : 'positive',
       },
       {
-        id: 'table-aging',
-        type: 'table',
-        title: 'Aging bands',
-        columns: [
-          { field: 'bucket', label: 'Band' },
-          { field: 'students', label: 'Students', align: 'right' },
-          { field: 'outstanding', label: 'Outstanding', align: 'right' },
-        ],
-        rows: aging.map((r) => ({
-          bucket: label(r['bucket']),
-          students: num(r['students']),
-          outstanding: num(r['outstanding']),
-        })),
+        /**
+         * On the tiles rather than in the aging chart, and that is a readability
+         * decision with a real cost if it goes the other way: in a mid-year
+         * school the not-yet-due demand is two orders of magnitude larger than
+         * anything overdue, so plotting it beside the bands renders all four
+         * escalation bars as invisible slivers. It is a KPI here and a row in
+         * the table below, so nothing is hidden — it just stops flattening the
+         * chart it is not part of.
+         */
+        id: 'kpi-not-due',
+        type: 'kpi',
+        label: 'Not yet due',
+        value: rupees(notYetDue),
+        tone: 'neutral',
       },
     );
+  }
+
+  if (overdueBands.length > 0) {
+    widgets.push({
+      id: 'bar-aging',
+      type: 'bar',
+      title: 'Overdue by age of the debt',
+      x: 'bucket',
+      y: 'outstanding',
+      data: overdueBands.map((r) => ({
+        bucket: label(r['bucket']),
+        outstanding: num(r['outstanding']),
+      })),
+    });
+  }
+
+  if (aging.length > 0) {
+    widgets.push({
+      id: 'table-aging',
+      type: 'table',
+      // Every band, including the two the chart leaves out. The chart is for
+      // reading the escalation; the table is the complete account.
+      title: 'Aging bands',
+      columns: [
+        { field: 'bucket', label: 'Band' },
+        { field: 'students', label: 'Students', align: 'right' },
+        { field: 'outstanding', label: 'Outstanding', align: 'right' },
+      ],
+      rows: aging.map((r) => ({
+        bucket: label(r['bucket']),
+        students: num(r['students']),
+        outstanding: num(r['outstanding']),
+      })),
+    });
   }
 
   if (byClass.length > 0) {
@@ -970,7 +996,24 @@ class Merged {
     }
 
     const rows = [...acc.values()];
-    if (orderField !== undefined) rows.sort((a, b) => num(a[orderField]) - num(b[orderField]));
+    if (orderField !== undefined) {
+      rows.sort((a, b) => num(a[orderField]) - num(b[orderField]));
+    } else if (sumFields[0] !== undefined) {
+      /**
+       * Restore the ordering the merge destroyed.
+       *
+       * Every one of these statements ends `ORDER BY <measure> DESC`, but the
+       * merge accumulates into a Map and hands back INSERTION order — which is
+       * whichever school answered first. The effect on screen is a bar chart
+       * whose longest bar sits second or ninth, and a reader scanning for the
+       * biggest department has to read all twenty labels to find it.
+       *
+       * Ordinal axes are exempt: they pass an `orderField` because class and
+       * month have a right order that is not "biggest first".
+       */
+      const measure = sumFields[0];
+      rows.sort((a, b) => num(b[measure]) - num(a[measure]));
+    }
     return rows;
   }
 

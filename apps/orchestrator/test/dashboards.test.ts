@@ -228,11 +228,12 @@ describe('a report is only sent the filters it declares', () => {
 });
 
 describe('Fee Defaulters counts people once and money once', () => {
+  /** `seq` is the band ordinal the catalog emits: 0/1 context, 2–5 overdue. */
   const aging = [
-    { bucket: 'Not yet due', seq: -20, students: 30, outstanding: 500000 },
-    { bucket: '1-30 days', seq: 3, students: 20, outstanding: 200000 },
-    { bucket: '31-60 days', seq: 34, students: 15, outstanding: 150000 },
-    { bucket: '90+ days', seq: 121, students: 10, outstanding: 300000 },
+    { bucket: 'Not yet due', seq: 1, students: 30, outstanding: 500000 },
+    { bucket: '1-30 days', seq: 2, students: 20, outstanding: 200000 },
+    { bucket: '31-60 days', seq: 3, students: 15, outstanding: 150000 },
+    { bucket: '90+ days', seq: 5, students: 10, outstanding: 300000 },
   ];
 
   beforeEach(() => {
@@ -266,13 +267,32 @@ describe('Fee Defaulters counts people once and money once', () => {
   });
 
   /**
-   * Selected by days overdue rather than by matching the band's label, so
-   * renaming a band in the catalog cannot silently empty the tile a school
-   * escalates on.
+   * Selected by the band ordinal rather than by matching its label, so renaming
+   * a band in the catalog cannot silently empty the tile a school escalates on.
    */
-  it('reads the 90+ tile from the band’s age, not its name', async () => {
+  it('reads the 90+ tile from the band ordinal, not its name', async () => {
     const built = await build('fee-defaulters');
     expect(kpi(built.spec, 'kpi-90plus')?.value).toBe('₹3.0L');
+  });
+
+  /**
+   * The chart plots the escalation; not-yet-due demand is a tile beside it.
+   * In a mid-year school it is two orders of magnitude larger, and on the same
+   * axis it renders every overdue band as an invisible sliver.
+   */
+  it('keeps not-yet-due demand off the aging chart but on the page', async () => {
+    const built = await build('fee-defaulters');
+    expect(kpi(built.spec, 'kpi-not-due')?.value).toBe('₹5.0L');
+
+    const chart = built.spec.widgets.find((w) => w.id === 'bar-aging');
+    const bands =
+      chart?.type === 'bar' ? chart.data.map((row) => String(row['bucket'])) : [];
+    expect(bands).toEqual(['1-30 days', '31-60 days', '90+ days']);
+
+    // …and the table still accounts for every band, context ones included.
+    expect(table(built.spec, 'table-aging')?.rows.map((r) => String(r['bucket']))).toContain(
+      'Not yet due',
+    );
   });
 
   it('shows a dash rather than dividing by zero when nobody has defaulted', async () => {

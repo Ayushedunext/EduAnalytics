@@ -270,11 +270,18 @@ const FEE_DEFAULTERS: PredefinedReport = {
         'AND periodtodate < :as_of_date',
     },
     /**
-     * `MIN(...)` on days-overdue orders the bands without repeating the CASE:
-     * "Not yet due" is negative, 1-30 starts at 1, 31-60 at 31. The NULL branch
-     * is first on purpose — a row with no period end date is unbucketable, and
-     * letting it fall through to the ELSE would report it as the WORST band,
-     * inflating exactly the number a school escalates on.
+     * The band ordinal is emitted explicitly rather than derived from the
+     * minimum days overdue.
+     *
+     * It costs a repeated CASE, and it buys the one thing presentation must be
+     * able to do without pattern-matching English: tell an OVERDUE band from a
+     * context band. 0 and 1 are context — nobody is chased for them — and 2..5
+     * are the 30/60/90 escalation. A renderer that had to recognise the string
+     * '90+ days' would break the day the wording changed.
+     *
+     * The NULL branch is first on purpose. A row with no period end date is
+     * unbucketable, and letting it fall through to the ELSE would report it as
+     * the WORST band, inflating exactly the number a school escalates on.
      */
     {
       key: 'aging',
@@ -287,12 +294,18 @@ const FEE_DEFAULTERS: PredefinedReport = {
         "WHEN DATEDIFF(:as_of_date, periodtodate) <= 60 THEN '31-60 days' " +
         "WHEN DATEDIFF(:as_of_date, periodtodate) <= 90 THEN '61-90 days' " +
         "ELSE '90+ days' END AS bucket, " +
-        'MIN(DATEDIFF(:as_of_date, periodtodate)) AS seq, ' +
+        'CASE ' +
+        'WHEN periodtodate IS NULL THEN 0 ' +
+        'WHEN periodtodate >= :as_of_date THEN 1 ' +
+        'WHEN DATEDIFF(:as_of_date, periodtodate) <= 30 THEN 2 ' +
+        'WHEN DATEDIFF(:as_of_date, periodtodate) <= 60 THEN 3 ' +
+        'WHEN DATEDIFF(:as_of_date, periodtodate) <= 90 THEN 4 ' +
+        'ELSE 5 END AS seq, ' +
         'COUNT(DISTINCT enrollmentno) AS students, ' +
         'ROUND(SUM(balance_amount)) AS outstanding ' +
         'FROM fee_compile_data_set ' +
         'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
-        'GROUP BY bucket ORDER BY seq',
+        'GROUP BY bucket, seq ORDER BY seq',
     },
     {
       key: 'by_class',

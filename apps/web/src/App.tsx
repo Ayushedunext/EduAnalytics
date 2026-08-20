@@ -140,7 +140,14 @@ export function App(): JSX.Element {
   }
 
   return (
-    <div className="h-full flex">
+    /**
+     * The shell is exactly the viewport and clips; each pane scrolls itself.
+     * `min-h-0` on the content column is what lets `<main className="flex-1
+     * overflow-y-auto">` actually scroll — a flex child defaults to
+     * `min-height: auto` and would otherwise grow to fit its charts and push
+     * the whole layout past the bottom of the window.
+     */
+    <div className="h-full flex overflow-hidden">
       <Sidebar
         orgName={orgLabel(state.session)}
         role={titleCase(state.session.user.role)}
@@ -150,7 +157,7 @@ export function App(): JSX.Element {
           setRoute(id === 'home' ? { kind: 'home' } : { kind: 'report', id });
         }}
       />
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <Topbar
           session={state.session}
           selected={selected}

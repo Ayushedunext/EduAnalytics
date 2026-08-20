@@ -42,7 +42,21 @@
   --radius-card: 10px;
 }
 
+/**
+ * The shell owns the viewport; the window itself never scrolls.
+ *
+ * docs/10 §2 is a two-pane app shell — a full-height sidebar, a sticky topbar,
+ * and ONE scrolling content pane. If the window scrolls as well, the sidebar's
+ * dark band and the topbar (both sized to the viewport) slide out of view and
+ * leave bare canvas behind them, which is exactly what a short window used to
+ * do here. `overflow: hidden` makes the panes the only things that scroll, so
+ * the chrome cannot be scrolled off its own background.
+ *
+ * It matters more than usual because this app is embedded in the ERP (docs/02):
+ * a nested document that grows its own scrollbar fights the host page's.
+ */
 html, body, #root { height: 100%; }
+html, body { overflow: hidden; }
 
 body {
   margin: 0;
@@ -75,6 +89,17 @@ body {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  /**
+   * Exactly the viewport's height, and it clips. The nav below scrolls instead
+   * of spilling: without this, a window shorter than the item list pushed the
+   * items out past the dark background and onto the white canvas, taking the
+   * page's scrollbar with them. The catalog grows (attendance, exams, transport
+   * and library are all listed while blocked, per "locked != hidden"), so the
+   * list being taller than the window is the normal case, not the edge one.
+   */
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px 18px; }
 .brand .mark {
@@ -84,7 +109,28 @@ body {
 .brand b { color: #fff; font-size: 14px; display: block; line-height: 1.2; }
 .brand span { font-size: 10.5px; color: var(--color-nav-sub); }
 
-.nav { list-style: none; flex: 1; margin: 0; padding: 0; }
+/**
+ * `min-height: 0` is the load-bearing line. A flex item defaults to
+ * `min-height: auto`, which refuses to shrink below its content, so `flex: 1`
+ * alone made this list grow the sidebar rather than scroll inside it.
+ */
+.nav {
+  list-style: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  /* A default scrollbar renders as a bright rail down a dark panel. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-nav-hover) transparent;
+}
+.nav::-webkit-scrollbar { width: 6px; }
+.nav::-webkit-scrollbar-track { background: transparent; }
+.nav::-webkit-scrollbar-thumb {
+  background: var(--color-nav-hover);
+  border-radius: 3px;
+}
 .nav li {
   padding: 10px 12px; border-radius: 8px; font-size: 13.5px; margin-bottom: 2px;
   display: flex; gap: 10px; align-items: center; color: var(--color-nav-text);
@@ -98,6 +144,9 @@ body {
 .sidebar .foot {
   font-size: 10.5px; color: var(--color-nav-faint);
   padding: 10px 8px 2px; border-top: 1px solid var(--color-nav-hover); line-height: 1.5;
+  /* Pinned: who you are and that the data is read-only stays visible while the
+     nav above it scrolls (docs/10 §3). */
+  flex-shrink: 0;
 }
 
 /* ---------- topbar ---------- */

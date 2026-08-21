@@ -29,6 +29,12 @@ interface Props {
   role: string;
   /** The catalog, with each entry's state decided by the server. */
   dashboards: readonly DashboardCard[];
+  /**
+   * The org's gating state (ADR-017), straight from the session. The padlock
+   * beside Ask AI is derived from it rather than assumed — when an admin
+   * connects a key in Settings, this prop changes and the lock goes with it.
+   */
+  aiStatus: string;
   active: string;
   onNavigate: (id: string) => void;
 }
@@ -39,7 +45,14 @@ const TRAIL: Record<'available' | 'coming' | 'blocked', string> = {
   blocked: '⛔',
 };
 
-export function Sidebar({ orgName, role, dashboards, active, onNavigate }: Props): JSX.Element {
+export function Sidebar({
+  orgName,
+  role,
+  dashboards,
+  aiStatus,
+  active,
+  onNavigate,
+}: Props): JSX.Element {
   /**
    * Which dashboards appear, and whether they are reachable, is the SERVER's
    * answer (services/home.ts), not a list maintained here. A sidebar with its
@@ -88,18 +101,35 @@ export function Sidebar({ orgName, role, dashboards, active, onNavigate }: Props
           );
         })}
 
-        {/*
-          Gated rather than unbuilt, and the distinction matters: Ask AI is
-          locked by `ai_status` (ADR-017) and the padlock is cosmetic on top of a
-          real server-side 403. Everything above is simply not written yet, which
-          is a different message to a different person.
-        */}
-        <li className="muted" title="Complete AI setup in Settings">
+        {/**
+         * Two different reasons Ask AI is not available, and it must show the
+         * one that is true right now. Before a key: 🔒, and Settings is where
+         * that is fixed. After a key: the lock is GONE — leaving it would tell
+         * an admin their setup failed — and the trail becomes SOON, because the
+         * chat screen itself is not written yet. Same entry, honest at both
+         * moments (docs/10 §3's three states).
+         */}
+        <li
+          className="muted"
+          title={
+            aiStatus === 'active'
+              ? 'AI is unlocked for this org — the chat screen is not built yet'
+              : 'Complete AI setup in Settings'
+          }
+        >
           <span className="w-4 text-center opacity-80">🤖</span>
           <span className="flex-1">Ask AI</span>
-          <span className="trail">🔒</span>
+          <span className="trail">{aiStatus === 'active' ? 'SOON' : '🔒'}</span>
         </li>
-        <li className="muted" title="Agent runtime is a later phase">
+        {/*
+          Agents carries NO padlock at any ai_status, and that is not an
+          oversight. The agent runtime is a later phase (ADR-022) and most of an
+          agent — triggers, if/else flows, message actions — never touches the
+          model at all; only "describe your workflow" and the AI-compose node are
+          key-gated (docs/05 §4.4). Connecting a key therefore cannot unlock
+          this: there is nothing built behind it to unlock.
+        */}
+        <li className="muted" title="Agent runtime is a later phase (ADR-022)">
           <span className="w-4 text-center opacity-80">⚡</span>
           <span className="flex-1">Agents</span>
           <span className="trail">SOON</span>

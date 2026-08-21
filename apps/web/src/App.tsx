@@ -153,6 +153,7 @@ export function App(): JSX.Element {
         orgName={orgLabel(state.session)}
         role={titleCase(state.session.user.role)}
         dashboards={home?.dashboards ?? []}
+        aiStatus={state.session.ai_status}
         active={route.kind === 'report' ? route.id : route.kind}
         onNavigate={(id) => {
           setRoute(

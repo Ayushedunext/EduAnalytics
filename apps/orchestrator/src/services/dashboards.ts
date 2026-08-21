@@ -82,6 +82,7 @@ export const DASHBOARD_IDS = [
   'fee-defaulters',
   'staff-overview',
   'admissions-funnel',
+  'attendance-analytics',
 ] as const;
 export type DashboardId = (typeof DASHBOARD_IDS)[number];
 
@@ -102,13 +103,51 @@ export function isDashboardId(value: string): value is DashboardId {
  * Keyed by report id so adding a report is a table entry, not a new branch
  * (docs/11 §1: the catalog is data, not screens).
  */
-const REPORT_FILTERS: Record<DashboardId, { academicYear: boolean; asOf: boolean }> = {
-  'enrollment-overview': { academicYear: true, asOf: false },
-  'fee-collection': { academicYear: true, asOf: false },
-  'fee-defaulters': { academicYear: true, asOf: true },
-  'staff-overview': { academicYear: false, asOf: true },
-  'admissions-funnel': { academicYear: true, asOf: false },
+const REPORT_FILTERS: Record<
+  DashboardId,
+  { academicYear: boolean; asOf: boolean; dateWindow: boolean }
+> = {
+  'enrollment-overview': { academicYear: true, asOf: false, dateWindow: false },
+  'fee-collection': { academicYear: true, asOf: false, dateWindow: false },
+  'fee-defaulters': { academicYear: true, asOf: true, dateWindow: false },
+  'staff-overview': { academicYear: false, asOf: true, dateWindow: false },
+  'admissions-funnel': { academicYear: true, asOf: false, dateWindow: false },
+  /**
+   * Attendance binds BOTH, against two different tables, because neither table
+   * can answer for the other. The year goes to `students_data_set` to count who
+   * was on roll; the window goes to `student_attendance_data_set`, whose own
+   * year column is stamped with the current year rather than the row's and
+   * cannot be filtered on (mcp-server/src/reports/catalog.ts, FROM_DATE).
+   */
+  'attendance-analytics': { academicYear: true, asOf: false, dateWindow: true },
 };
+
+/**
+ * The academic year, as the two dates it spans.
+ *
+ * April to March, which is the Indian school year and is what this ERP writes:
+ * every row of `student_attendance_data_set` carries `academicyearfromdate`
+ * 01-04-YYYY and `academicyeartodate` 31-03-YYYY+1. It is derived here rather
+ * than read from the data because the caller needs the window BEFORE the query
+ * that would tell it — and because a report whose window depends on the rows it
+ * returns cannot report an empty period at all.
+ *
+ * If a school is ever onboarded on a different year boundary this is the one
+ * place that is wrong, and it is wrong loudly: the window appears as two filter
+ * pills on the logic panel, so the dates a number was computed over are on the
+ * screen beside the number (Invariant 6).
+ */
+function academicYearWindow(year: string): { from: string; to: string } {
+  const start = Number(year.slice(0, 4));
+  if (!Number.isInteger(start)) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'That academic year could not be read as a date range.',
+      diagnostics: { academic_year: year },
+    });
+  }
+  return { from: `${String(start)}-04-01`, to: `${String(start + 1)}-03-31` };
+}
 
 /** Everything a builder is allowed to know about the request it is answering. */
 interface BuildContext {
@@ -139,6 +178,11 @@ export async function buildDashboard(args: {
   const params: Record<string, string> = {};
   if (filters.academicYear) params['academic_year'] = args.academicYear;
   if (filters.asOf) params['as_of_date'] = args.asOfDate;
+  const window = filters.dateWindow ? academicYearWindow(args.academicYear) : null;
+  if (window !== null) {
+    params['from_date'] = window.from;
+    params['to_date'] = window.to;
+  }
 
   /**
    * Tier ① (docs/09 §4). The key carries the school set, the bound filters AND
@@ -235,6 +279,12 @@ export async function buildDashboard(args: {
       filters: [
         ...(filters.academicYear ? [{ label: 'Academic year', value: args.academicYear }] : []),
         ...(filters.asOf ? [{ label: 'As of', value: args.asOfDate }] : []),
+        ...(window === null
+          ? []
+          : [
+              { label: 'From', value: window.from },
+              { label: 'To', value: window.to },
+            ]),
       ],
       group_by: built.groupBy,
       charts: built.widgets.map((w) => w.type),
@@ -288,6 +338,7 @@ const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) => Dashb
   'fee-defaulters': buildFeeDefaulters,
   'staff-overview': buildStaffOverview,
   'admissions-funnel': buildAdmissionsFunnel,
+  'attendance-analytics': buildAttendance,
 };
 
 function buildEnrollment(merged: Merged, { year }: BuildContext): DashboardBuild {
@@ -995,6 +1046,254 @@ function buildAdmissionsFunnel(merged: Merged, { year }: BuildContext): Dashboar
   };
 }
 
+/**
+ * Attendance Analytics -- docs/06 section 2, built 2026-08-21 when the table
+ * arrived (docs/11 section 1 had deferred it for want of data).
+ *
+ * -- The two numbers, and why both are on the page ---------------------------
+ * The RATE is present student-days over MARKED student-days, because nothing in
+ * the ERP extract says which days were working days -- no calendar, no holiday
+ * table, no timetable (mcp-server/src/reports/catalog.ts states the same). That
+ * denominator has a known bias: a day nobody marked is not counted at all
+ * rather than counted as absent, which flatters a school with poor marking
+ * discipline exactly when its rate should be doubted.
+ *
+ * So COVERAGE sits beside it -- marked student-days over days-marked x students
+ * on roll -- and it is the tile that says how much the rate is worth. At 100%
+ * coverage the rate is the school's attendance; at 15% it is the attendance of
+ * whoever happened to be marked. Publishing the rate alone would be a
+ * success-shaped failure (CODING_GUIDELINES section 10): a plausible percentage
+ * with no way to see what it was computed from.
+ *
+ * -- Percentages are never averaged across schools ---------------------------
+ * Every rate here divides a SUMMED numerator by a SUMMED denominator, never the
+ * mean of per-school rates -- the rule this module's header states, and the one
+ * a Director combining a 200-student school with a 4,000-student one would
+ * otherwise see broken.
+ */
+function buildAttendance(merged: Merged, { year }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const summary = merged.sumAll('summary', [
+    'marked_days',
+    'working_days',
+    'students_marked',
+    'expected_days',
+    'present_days',
+    'absent_days',
+    'leave_days',
+    'other_days',
+  ]);
+  const byMonth = merged.sumBy('by_month', 'month', ['marked_days', 'present_days'], 'seq');
+  const byClass = merged.sumBy('by_class', 'classname', [
+    'marked_days',
+    'present_days',
+    'students_marked',
+  ]);
+  const byStatus = merged.sumBy('by_status', 'statusname', ['days']);
+  const low = merged.concatRows('low_attendance');
+
+  const markedDays = num(summary?.['marked_days']);
+
+  /**
+   * Order comes from `class_order`, and it is a MIN across schools rather than a
+   * sum -- `sumBy` would add two schools' ordinals for the same class and put
+   * Class 1 after Class 12. Classes the enrolment table does not rank sort last
+   * rather than first, so an unranked label cannot masquerade as Nursery.
+   */
+  const classSeq = new Map<string, number>();
+  for (const { row } of merged.concatRows('class_order')) {
+    const name = label(row['classname']);
+    const seq = num(row['seq']);
+    const seen = classSeq.get(name);
+    if (seen === undefined || seq < seen) classSeq.set(name, seq);
+  }
+  const orderedClasses = [...byClass].sort(
+    (a, b) =>
+      (classSeq.get(label(a['classname'])) ?? Number.MAX_SAFE_INTEGER) -
+      (classSeq.get(label(b['classname'])) ?? Number.MAX_SAFE_INTEGER),
+  );
+
+  /**
+   * The tiles exist only if the query behind them ANSWERED.
+   *
+   * `summary` is a single COUNT with no GROUP BY, so a school where nobody has
+   * marked the register still returns a row — one that says zero. A school whose
+   * query FAILED returns nothing. Reading both as "zero days marked" would put
+   * an outage on the screen wearing the words for an empty register, which is
+   * the opposite of what the empty-register note below is for. When nothing
+   * answered, no widget is emitted and buildDashboard says so loudly rather than
+   * rendering a page of em dashes.
+   */
+  if (summary !== null) {
+    /**
+     * The rate tile. `--` and not `0%` when nothing was marked, and the
+     * distinction is the whole point: 0% attendance is a claim that every child
+     * was absent, which is a different and much more alarming thing than nobody
+     * having taken the register. Same reasoning as services/home.ts's blocked
+     * metrics.
+     */
+    widgets.push({
+      id: 'kpi-attendance-rate',
+      type: 'kpi',
+      label: 'Attendance rate',
+      value: markedDays > 0 ? percent(num(summary['present_days']) / markedDays) : '—',
+      tone: attendanceTone(markedDays > 0 ? num(summary['present_days']) / markedDays : null),
+    });
+
+    widgets.push({
+      id: 'kpi-days-marked',
+      type: 'kpi',
+      label: 'Days marked',
+      value: count(num(summary['working_days'])),
+      tone: 'neutral',
+    });
+
+    const expected = num(summary['expected_days']);
+    widgets.push({
+      id: 'kpi-coverage',
+      type: 'kpi',
+      label: 'Marking coverage',
+      value: expected > 0 ? percent(markedDays / expected) : '—',
+      /**
+       * Warning below 90%: not a threshold anyone approved, and it is not
+       * treated as one -- it colours a tile, it does not hide or restate a
+       * number. It is here because a coverage figure a reader scrolls past is
+       * the same as no coverage figure at all.
+       */
+      tone: expected > 0 && markedDays / expected < 0.9 ? 'warning' : 'neutral',
+    });
+
+    /**
+     * Zero here means zero children below 75% ONLY if the list was read. If that
+     * query is the one that failed, an em dash — the count is unknown, and
+     * "0 students below 75%" is the single most reassuring wrong answer this
+     * dashboard could give.
+     */
+    const lowRead = merged.succeeded('low_attendance');
+    widgets.push({
+      id: 'kpi-below-75',
+      type: 'kpi',
+      label: 'Students below 75%',
+      value: lowRead && markedDays > 0 ? count(low.length) : '—',
+      tone: low.length > 0 ? 'warning' : 'neutral',
+    });
+  }
+
+  if (byMonth.length > 0) {
+    widgets.push({
+      id: 'line-month',
+      type: 'line',
+      title: 'Attendance rate by month',
+      x: 'month',
+      y: 'attendance_pct',
+      data: byMonth.map((r) => ({
+        month: monthLabel(label(r['month'])),
+        attendance_pct: rate(num(r['present_days']), num(r['marked_days'])),
+      })),
+    });
+  }
+
+  if (orderedClasses.length > 0) {
+    widgets.push({
+      id: 'bar-class',
+      type: 'bar',
+      title: 'Attendance rate by class',
+      x: 'classname',
+      y: 'attendance_pct',
+      data: orderedClasses.map((r) => ({
+        classname: label(r['classname']),
+        attendance_pct: rate(num(r['present_days']), num(r['marked_days'])),
+      })),
+    });
+  }
+
+  if (byStatus.length > 0) {
+    /**
+     * The unbucketed truth, beside the rates that bucket it.
+     *
+     * Present / Absent / Leave / Suspend are what this extract happens to hold;
+     * no canonical status list was supplied, so the tiles above treat anything
+     * else as neither present nor absent. This donut is how a reader checks that
+     * -- the same reason the Admissions funnel publishes the ERP's own
+     * `candidate_statusid` counts beside its inferred stages.
+     */
+    widgets.push({
+      id: 'donut-status',
+      type: 'donut',
+      title: 'What was recorded',
+      label_field: 'statusname',
+      value_field: 'days',
+      data: byStatus.map((r) => ({ statusname: label(r['statusname']), days: num(r['days']) })),
+    });
+  }
+
+  if (low.length > 0) {
+    const masked = merged.maskedColumns('low_attendance');
+    const multi = new Set(low.map((r) => r.school_id)).size > 1;
+    widgets.push({
+      id: 'table-low-attendance',
+      type: 'table',
+      title: 'Students below 75% of their own marked days',
+      columns: [
+        ...(multi ? [{ field: 'school_id', label: 'School' }] : []),
+        { field: 'studentname', label: 'Student', masked: masked.has('studentname') },
+        { field: 'enrollmentno', label: 'Enrolment no', masked: masked.has('enrollmentno') },
+        { field: 'classname', label: 'Class' },
+        { field: 'sectionname', label: 'Section' },
+        /**
+         * `marked_days` is a column and not a footnote. A student at 0% of one
+         * marked day and a student at 0% of ninety are the same percentage and
+         * completely different situations, and the report refuses to hide the
+         * difference behind a minimum-days threshold it was never given.
+         */
+        { field: 'marked_days', label: 'Days marked', align: 'right' },
+        { field: 'present_days', label: 'Present', align: 'right' },
+        { field: 'attendance_pct', label: 'Attendance %', align: 'right' },
+      ],
+      rows: low
+        .map(({ school_id, row }) => ({
+          ...(multi ? { school_id } : {}),
+          studentname: label(row['studentname']),
+          enrollmentno: label(row['enrollmentno']),
+          classname: label(row['classname']),
+          sectionname: label(row['sectionname']),
+          marked_days: num(row['marked_days']),
+          present_days: num(row['present_days']),
+          attendance_pct: rate(num(row['present_days']), num(row['marked_days'])),
+        }))
+        .sort((a, b) => a.attendance_pct - b.attendance_pct),
+    });
+  }
+
+  const notes = [
+    'Attendance rate is present student-days divided by MARKED student-days. The ERP extract carries no school calendar, no holiday list and no timetable, so there is no way to know which days were working days — a day nobody marked is not counted here rather than counted as absent.',
+    'Marking coverage is what tells you how much the rate is worth: marked student-days as a share of days-marked multiplied by students on roll. A high rate on low coverage is the attendance of whoever was marked, not of the school.',
+    `Attendance is filtered by date (${academicYearWindow(year).from} to ${academicYearWindow(year).to}), not by academic year. The attendance table stamps every row with the current academic year rather than the year its own date falls in, so its year column cannot be filtered on. The academic year above is used only to count students on roll.`,
+    'The same student and date can appear several times in this table, with no rule saying which row wins. One row per student per day is taken before anything is counted; otherwise a day marked six times would count six times.',
+    'Present, Absent, Leave and Suspend are the statuses this dataset happens to contain. No canonical status list was supplied with it, so only "Present" counts towards the rate and anything unrecognised is shown in "What was recorded" rather than assumed to mean absent.',
+    'Classes are ordered using the enrolment table, which is where the class ordinal lives; the attendance table carries none. A class the enrolment table does not rank is sorted last.',
+    "Across several schools, coverage is each school's own marked days against its own roll, added together. A school where nothing at all was marked therefore contributes to neither side of it and does not pull the combined figure down — check the schools individually before reading a combined coverage number as good news.",
+  ];
+
+  if (summary !== null && markedDays === 0) {
+    /**
+     * Named, not blank. An empty attendance page is indistinguishable from an
+     * outage, and the difference matters to whoever has to act: nothing here is
+     * broken, nobody took the register.
+     */
+    notes.unshift(
+      'No attendance has been marked for the selected schools in this period. The tiles below are empty for that reason, not because attendance was zero.',
+    );
+  }
+
+  return {
+    widgets,
+    groupBy: ['month', 'class', 'status', 'student'],
+    notes,
+  };
+}
+
 // -- Merging ------------------------------------------------------------------
 
 class Merged {
@@ -1095,6 +1394,19 @@ class Merged {
     return masked;
   }
 
+  /**
+   * Did this result set come back from at least one school?
+   *
+   * Distinct from "did it sum to something": a query that FAILED and a query
+   * that returned a legitimate zero are the same number and opposite facts.
+   * Callers that render a tile from an absent-or-zero value need to tell them
+   * apart, because a zero standing in for a failure is precisely the
+   * success-shaped failure CODING_GUIDELINES §10 names.
+   */
+  succeeded(key: string): boolean {
+    return this.queriesFor(key).some((query) => query.status === 'ok');
+  }
+
   /** A single-row result set summed across schools. */
   sumAll(key: string, sumFields: string[]): Record<string, unknown> | null {
     const totals: Record<string, unknown> = {};
@@ -1178,6 +1490,44 @@ function label(value: unknown): string {
 
 function count(value: number): string {
   return new Intl.NumberFormat('en-IN').format(Math.round(value));
+}
+
+/** A share as a display string. The caller has already decided it is knowable. */
+function percent(share: number): string {
+  return `${(share * 100).toFixed(1)}%`;
+}
+
+/**
+ * A share as a NUMBER, for a chart axis rather than a tile.
+ *
+ * Zero when the denominator is zero, because a chart point must be a number --
+ * and that is exactly why the tiles use `percent` and print an em dash instead:
+ * a bar chart cannot say "not known", so a class with nothing marked simply has
+ * no row rather than a zero-height bar claiming nobody attended.
+ */
+function rate(numerator: number, denominator: number): number {
+  if (denominator <= 0) return 0;
+  return Number(((numerator / denominator) * 100).toFixed(1));
+}
+
+/** 75% is the line docs/06 §4.2 draws; the tones follow it rather than taste. */
+function attendanceTone(share: number | null): 'neutral' | 'positive' | 'warning' {
+  if (share === null) return 'neutral';
+  if (share >= 0.9) return 'positive';
+  return share < 0.75 ? 'warning' : 'neutral';
+}
+
+/** `2026-07` -> `Jul 2026`. Sorting already happened; this is for reading. */
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+function monthLabel(value: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (match === null) return value;
+  const name = MONTH_NAMES[Number(match[2]) - 1];
+  return name === undefined ? value : `${name} ${String(match[1])}`;
 }
 
 function rupees(value: number): string {

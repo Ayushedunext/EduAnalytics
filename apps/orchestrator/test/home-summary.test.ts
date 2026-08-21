@@ -61,7 +61,7 @@ function refused(code: string, message: string, schoolId = 'stmarksmb') {
   };
 }
 
-/** Queued in call order: students, staff, outstanding (see services/home.ts). */
+/** Queued in call order: students, staff, outstanding, attendance (services/home.ts). */
 let queue: unknown[] = [];
 
 vi.mock('../src/mcp/client.js', () => ({
@@ -130,6 +130,7 @@ describe('a metric that could not be read is never rendered as a number', () => 
       refused('PERMISSION_DENIED', 'This session does not have access to students data.'),
       refused('PERMISSION_DENIED', 'This session does not have access to staff data.'),
       ok([{ ay: '2026-27', n: 1940000 }]),
+      refused('PERMISSION_DENIED', 'This session does not have access to students data.'),
     ];
 
     const summary = await build();
@@ -143,9 +144,9 @@ describe('a metric that could not be read is never rendered as a number', () => 
     const blocked = summary.blocked_metrics.map((b) => b.label);
     expect(blocked).toContain('Students');
     expect(blocked).toContain('Staff on roll');
-    expect(
-      summary.blocked_metrics.filter((b) => b.label !== 'Student attendance MTD'),
-    ).toSatisfy((entries: { kind: string }[]) => entries.every((e) => e.kind === 'not_permitted'));
+    expect(summary.blocked_metrics).toSatisfy((entries: { kind: string }[]) =>
+      entries.every((e) => e.kind === 'not_permitted'),
+    );
   });
 
   it('still serves the metrics the session CAN read', async () => {
@@ -153,6 +154,7 @@ describe('a metric that could not be read is never rendered as a number', () => 
       refused('PERMISSION_DENIED', 'no students'),
       refused('PERMISSION_DENIED', 'no staff'),
       ok([{ ay: '2026-27', n: 1940000 }]),
+      refused('PERMISSION_DENIED', 'no students'),
     ];
 
     const summary = await build();
@@ -175,6 +177,7 @@ describe('a metric that could not be read is never rendered as a number', () => 
         { ay: '2025-26', n: 100 },
         { ay: '2026-27', n: 1940000 },
       ]),
+      refused('PERMISSION_DENIED', 'no students'),
     ];
 
     const summary = await build();
@@ -188,6 +191,7 @@ describe('a metric that could not be read is never rendered as a number', () => 
       refused('PERMISSION_DENIED', 'no students'),
       refused('PERMISSION_DENIED', 'no staff'),
       ok([{ ay: '2026-27', n: 500000 }]),
+      refused('PERMISSION_DENIED', 'no students'),
     ];
 
     const summary = await build();
@@ -201,6 +205,7 @@ describe('a metric that could not be read is never rendered as a number', () => 
       ok([{ ay: '2026-27', n: 3929 }]),
       ok([{ n: 228 }]),
       refused('TENANT_UNAVAILABLE', 'The query could not be completed against this school right now.'),
+      ok([{ ym: '2026-07', marked: 100, present: 92 }]),
     ];
 
     const summary = await build();
@@ -213,6 +218,7 @@ describe('a metric that could not be read is never rendered as a number', () => 
       refused('PERMISSION_DENIED', 'no students'),
       refused('PERMISSION_DENIED', 'no staff'),
       refused('PERMISSION_DENIED', 'no fees'),
+      refused('PERMISSION_DENIED', 'no students'),
     ];
 
     // An empty page would look like an outage. A 403 says what is actually true.
@@ -230,6 +236,7 @@ describe('the summary reports what it actually served', () => {
       ]),
       ok([{ n: 228 }]),
       ok([{ ay: '2026-27', n: 194_000_000 }]),
+      ok([{ ym: '2026-07', marked: 84_000, present: 78_120 }]),
     ];
 
     const summary = await build();
@@ -239,19 +246,74 @@ describe('the summary reports what it actually served', () => {
       '3,929',
       '228',
       '₹19.4Cr',
+      '93.0%',
     ]);
     // No Redis and no rollup store exist in this build, so claiming either would
     // be a lie the logic panel would repeat (ADR-028, docs/03 §4).
     expect(summary.spec.meta.served_from).toBe('replica');
   });
 
-  it('always names attendance as having no source, for every role', async () => {
-    queue = [ok([{ ay: '2026-27', n: 10 }]), ok([{ n: 2 }]), ok([{ ay: '2026-27', n: 5 }])];
+  /**
+   * Attendance arrived on 2026-08-21 and these three cases replace the single
+   * assertion that it never could. They are the three states the tile has, and
+   * the point of testing all three is that the last two must not look alike: a
+   * session that MAY NOT read attendance and a school that has NOT MARKED it
+   * are different problems with different owners, and the screen has to say
+   * which one it is.
+   */
+  it('labels the attendance tile with the month it actually covers', async () => {
+    queue = [
+      ok([{ ay: '2026-27', n: 10 }]),
+      ok([{ n: 2 }]),
+      ok([{ ay: '2026-27', n: 5 }]),
+      /**
+       * Two months present, and the tile must take the later one. It is the
+       * LATEST MONTH IN THE DATA rather than the current calendar month, so a
+       * school that stopped marking in June shows June labelled June instead of
+       * an empty tile for August that reads as an outage.
+       */
+      ok([
+        { ym: '2026-06', marked: 200, present: 100 },
+        { ym: '2026-07', marked: 100, present: 81 },
+      ]),
+    ];
     const summary = await build();
+    const tile = kpis(summary.spec).find((w) => w.id === 'kpi-attendance');
+    expect(tile?.label).toBe('Student attendance · Jul 2026');
+    expect(tile?.value).toBe('81.0%');
+    expect(summary.blocked_metrics.map((b) => b.label)).not.toContain('Student attendance');
+  });
+
+  it('says nobody marked the register rather than showing 0%', async () => {
+    queue = [
+      ok([{ ay: '2026-27', n: 10 }]),
+      ok([{ n: 2 }]),
+      ok([{ ay: '2026-27', n: 5 }]),
+      ok([]),
+    ];
+    const summary = await build();
+
+    // 0% attendance is a claim that every child was absent. Nobody claimed it.
+    expect(kpis(summary.spec).map((w) => w.value)).not.toContain('0.0%');
     expect(summary.blocked_metrics).toContainEqual({
-      label: 'Student attendance MTD',
-      reason: 'No attendance data exists in the ERP extract',
+      label: 'Student attendance',
+      reason: 'No attendance has been marked for these schools in the last three months',
       kind: 'no_data',
     });
+  });
+
+  it('separates a refusal from an empty register', async () => {
+    queue = [
+      ok([{ ay: '2026-27', n: 10 }]),
+      ok([{ n: 2 }]),
+      ok([{ ay: '2026-27', n: 5 }]),
+      refused('PERMISSION_DENIED', 'This session does not have access to students data.'),
+    ];
+    const summary = await build();
+    const entry = summary.blocked_metrics.find((b) => b.label === 'Student attendance');
+
+    // `not_permitted` means a different token would see it; `no_data` does not.
+    expect(entry?.kind).toBe('not_permitted');
+    expect(summary.degraded_schools).toEqual([]);
   });
 });

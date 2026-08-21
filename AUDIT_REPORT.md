@@ -274,14 +274,16 @@
 - **Classification:** MISSING (operational scope).
 - **Recommended action:** answer the ERP-already-sends question first; then decide whether A7 moves ahead of Phase 4. Recorded in docs/07 §4 and against A7 in docs/11 §3.
 
-**C20 — Attendance and exam data absent from the first real ERP dataset** *(new 2026-08-19)*
-- **Status:** `OPEN` — question added to docs/11 §2 item 6; Phase 1 dashboards revised around it · **Severity:** Medium (product scope, not architecture)
+**C20 — Attendance and exam data absent from the first real ERP dataset** *(new 2026-08-19; half answered 2026-08-21)*
+- **Status:** `PARTIALLY RESOLVED` — attendance answered and built; exams still open · **Severity:** Medium (product scope, not architecture)
 - **Document:** docs/06 §2 and docs/11 §1 vs the `ai_analysis` extract.
 - **Issue:** first contact with real ERP data (St Marks society — 3 schools, 259K student rows, 1.5M fee receipts, 2020-04 → 2026-08) shows **no attendance and no exam tables**. Both are load-bearing in the product narrative well beyond a dashboard: PROJECT_CONTEXT §1's Ask-AI example is *"which students have <75% attendance and pending fees?"*; the Director set includes Cross-School Attendance (students **and** teachers); docs/07's canonical workflow agent is the absence-alert; and docs/06 §4.2's hierarchy catalog defines attendance and exam drill paths. If this data is not reachable, more than two dashboards are affected.
 - **What is not yet known:** whether attendance/exam data exists in the **per-school** databases (`stmarksmb`, `stmarksj`, `stmarksg`) and was simply not carried into this extract, or whether it is not captured by the ERP at all. Those are very different answers — the first is an extract gap, the second is a product-scope problem.
 - **Interim decision (recorded, not a workaround):** Phase 1's four dashboards become Enrollment Overview · Fee Collection · Fee Defaulters · Staff Overview; Attendance Analytics and Exam Performance move to Phase 3. Architecture, catalog, serving path and invariants are untouched — only the build order moved.
 - **Classification:** MISSING (data availability).
 - **Recommended action:** confirm with the ERP team whether attendance and exam tables exist in the per-school databases. If they do, this is an extract gap and Phase 3 proceeds as planned. If they do not, the absence-alert agent, the Cross-School Attendance dashboard, the attendance drill paths and the flagship Ask-AI example all need re-scoping — and that is an ADR-level conversation, not a roadmap tweak.
+- **Update, 2026-08-21 — the attendance half is answered, in the good direction.** A second `ai_analysis` extract delivered `student_attendance_data_set` and `employee_attendance_data_set`. The ERP **does** capture attendance, so this was an extract gap and not a product-scope problem: the absence-alert agent, the Cross-School Attendance dashboard, the attendance drill paths and PROJECT_CONTEXT §1's flagship Ask-AI question all keep their source. Attendance Analytics is built (docs/11 §1 records what arrived and the three data traps it carries). **Exams remain absent and this finding stays open for them** — with one inference now available: attendance not being captured was never the reason it was missing, so the same question should be asked about exams before anything is re-scoped around their absence.
+- **What the answer cost, and what it did not.** Adding the dashboard was two schema entries, one report entry, one builder and one card state — the additive-by-construction claim in docs/11 §1 tested against a real arrival and held. What it did **not** buy is demo-grade data: the extract carries attendance for one training school and none for St Marks, so the numbers exercise the path without validating anything. That is a separate ask on the ERP team and it is the one that blocks a demo, not this finding.
 
 ## Section D — Checks that passed
 
@@ -365,7 +367,7 @@
 22. **Drill L3 serving** — confirm student-level leaves are replica-only (rollups cannot hold PII per ADR-010), and whether the ETL dim extension is a hard precondition of drill GA. *(A6, A7 — new)*
 23. **Mail triggers** — is IMAP sufficient, or are Google/Microsoft APIs required? *(B4 — Rev 1 Q9)*
 24. **Product-visible defaults** — quiet hours (8 PM–7 AM), per-school daily message cap (2,000), agent tick cadence (5 min), 8-hour session with launch-time role snapshot. *(B3 — Rev 1 Q11)*
-25. **Attendance Analytics widgets** — is a heatmap required in v1? If yes, approve an additive ADR-015 amendment. Reclassified from a doc contradiction to a scoping question. *(A2 revised — Rev 1 Q4)*
+25. **Attendance Analytics widgets** — is a heatmap required in v1? If yes, approve an additive ADR-015 amendment. Reclassified from a doc contradiction to a scoping question. **Still open, and no longer blocking:** the dashboard shipped 2026-08-21 with KPI · line · bar · donut · table, which answer the class-wise question within the existing vocabulary. A heatmap would be an addition to a working screen rather than a precondition for one. *(A2 revised — Rev 1 Q4)*
 
 ### Standing product & external inputs
 

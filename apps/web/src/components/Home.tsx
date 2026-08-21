@@ -22,10 +22,13 @@
  *
  * -- Three card states, deliberately distinct --------------------------------
  * `available` is built. `coming` means the serving path is not written yet.
- * `blocked` means the DATA does not exist -- attendance, exams, transport and
- * library have no tables in the ERP extract at all (AUDIT_REPORT C20). The
- * server decides which is which; this component only renders the verdict. They
- * look different because they need different people to fix them.
+ * `blocked` means the DATA does not exist -- exams, transport and library have
+ * no tables in the ERP extract at all (AUDIT_REPORT C20). Attendance was in that
+ * list until 2026-08-21, and watching it leave is the point of keeping the three
+ * states apart: a second extract arrived, the server changed one card's verdict,
+ * and no screen code changed. The server decides which is which; this component
+ * only renders the verdict. They look different because they need different
+ * people to fix them.
  */
 
 import type { HomeResponse, SessionResponse, DashboardCard } from '../api/client';

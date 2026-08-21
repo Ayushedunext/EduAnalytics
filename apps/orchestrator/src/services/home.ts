@@ -17,10 +17,14 @@
  * identifiers.ts). Bound parameters arrive properly with `run_predefined`.
  *
  * -- Why a metric that cannot be computed is named, not omitted ---------------
- * There is no attendance data in the ERP extract at all (AUDIT_REPORT C20), so
- * the prototype's "student attendance MTD" tile has no source. It is reported in
- * `blocked_metrics` with its reason rather than dropped or shown as 0%. A
- * dashboard that quietly renders three tiles where four were designed is the
+ * The prototype's fourth tile is student attendance, and until 2026-08-21 the
+ * ERP extract held no attendance at all (AUDIT_REPORT C20), so it was reported
+ * in `blocked_metrics` with its reason rather than dropped or shown as 0%. The
+ * table has since arrived and the tile is computed — but the mechanism stays,
+ * because the reasons a tile cannot be filled outlived the one that prompted it:
+ * a session without `students.read` cannot see it, and a school where nobody has
+ * taken the register has nothing to show. Both are named on screen. A dashboard
+ * that quietly renders three tiles where four were designed is the
  * success-shaped failure CODING_GUIDELINES §10 calls the worst bug class here,
  * and 0% attendance would be actively false. Same reasoning as
  * `dropped_from_scope` on /api/session (docs/02 §6).
@@ -51,6 +55,38 @@ const METRIC_SQL = {
   outstandingByYear:
     'SELECT academicyearname AS ay, ROUND(SUM(balance_amount)) AS n ' +
     'FROM fee_compile_data_set WHERE balance_amount > 0 GROUP BY academicyearname',
+  /**
+   * Attendance for the tile, by month.
+   *
+   * Three things in this statement are not obvious and all three are forced by
+   * the data (mcp-server/src/schema/erp-v1.ts documents each):
+   *
+   *   1. It groups on `attendancedate`, never on `academicyearname`. That column
+   *      is stamped with the CURRENT academic year rather than the year the row
+   *      falls in, so grouping by it would file August 2024 under 2026-27.
+   *   2. It de-duplicates to one row per student-day first. The table is not
+   *      unique on (student, date) — one student carries six rows for a single
+   *      day in the delivered extract — so counting rows would count that day
+   *      six times.
+   *   3. It reads `statusname`, not `statusid`, because the ids mean different
+   *      things in the two attendance tables.
+   *
+   * The three-month floor is a cost decision, not a semantic one. Home is the
+   * one screen every user loads, this tile is about now, and without a floor the
+   * statement groups a school's entire attendance history to render a single
+   * month. `CURDATE()` is acceptable here for the same reason it is refused in
+   * the reports (mcp-server/src/reports/catalog.ts, AS_OF_DATE): a tile labelled
+   * with the month it shows is not a figure anyone will print and reconcile
+   * later.
+   */
+  attendanceByMonth:
+    "SELECT LEFT(a.attendancedate, 7) AS ym, COUNT(*) AS marked, " +
+    "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present " +
+    'FROM (SELECT MAX(id) AS id FROM student_attendance_data_set ' +
+    "WHERE attendancedate >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 3 MONTH), '%Y-%m-01') " +
+    'GROUP BY studentid, attendancedate) k ' +
+    'JOIN student_attendance_data_set a ON a.id = k.id ' +
+    'GROUP BY LEFT(a.attendancedate, 7)',
 } as const;
 
 export interface BlockedMetric {
@@ -114,9 +150,15 @@ const DASHBOARDS: readonly DashboardCard[] = [
     title: 'Cross-School Attendance',
     blurb: 'Students & teachers, by school, with monthly trend',
     icon: '🗓️',
+    /**
+     * `coming`, not `blocked`, since 2026-08-21: the data exists now, so what
+     * stands between this card and a screen is the rollup store rather than the
+     * ERP team. Different problem, different owner, different card state — the
+     * distinction this type exists to make.
+     */
     group: 'director',
-    status: 'blocked',
-    reason: 'No attendance data exists in the ERP extract',
+    status: 'coming',
+    reason: 'Cross-school aggregates are served from the rollup store (ADR-010, Phase 2)',
   },
   {
     id: 'workflow-agents',
@@ -176,11 +218,17 @@ const DASHBOARDS: readonly DashboardCard[] = [
   {
     id: 'attendance-analytics',
     title: 'Attendance Analytics',
-    blurb: 'Daily %, trends, chronic absentee list',
+    blurb: 'Monthly trend, class-wise rate, marking coverage, students below 75%',
     icon: '✅',
     group: 'school',
-    status: 'blocked',
-    reason: 'No attendance data exists in the ERP extract',
+    /**
+     * Available since 2026-08-21. `available` means the report is built and
+     * reachable — NOT that every school has attendance to show. A school where
+     * nobody has marked the register opens the dashboard and is told so by name
+     * (services/dashboards.ts, buildAttendance); that is a fact about a school,
+     * and putting it on a catalog card would state it about the platform.
+     */
+    status: 'available',
   },
   {
     id: 'exam-performance',
@@ -255,7 +303,7 @@ export async function buildHomeSummary(args: {
     return { ...hit, spec: { ...hit.spec, meta: { ...hit.spec.meta, served_from: 'cache' } } };
   }
 
-  const { students, staff, outstanding } = await withMcp(
+  const { students, staff, outstanding, attendance } = await withMcp(
     args.session,
     args.correlationId,
     args.schoolIds,
@@ -266,7 +314,7 @@ export async function buildHomeSummary(args: {
        * running them in parallel costs one round trip instead of three and does
        * not widen that cap.
        */
-      const [students, staff, outstanding] = await Promise.all([
+      const [students, staff, outstanding, attendance] = await Promise.all([
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.studentsByYear,
@@ -279,8 +327,12 @@ export async function buildHomeSummary(args: {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.outstandingByYear,
         }),
+        mcp.call<RunMultiResult>('run_multi', {
+          school_ids: [...args.schoolIds],
+          sql: METRIC_SQL.attendanceByMonth,
+        }),
       ]);
-      return { students, staff, outstanding };
+      return { students, staff, outstanding, attendance };
     },
   );
 
@@ -307,6 +359,7 @@ export async function buildHomeSummary(args: {
   const studentsOutcome = outcomeOf(students);
   const staffOutcome = outcomeOf(staff);
   const outstandingOutcome = outcomeOf(outstanding);
+  const attendanceOutcome = outcomeOf(attendance);
 
   /**
    * The academic year comes from whichever metric could be read. Deriving it
@@ -378,12 +431,54 @@ export async function buildHomeSummary(args: {
     });
   }
 
-  /** No source anywhere in the ERP extract, for anyone (AUDIT_REPORT C20). */
-  blocked.push({
-    label: 'Student attendance MTD',
-    reason: 'No attendance data exists in the ERP extract',
-    kind: 'no_data',
-  });
+  /**
+   * Student attendance, for the most recent month anyone marked.
+   *
+   * The prototype calls this tile "MTD" and it is deliberately NOT called that
+   * here. MTD claims the current calendar month, and the month this shows is
+   * whichever month the data last has — those coincide in a school marking the
+   * register daily and diverge in exactly the school someone needs to notice.
+   * The label carries the month it actually covers, so the tile cannot be read
+   * as being about a period it is not (the same reasoning that made the academic
+   * year an echoed value rather than an assumption, above).
+   *
+   * The rate is present student-days over MARKED student-days, matching the
+   * Attendance Analytics dashboard exactly (services/dashboards.ts explains why
+   * that denominator and no other). Two screens showing the same metric by two
+   * definitions is a trust problem even when both are defensible.
+   */
+  const attendanceMonth = latestMonth(attendance.rows);
+  if (attendanceOutcome.available && attendanceMonth !== null) {
+    const marked = sumForMonth(attendance.rows, attendanceMonth, 'marked');
+    const present = sumForMonth(attendance.rows, attendanceMonth, 'present');
+    if (marked > 0) {
+      widgets.push({
+        id: 'kpi-attendance',
+        type: 'kpi',
+        label: `Student attendance · ${monthLabel(attendanceMonth)}`,
+        value: `${((present / marked) * 100).toFixed(1)}%`,
+        tone: present / marked < 0.75 ? 'warning' : 'neutral',
+      });
+    }
+  } else if (!attendanceOutcome.available) {
+    blocked.push({
+      label: 'Student attendance',
+      reason: attendanceOutcome.reason ?? 'Not available for this session',
+      kind: attendanceOutcome.kind,
+    });
+  } else {
+    /**
+     * The query ran and found nothing. That is a real and actionable state —
+     * nobody has taken the register — and it is not the same as having no
+     * permission or having no such data in the ERP, which is why it gets its own
+     * words rather than either of theirs.
+     */
+    blocked.push({
+      label: 'Student attendance',
+      reason: 'No attendance has been marked for these schools in the last three months',
+      kind: 'no_data',
+    });
+  }
 
   /**
    * The chart-spec schema requires at least one widget, and rightly so — a spec
@@ -440,7 +535,7 @@ export async function buildHomeSummary(args: {
     academic_year: academicYear,
     blocked_metrics: blocked,
     dashboards: DASHBOARDS,
-    degraded_schools: degradedFrom([students, staff, outstanding]),
+    degraded_schools: degradedFrom([students, staff, outstanding, attendance]),
   };
 
   /**
@@ -518,6 +613,53 @@ function sumForYear(rows: readonly Record<string, unknown>[], year: string | nul
 
 function sumAll(rows: readonly Record<string, unknown>[]): number {
   return rows.reduce((total, row) => total + toNumber(row['n']), 0);
+}
+
+/**
+ * The most recent month present in the rows, `YYYY-MM`, which sorts as text.
+ *
+ * The latest month the DATA has, not the current calendar month, and the tile
+ * says which one it found. A school that stopped marking in June should see June
+ * labelled June — not an empty tile for August that reads as a system fault.
+ */
+function latestMonth(rows: readonly Record<string, unknown>[]): string | null {
+  const months = rows
+    .map((row) => row['ym'])
+    .filter((value): value is string => typeof value === 'string' && value !== '');
+  if (months.length === 0) return null;
+  return [...months].sort().reverse()[0] ?? null;
+}
+
+/**
+ * One field of one month, summed across the schools that answered.
+ *
+ * Numerator and denominator are summed SEPARATELY and divided by the caller,
+ * never averaged from per-school rates: a 200-student school and a
+ * 4,000-student one do not weigh the same, and a mean of their percentages says
+ * they do.
+ */
+function sumForMonth(
+  rows: readonly Record<string, unknown>[],
+  month: string,
+  field: string,
+): number {
+  return rows.reduce(
+    (total, row) => (row['ym'] === month ? total + toNumber(row[field]) : total),
+    0,
+  );
+}
+
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/** `2026-07` -> `Jul 2026`, for a label a person reads rather than sorts. */
+function monthLabel(value: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (match === null) return value;
+  const name = MONTH_NAMES[Number(match[2]) - 1];
+  return name === undefined ? value : `${name} ${String(match[1])}`;
 }
 
 /** MySQL returns DECIMAL/BIGINT aggregates as strings in some driver paths. */

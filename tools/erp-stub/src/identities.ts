@@ -10,6 +10,9 @@
  *
  * School ids and names come from ai_analysis.schools_data_set -- the ERP's own
  * org/school mapping. "Society" is the ERP's term for what docs/00 calls an org.
+ * The one exception is the `premium_test` identity, whose schools the ERP never
+ * carried into that table; db/platform/seed/premium-test.sql explains why it is
+ * registered by hand and what it is for.
  */
 
 import type { LaunchTokenClaims } from '@sap/shared';
@@ -26,6 +29,36 @@ export interface Identity {
 }
 
 export const IDENTITIES: Identity[] = [
+  {
+    /**
+     * The only identity with attendance to look at.
+     *
+     * The attendance extract (2026-08-21) carries rows for `training_edubac`
+     * alone -- a training society of the ERP -- and none for St Marks, so every
+     * identity below opens Attendance Analytics on an empty period. That is the
+     * correct answer for those schools and it is not a demonstration of
+     * anything, hence this one.
+     *
+     * The scope is two schools ON PURPOSE, and it is the interesting part:
+     * `training_edubac` has attendance and `training` has none, so a single
+     * launch shows both the report and the empty state a school that has not
+     * marked the register gets. Numbers from this org are unvalidated test data
+     * and the label says so, because an identity picker is the last place a
+     * demo's provenance should be ambiguous.
+     */
+    key: 'principal-training',
+    label: 'Test Principal — Edubac Training (attendance data)',
+    note: 'The only schools with attendance. Unvalidated ERP test data.',
+    claims: {
+      sub: 'erp-user-5001',
+      name: 'Test Principal',
+      role: 'PRINCIPAL',
+      org_id: 'premium_test',
+      school_ids: ['training_edubac', 'training'],
+      default_school: 'training_edubac',
+      perms: ['fees.read', 'students.read', 'staff.read'],
+    },
+  },
   {
     key: 'director',
     label: 'R. Mehta — Director, St Marks Society',

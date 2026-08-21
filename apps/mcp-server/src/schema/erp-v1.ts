@@ -24,9 +24,23 @@
  * Absence from this catalog is not documentation — it is enforcement: the SQL
  * guard rejects any table it does not find here (schema/catalog.ts).
  *
- * NOTE for whoever adds attendance and exams (AUDIT_REPORT C20): neither exists
- * in this extract. When they arrive they are new entries here plus new dimension
- * queries — not a tool-shape change (docs/04 §8).
+ * ATTENDANCE, added 2026-08-21. A second extract delivered
+ * `student_attendance_data_set` and `employee_attendance_data_set`, and adding
+ * them was exactly what the previous note predicted: two entries here, a report
+ * in reports/catalog.ts, nothing about the tool surface (docs/04 §8). Exams are
+ * still absent, so AUDIT_REPORT C20 is only half answered — but the half that is
+ * answered says attendance IS captured by the ERP, which makes the remaining gap
+ * an extract question rather than a product-scope one.
+ *
+ * Read those two entries' column notes before writing SQL against them. They
+ * carry three traps that are invisible from the column names: `academicyearname`
+ * is stamped with the CURRENT year rather than the row's, `statusid` means
+ * different things in the two tables, and neither is unique on (subject, date).
+ * Three more tables arrived in the same extract — `books_data_set`,
+ * `book_issue_data_set`, `student_transport_data_set` — and are deliberately NOT
+ * catalogued yet: Library and Transport are their own catalog entries in docs/06
+ * §2 and have not been scoped, and an uncatalogued table is one the guard
+ * refuses rather than one the model can quietly reach.
  */
 
 import type { SchemaCatalog } from './catalog.js';
@@ -36,7 +50,8 @@ export const ERP_V1: SchemaCatalog = {
   description:
     'EduNext ERP analytics extract. One consolidated database per org; rows are ' +
     'separated by the school_db column. Covers enrolment, admissions, fee demand ' +
-    'and collection, concessions, waivers and staff. No attendance or exam data.',
+    'and collection, concessions, waivers, staff, and day-level attendance for ' +
+    'students and staff. No exam data.',
 
   /**
    * Option (a), confirmed 2026-08-19 (db/platform/seed/stmarks.sql).
@@ -158,6 +173,74 @@ export const ERP_V1: SchemaCatalog = {
         type: 'date',
         description: 'NULL while the record is active. A student or employee is current when this is NULL.',
       },
+    ],
+  },
+  {
+    name: 'student_attendance_data_set',
+    domain: 'students',
+    description:
+      'Day-level student attendance: one row per marking of a student on a date. Not unique on (student, date) -- the same student-day can carry several rows.',
+    columns: [
+      {
+        name: 'id',
+        type: 'bigint',
+        description:
+          "The extract's own row key. Unique, unlike attendanceid, so it is what a de-duplicating subquery should pick a student-day by.",
+      },
+      { name: 'attendanceid', type: 'bigint', description: "The ERP's own attendance record id." },
+      { name: 'studentid', type: 'bigint' },
+      { name: 'studentprofileid', type: 'bigint' },
+      {
+        name: 'school_db',
+        type: 'varchar',
+        description: 'Tenant discriminator for this schema version. Injected by the MCP server as a bound parameter -- never write it into a query yourself.',
+      },
+      {
+        name: 'society_db',
+        type: 'varchar',
+        description: "The org (the ERP's 'society') this row belongs to.",
+      },
+      { name: 'studentname', type: 'varchar', pii: 'students' },
+      { name: 'enrollmentno', type: 'varchar', pii: 'students' },
+      { name: 'academicyearid', type: 'bigint' },
+      {
+        name: 'academicyearname',
+        type: 'varchar',
+        description:
+          "DO NOT FILTER ON THIS COLUMN. In the delivered extract every row carries the CURRENT academic year regardless of its own attendancedate -- rows dated August 2024 are labelled '2026-27'. Filter attendance by attendancedate instead.",
+      },
+      {
+        name: 'academicyearfromdate',
+        type: 'varchar',
+        description: "Start of the academic year named above, written DD-MM-YYYY -- a different format from attendancedate.",
+      },
+      { name: 'academicyeartodate', type: 'varchar', description: 'End of that academic year, DD-MM-YYYY.' },
+      {
+        name: 'classname',
+        type: 'varchar',
+        description:
+          'Class label as it stood when the row was written. Carries no classseq -- join students_data_set if the classes need ordering.',
+      },
+      { name: 'sectionname', type: 'varchar', description: 'Section label within a class.' },
+      {
+        name: 'attendancedate',
+        type: 'varchar',
+        description:
+          "The date attendance was marked for, written YYYY-MM-DD as text rather than as a DATE. It compares and sorts correctly as text, so BETWEEN and LEFT(attendancedate, 7) work; wrapping it in STR_TO_DATE inside a WHERE clause only defeats the index.",
+      },
+      {
+        name: 'statusid',
+        type: 'bigint',
+        description:
+          'DO NOT BRANCH ON THIS. The codes are not stable and they do not agree with employee_attendance_data_set: 5 means Suspend here and Absent there, and both 1 and 6 mean Present. Read statusname.',
+      },
+      {
+        name: 'statusname',
+        type: 'varchar',
+        description:
+          "How the marking is named by the ERP. Observed in this extract: Present, Absent, Leave, Suspend. No canonical list has been supplied, so treat any other value as unknown rather than assuming it means absent.",
+      },
+      { name: 'createdon', type: 'datetime', description: 'When the extract wrote the row.' },
     ],
   },
   {
@@ -424,6 +507,53 @@ export const ERP_V1: SchemaCatalog = {
     ],
   },
   {
+    name: 'employee_attendance_data_set',
+    domain: 'staff',
+    description:
+      'Day-level staff attendance: one row per marking of an employee on a date. Carries no academic year -- staff are not enrolled in one.',
+    columns: [
+      {
+        name: 'id',
+        type: 'bigint',
+        description:
+          "The extract's own row key. Unique, unlike attendanceid, so it is what a de-duplicating subquery should pick an employee-day by.",
+      },
+      { name: 'attendanceid', type: 'bigint', description: "The ERP's own attendance record id." },
+      { name: 'employeeid', type: 'bigint' },
+      {
+        name: 'school_db',
+        type: 'varchar',
+        description: 'Tenant discriminator for this schema version. Injected by the MCP server as a bound parameter -- never write it into a query yourself.',
+      },
+      {
+        name: 'society_db',
+        type: 'varchar',
+        description: "The org (the ERP's 'society') this row belongs to.",
+      },
+      { name: 'employeename', type: 'varchar', pii: 'staff' },
+      { name: 'departmentname', type: 'varchar' },
+      {
+        name: 'attendancedate',
+        type: 'varchar',
+        description:
+          'The date attendance was marked for, written YYYY-MM-DD as text rather than as a DATE. Compares and sorts correctly as text.',
+      },
+      {
+        name: 'statusid',
+        type: 'bigint',
+        description:
+          'DO NOT BRANCH ON THIS. The codes differ from student_attendance_data_set: 5 means Absent here and Suspend there. Read statusname.',
+      },
+      {
+        name: 'statusname',
+        type: 'varchar',
+        description:
+          "How the marking is named by the ERP. Observed in this extract: Present, Absent, First Half Leave, Second Half Leave. The half-day statuses are why a staff attendance rate is not a plain present/total count.",
+      },
+      { name: 'createdon', type: 'datetime', description: 'When the extract wrote the row.' },
+    ],
+  },
+  {
     name: 'schools_data_set',
     domain: 'reference',
     description:
@@ -465,6 +595,18 @@ export const ERP_V1: SchemaCatalog = {
       on: ['enrollmentno', 'academicyearname', 'componentname'],
       note: 'Demand vs receipts for the same fee head.',
     },
+    {
+      from: 'student_attendance_data_set',
+      to: 'students_data_set',
+      on: ['studentid'],
+      note: "Join on studentid ALONE and add the year to the students_data_set side, because the attendance row's own academicyearname cannot be trusted. Needed for anything the attendance table lacks -- classseq for ordering classes, gender, category.",
+    },
+    {
+      from: 'employee_attendance_data_set',
+      to: 'employees_data_set',
+      on: ['employeeid'],
+      note: 'Needed for designation, staff type and joining/leaving dates; the attendance table carries only the department name.',
+    },
   ],
 
   /**
@@ -480,6 +622,9 @@ export const ERP_V1: SchemaCatalog = {
     'Common table expressions (WITH ...) are not supported yet. Use subqueries.',
     'Results are capped at 5,000 rows and 10 seconds. Aggregate in SQL rather than returning detail rows for the client to summarise.',
     'Always filter on academicyearname unless the question is explicitly historical: these tables hold every year since 2020-04.',
+    'The two attendance tables are the exception to the rule above: their academicyearname is stamped with the current year rather than the year the row belongs to, so filter them on attendancedate BETWEEN two dates instead.',
+    'Never branch on statusid. It is not consistent between the two attendance tables. Read statusname, and treat a value you were not told about as unknown rather than as absent.',
+    'Neither attendance table is unique on (student, date) or (employee, date). De-duplicate first -- GROUP BY the subject and the date taking MAX(id), then join back on id -- or a count of days will be inflated.',
     'Order classes by classseq, never by classname, which sorts as text (X before IX).',
     'A student or employee is current when deactivation_date IS NULL.',
   ],

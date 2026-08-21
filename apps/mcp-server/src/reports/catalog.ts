@@ -517,12 +517,219 @@ const ADMISSIONS_FUNNEL: PredefinedReport = {
   ],
 };
 
+/**
+ * The date window an attendance report is computed over.
+ *
+ * Attendance is the one domain in this catalog that CANNOT be filtered by
+ * academic year, and that is a property of the delivered data rather than a
+ * preference. In `student_attendance_data_set` every row carries the CURRENT
+ * academic year rather than the year its own `attendancedate` falls in -- rows
+ * dated August 2024 arrive labelled `2026-27`, contradicted by the row's own
+ * `academicyearfromdate` of 01-04-2026. Either the extract stamps the label at
+ * export time or the sample is wrong; both readings break the same filter.
+ *
+ * So the year selector on screen is resolved to a date window by the caller and
+ * bound here, and `attendancedate` -- which is trustworthy, and is the column the
+ * number actually means -- carries the filter. Adding `academicyearname` beside
+ * it would not be belt and braces: under the "stamped at export" reading it
+ * would silently drop every row of any year but the current one.
+ */
+const FROM_DATE: ReportParam = {
+  name: 'from_date',
+  type: 'string',
+  required: true,
+  description: 'First date of the attendance window, YYYY-MM-DD, inclusive.',
+};
+
+const TO_DATE: ReportParam = {
+  name: 'to_date',
+  type: 'string',
+  required: true,
+  description: 'Last date of the attendance window, YYYY-MM-DD, inclusive.',
+};
+
+/**
+ * One row per student per day -- which the table does not give us.
+ *
+ * `student_attendance_data_set` is not unique on (studentid, attendancedate):
+ * in the delivered extract one student carries six rows for 2024-10-15, each
+ * with its own `attendanceid`. Whether the ERP keeps re-markings as history or
+ * the extract flattened period-wise rows and lost the period is an open question
+ * for the ERP team; either way a report that counts rows counts that day six
+ * times, and every rate below it is wrong by an amount nobody can see.
+ *
+ * So every attendance query starts from this: group the window down to one row
+ * per student-day taking the largest `id`, then join back for the columns. `id`
+ * rather than `attendanceid` because `id` is the extract's own AUTO_INCREMENT
+ * primary key and is therefore guaranteed unique and non-null, which is exactly
+ * what a tie-break needs to be. Which of six rows wins is arbitrary; that it is
+ * ONE row is not.
+ *
+ * The window predicate is repeated inside the subquery deliberately. It has to
+ * be: without it the GROUP BY spans the whole table and the join then discards
+ * most of what it built.
+ */
+const STUDENT_DAYS =
+  '(SELECT MAX(id) AS id FROM student_attendance_data_set ' +
+  'WHERE attendancedate BETWEEN :from_date AND :to_date ' +
+  'GROUP BY studentid, attendancedate) k ' +
+  'JOIN student_attendance_data_set a ON a.id = k.id';
+
+/**
+ * The status buckets.
+ *
+ * Keyed on `statusname`, never on `statusid`, because the ids are not stable
+ * across tables -- 5 is Suspend for a student and Absent for an employee, and 1
+ * and 6 both mean Present. No canonical status list was supplied with the
+ * extract (it joins the owed inputs in docs/11 section 2 item 6), so anything
+ * outside the four observed values falls into `other_days` rather than being
+ * assumed to mean absent. The dashboard publishes the raw `by_status` counts
+ * beside every rate for the same reason the Admissions funnel publishes
+ * `candidate_statusid`: a reader can then check the bucketing instead of
+ * trusting it.
+ */
+const STATUS_SUMS =
+  "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days, " +
+  "SUM(CASE WHEN a.statusname = 'Absent' THEN 1 ELSE 0 END) AS absent_days, " +
+  "SUM(CASE WHEN a.statusname = 'Leave' THEN 1 ELSE 0 END) AS leave_days, " +
+  "SUM(CASE WHEN a.statusname IS NULL OR a.statusname NOT IN ('Present', 'Absent', 'Leave') " +
+  'THEN 1 ELSE 0 END) AS other_days';
+
+/** `2026-07` from `2026-07-21`, and `202607` to sort it by. */
+const MONTH_SEQ = 'MIN(LEFT(a.attendancedate, 4) * 100 + SUBSTRING(a.attendancedate, 6, 2)) AS seq';
+
+/**
+ * Attendance Analytics -- docs/06 section 2, deferred to Phase 3 by docs/11
+ * section 1 for want of data and taken up on 2026-08-21 when a second extract
+ * delivered the table.
+ *
+ * -- What "attendance rate" means here ----------------------------------------
+ * present student-days / MARKED student-days. Not present over working days,
+ * because nothing in the extract says which days were working days: there is no
+ * school calendar, no holiday table and no timetable. Any denominator built from
+ * the calendar would be this platform inventing a school's year, and it would be
+ * wrong first for exactly the schools that need the number most.
+ *
+ * The cost of the honest denominator is that a day a teacher never marked simply
+ * is not counted, rather than counting as absent -- which flatters a school with
+ * poor marking discipline. That is why `expected_days` is computed beside it and
+ * the dashboard leads with a marking-coverage tile: the weakness is put on the
+ * screen rather than left in this comment. Coverage is a real metric in its own
+ * right, and for most principals a more actionable one than the rate.
+ *
+ * -- Why the academic year is still a parameter -------------------------------
+ * Not for the attendance table, which cannot be trusted to carry it (see
+ * FROM_DATE). It is bound only against `students_data_set`, whose year column is
+ * reliable, to count how many students were on roll -- the denominator of
+ * coverage. Two filters against two tables, each on the column that table can
+ * actually support.
+ */
+const ATTENDANCE_ANALYTICS: PredefinedReport = {
+  id: 'attendance-analytics',
+  title: 'Attendance Analytics',
+  schema_version: 'erp-v1',
+  source: 'student_attendance_data_set',
+  domain: 'students',
+  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE],
+  queries: [
+    {
+      key: 'summary',
+      description: 'Marked student-days, days marked, and how many were expected',
+      sql:
+        'SELECT COUNT(*) AS marked_days, ' +
+        'COUNT(DISTINCT a.attendancedate) AS working_days, ' +
+        'COUNT(DISTINCT a.studentid) AS students_marked, ' +
+        /**
+         * Expected student-days for THIS school, multiplied in SQL rather than
+         * in the merge. Across several schools the honest total is
+         * SUM(days_i x roll_i), and a merge that summed days and roll separately
+         * before multiplying would produce a number belonging to no school.
+         */
+        'COUNT(DISTINCT a.attendancedate) * (SELECT COUNT(*) FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL) AS expected_days, ' +
+        STATUS_SUMS +
+        ' FROM ' +
+        STUDENT_DAYS,
+    },
+    {
+      key: 'by_month',
+      description: 'Attendance by month over the window',
+      sql:
+        'SELECT LEFT(a.attendancedate, 7) AS month, ' +
+        MONTH_SEQ +
+        ', COUNT(*) AS marked_days, COUNT(DISTINCT a.attendancedate) AS working_days, ' +
+        STATUS_SUMS +
+        ' FROM ' +
+        STUDENT_DAYS +
+        ' GROUP BY LEFT(a.attendancedate, 7) ORDER BY seq',
+    },
+    {
+      key: 'by_class',
+      description: 'Attendance by class',
+      sql:
+        'SELECT a.classname, COUNT(*) AS marked_days, ' +
+        'COUNT(DISTINCT a.studentid) AS students_marked, ' +
+        STATUS_SUMS +
+        ' FROM ' +
+        STUDENT_DAYS +
+        ' GROUP BY a.classname ORDER BY marked_days DESC',
+    },
+    {
+      /**
+       * The attendance table has no `classseq`, so the ordinal is fetched from
+       * the table that owns it and applied during the merge. A join would have
+       * been the obvious alternative and is the wrong one here: a student with
+       * more than one enrolment row for the year would fan the attendance rows
+       * out and inflate every count in `by_class` -- a wrong number rather than
+       * a wrongly ordered axis.
+       */
+      key: 'class_order',
+      description: 'Class ordinals, read from enrolment because attendance has none',
+      sql:
+        'SELECT classname, MIN(classseq) AS seq FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year GROUP BY classname ORDER BY seq',
+    },
+    {
+      key: 'by_status',
+      description: 'What the ERP actually recorded, unbucketed',
+      sql:
+        'SELECT a.statusname, COUNT(*) AS days FROM ' +
+        STUDENT_DAYS +
+        ' GROUP BY a.statusname ORDER BY days DESC',
+    },
+    {
+      /**
+       * The 75% line comes from docs/06 section 4.2, which puts `student(<75%)`
+       * at the bottom of the attendance drill path, and from PROJECT_CONTEXT
+       * section 1's flagship Ask-AI question. No minimum number of marked days
+       * is imposed: a student marked once and absent once really is at 0%, and
+       * hiding them behind a threshold would be this layer deciding which
+       * children count. `marked_days` is therefore a column on the table, so a
+       * one-day 0% is visibly a one-day 0%.
+       */
+      key: 'low_attendance',
+      description: 'Students below 75% of their own marked days',
+      sql:
+        'SELECT a.studentname, a.enrollmentno, a.classname, a.sectionname, ' +
+        'COUNT(*) AS marked_days, ' +
+        "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' +
+        STUDENT_DAYS +
+        ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname ' +
+        "HAVING SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) < 0.75 * COUNT(*) " +
+        "ORDER BY SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) / COUNT(*) ASC, " +
+        'marked_days DESC LIMIT 200',
+    },
+  ],
+};
+
 const REPORTS: readonly PredefinedReport[] = [
   ENROLLMENT_OVERVIEW,
   FEE_COLLECTION,
   FEE_DEFAULTERS,
   STAFF_OVERVIEW,
   ADMISSIONS_FUNNEL,
+  ATTENDANCE_ANALYTICS,
 ];
 
 const BY_ID = new Map(REPORTS.map((report) => [report.id, report]));

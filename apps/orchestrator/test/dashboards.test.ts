@@ -232,6 +232,239 @@ describe('a report is only sent the filters it declares', () => {
   });
 });
 
+/**
+ * Attendance Analytics.
+ *
+ * Everything below is a property that fails SILENTLY if it breaks -- a wrong
+ * percentage, a reassuring zero, a filter that narrows nothing -- which is why
+ * these are tests and not comments.
+ */
+describe('Attendance Analytics reports what was marked, and nothing more', () => {
+  function summary(rows: Record<string, unknown>) {
+    return query('summary', [rows]);
+  }
+
+  it('binds the academic year AND a date window, because two tables need two filters', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [summary({ marked_days: 10, working_days: 2, expected_days: 20, present_days: 9 })],
+        },
+      ],
+    });
+    await build('attendance-analytics');
+
+    /**
+     * The window is derived from the year rather than asked for separately: the
+     * attendance table stamps every row with the CURRENT academic year, so its
+     * own year column cannot carry the filter and `attendancedate` has to. The
+     * year is still sent because `students_data_set` -- where the roll count for
+     * coverage comes from -- can be trusted with it.
+     */
+    expect(lastCall?.args['params']).toEqual({
+      academic_year: '2026-27',
+      from_date: '2026-04-01',
+      to_date: '2027-03-31',
+    });
+  });
+
+  it('shows the dates it computed over, not just the year someone picked', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [summary({ marked_days: 10, working_days: 2, expected_days: 20, present_days: 9 })],
+        },
+      ],
+    });
+    const built = await build('attendance-analytics');
+
+    // Invariant 6: a filter pill states what was BOUND. A report filtered by
+    // date that showed only a year pill would be claiming the wrong mechanism.
+    expect(built.logic.filters).toEqual([
+      { label: 'Academic year', value: '2026-27' },
+      { label: 'From', value: '2026-04-01' },
+      { label: 'To', value: '2027-03-31' },
+    ]);
+  });
+
+  it('divides summed totals across schools rather than averaging their rates', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          // A small school having a very good week.
+          school_id: 'stmarksmb',
+          queries: [summary({ marked_days: 100, working_days: 5, expected_days: 100, present_days: 100 })],
+        },
+        {
+          // A large one having a bad one.
+          school_id: 'stmarksj',
+          queries: [summary({ marked_days: 900, working_days: 5, expected_days: 900, present_days: 450 })],
+        },
+      ],
+    });
+    const built = await build('attendance-analytics', ['stmarksmb', 'stmarksj']);
+
+    /**
+     * 550/1000 = 55.0%. The mean of the two schools' rates is 75%, and that
+     * number would weigh a 100-day school the same as a 900-day one -- the exact
+     * mistake this module's header forbids.
+     */
+    expect(kpi(built.spec, 'kpi-attendance-rate')?.value).toBe('55.0%');
+  });
+
+  it('says nobody marked the register rather than reporting 0% attendance', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [summary({ marked_days: 0, working_days: 0, expected_days: 0, present_days: 0 })],
+        },
+      ],
+    });
+    const built = await build('attendance-analytics');
+
+    // 0% is a claim that every child was absent. Nobody claimed it.
+    expect(kpi(built.spec, 'kpi-attendance-rate')?.value).toBe('—');
+    expect(kpi(built.spec, 'kpi-days-marked')?.value).toBe('0');
+    expect(built.logic.notes[0]).toContain('No attendance has been marked');
+  });
+
+  it('does not report zero students below 75% when that query failed', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            summary({ marked_days: 100, working_days: 5, expected_days: 100, present_days: 90 }),
+            {
+              key: 'low_attendance',
+              description: 'low',
+              sql: 'SELECT 1',
+              status: 'failed',
+              error: { code: 'QUERY_TIMEOUT', message: 'took too long' },
+            },
+          ],
+        },
+      ],
+    });
+    const built = await build('attendance-analytics');
+
+    /**
+     * The most dangerous number this dashboard could print. "0 students below
+     * 75%" reads as good news; here it would mean the list never loaded.
+     */
+    expect(kpi(built.spec, 'kpi-below-75')?.value).toBe('—');
+    expect(built.degraded.map((d) => d.key)).toContain('low_attendance');
+  });
+
+  it('fails loudly when the summary itself could not be read', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            {
+              key: 'summary',
+              description: 'summary',
+              sql: 'SELECT 1',
+              status: 'failed',
+              error: { code: 'TENANT_UNAVAILABLE', message: 'unreachable' },
+            },
+          ],
+        },
+      ],
+    });
+
+    // An outage must not arrive wearing the words for an empty register.
+    await expect(build('attendance-analytics')).rejects.toBeInstanceOf(PlatformError);
+  });
+
+  it('orders classes by the enrolment ordinal, not by their labels', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            summary({ marked_days: 30, working_days: 3, expected_days: 30, present_days: 27 }),
+            query('by_class', [
+              { classname: 'X', marked_days: 10, present_days: 9 },
+              { classname: 'IX', marked_days: 10, present_days: 8 },
+              { classname: 'Nursery', marked_days: 10, present_days: 10 },
+            ]),
+            query('class_order', [
+              { classname: 'Nursery', seq: 1 },
+              { classname: 'IX', seq: 9 },
+              { classname: 'X', seq: 10 },
+            ]),
+          ],
+        },
+      ],
+    });
+    const built = await build('attendance-analytics');
+    const bar = built.spec.widgets.find((w) => w.id === 'bar-class');
+
+    // Sorted as text, X comes before IX and Nursery comes last. The ordinal
+    // lives in the enrolment table because the attendance table has none.
+    expect(bar?.type === 'bar' ? bar.data.map((r) => r['classname']) : []).toEqual([
+      'Nursery',
+      'IX',
+      'X',
+    ]);
+  });
+
+  it('labels a masked student column as masked rather than dropping it', async () => {
+    response = result({
+      reportId: 'attendance-analytics',
+      title: 'Attendance Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            summary({ marked_days: 10, working_days: 5, expected_days: 10, present_days: 4 }),
+            query(
+              'low_attendance',
+              [
+                {
+                  studentname: '***',
+                  enrollmentno: '***',
+                  classname: 'IX',
+                  sectionname: 'A',
+                  marked_days: 10,
+                  present_days: 4,
+                },
+              ],
+              ['studentname', 'enrollmentno'],
+            ),
+          ],
+        },
+      ],
+    });
+    const built = await build('attendance-analytics');
+    const rows = table(built.spec, 'table-low-attendance');
+
+    expect(rows?.columns.find((c) => c.field === 'studentname')?.masked).toBe(true);
+    expect(rows?.columns.find((c) => c.field === 'classname')?.masked).toBeUndefined();
+    // 4 present of 10 marked. The percentage is computed here, not in SQL.
+    expect(rows?.rows[0]?.['attendance_pct']).toBe(40);
+  });
+});
+
 describe('Fee Defaulters counts people once and money once', () => {
   /** `seq` is the band ordinal the catalog emits: 0/1 context, 2–5 overdue. */
   const aging = [

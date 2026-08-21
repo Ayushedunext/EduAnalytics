@@ -28,6 +28,8 @@ import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
 import { withMcp } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
+import { cacheGet, cacheKey, cacheSet } from '../cache/result-cache.js';
+import { config } from '../config.js';
 
 /** What `run_predefined` returns. Parsed, never trusted as a domain type (§3). */
 interface PredefinedResult {
@@ -138,6 +140,31 @@ export async function buildDashboard(args: {
   if (filters.academicYear) params['academic_year'] = args.academicYear;
   if (filters.asOf) params['as_of_date'] = args.asOfDate;
 
+  /**
+   * Tier ① (docs/09 §4). The key carries the school set, the bound filters AND
+   * the session's permission class — [MANDATORY] docs/08 §5, because masking is
+   * role-dependent and a key without it would serve a Principal's unmasked
+   * defaulter list to an accountant.
+   */
+  const key = cacheKey({
+    kind: `report:${args.reportId}`,
+    schoolIds: args.schoolIds,
+    permissionClass: args.session.permission_class,
+    filters: params,
+  });
+
+  const hit = await cacheGet<DashboardResult>(key);
+  if (hit !== null) {
+    /**
+     * The spec says where the answer came from, and on a hit that is the cache
+     * — ADR-028's three tiers are only honest if the label changes with them.
+     * `as_of` is deliberately NOT refreshed: the data really is from the moment
+     * of the underlying read, and docs/03 assumption 2 accepts replica lag only
+     * on condition that it is labelled.
+     */
+    return { ...hit, spec: { ...hit.spec, meta: { ...hit.spec.meta, served_from: 'cache' } } };
+  }
+
   const result = await withMcp(args.session, args.correlationId, args.schoolIds, async (mcp) =>
     mcp.call<PredefinedResult>('run_predefined', {
       report_id: args.reportId,
@@ -194,7 +221,7 @@ export async function buildDashboard(args: {
     });
   }
 
-  return {
+  const outcome: DashboardResult = {
     spec: parsed.data,
     logic: {
       source: result.source,
@@ -222,6 +249,21 @@ export async function buildDashboard(args: {
     degraded: merged.failures(),
     degraded_schools: merged.schoolFailures(),
   };
+
+  /**
+   * Only a COMPLETE answer is cached.
+   *
+   * A dashboard where one panel timed out or one school was unreachable is
+   * correct to render (ADR-011) and wrong to keep: caching it would freeze a
+   * transient failure for the whole TTL, so a school that came back thirty
+   * seconds later would still be reported as unreachable to everyone who asks
+   * for the next ten minutes. Partial answers stay cheap to retry.
+   */
+  if (outcome.degraded.length === 0 && outcome.degraded_schools.length === 0) {
+    await cacheSet(key, outcome, config.CACHE_TTL_SECONDS);
+  }
+
+  return outcome;
 }
 
 // -- Dashboards ---------------------------------------------------------------

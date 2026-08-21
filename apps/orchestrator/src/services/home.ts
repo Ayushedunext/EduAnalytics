@@ -35,6 +35,8 @@ import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
 import { withMcp, type RunMultiResult } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
+import { cacheGet, cacheKey, cacheSet } from '../cache/result-cache.js';
+import { config } from '../config.js';
 
 /**
  * Vetted SQL. Read-only, catalog tables only, no placeholders, no tenant filter
@@ -231,6 +233,28 @@ export async function buildHomeSummary(args: {
     });
   }
 
+  /**
+   * Same tier ① as the dashboards (docs/09 §4), and the same [MANDATORY]
+   * permission-class component in the key (docs/08 §5): Home shows a fee total
+   * and a staff count, and which of those a session may read at all is
+   * role-dependent.
+   *
+   * Home is worth caching for a reason the dashboards do not have: it is the
+   * landing screen, so it is the one page every user of a school loads, and it
+   * fans out to three schools before anything else can happen.
+   */
+  const key = cacheKey({
+    kind: 'home',
+    schoolIds: args.schoolIds,
+    permissionClass: args.session.permission_class,
+    filters: {},
+  });
+
+  const hit = await cacheGet<HomeSummary>(key);
+  if (hit !== null) {
+    return { ...hit, spec: { ...hit.spec, meta: { ...hit.spec.meta, served_from: 'cache' } } };
+  }
+
   const { students, staff, outstanding } = await withMcp(
     args.session,
     args.correlationId,
@@ -411,13 +435,27 @@ export async function buildHomeSummary(args: {
     });
   }
 
-  return {
+  const summary: HomeSummary = {
     spec: parsed.data,
     academic_year: academicYear,
     blocked_metrics: blocked,
     dashboards: DASHBOARDS,
     degraded_schools: degradedFrom([students, staff, outstanding]),
   };
+
+  /**
+   * Cached only when nothing was degraded — a school that was briefly
+   * unreachable must not be reported as unreachable for the whole TTL.
+   *
+   * `blocked_metrics` is NOT a reason to skip the cache: attendance having no
+   * source is a stable fact about the ERP extract, not a transient failure, and
+   * it will be just as true in ten minutes.
+   */
+  if (summary.degraded_schools.length === 0) {
+    await cacheSet(key, summary, config.CACHE_TTL_SECONDS);
+  }
+
+  return summary;
 }
 
 /**

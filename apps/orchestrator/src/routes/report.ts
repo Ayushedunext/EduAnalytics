@@ -22,6 +22,8 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
 import { buildDashboard, isDashboardId } from '../services/dashboards.js';
+import { renderReportPdf } from '../services/pdf.js';
+import { orgName, schoolNames } from '../db/registry.js';
 import { auditSink } from '../db/audit.js';
 
 export const reportRouter = Router();
@@ -58,50 +60,64 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * The parts of a report request both the JSON and the PDF route need.
+ *
+ * Extracted so the export cannot drift from the view: a PDF that validated its
+ * academic year differently, or skipped the scope resolution, would be a second
+ * door into the same data with its own bugs. Both routes ask the same questions
+ * in the same order and get the same refusals.
+ */
+async function parseReportRequest(req: Request) {
+  const session = req.session;
+  if (session === undefined) {
+    throw new PlatformError({
+      code: ERROR_CODES.SESSION_INVALID,
+      message: 'Please open Analytics from the ERP menu.',
+      correlationId: req.correlationId,
+    });
+  }
+
+  const rawId = req.params['id'];
+  const reportId = typeof rawId === 'string' ? rawId : '';
+  if (!isDashboardId(reportId)) {
+    throw new PlatformError({
+      code: ERROR_CODES.REPORT_NOT_FOUND,
+      message: 'That report does not exist.',
+      correlationId: req.correlationId,
+    });
+  }
+
+  const rawYear = req.query['academic_year'];
+  const academicYear = typeof rawYear === 'string' ? rawYear : '';
+  if (!ACADEMIC_YEAR.test(academicYear)) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'Choose an academic year to view this report.',
+      details: { expected: 'YYYY-YY' },
+      correlationId: req.correlationId,
+    });
+  }
+
+  const rawAsOf = req.query['as_of'];
+  const asOfDate = typeof rawAsOf === 'string' && rawAsOf !== '' ? rawAsOf : today();
+  if (!AS_OF_DATE.test(asOfDate) || !isRealDate(asOfDate)) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'The "as of" date must be a calendar date.',
+      details: { expected: 'YYYY-MM-DD' },
+      correlationId: req.correlationId,
+    });
+  }
+
+  const schoolIds = await resolveRequestedSchools(req);
+
+  return { session, reportId, academicYear, asOfDate, schoolIds };
+}
+
 reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
-    const session = req.session;
-    if (session === undefined) {
-      throw new PlatformError({
-        code: ERROR_CODES.SESSION_INVALID,
-        message: 'Please open Analytics from the ERP menu.',
-        correlationId: req.correlationId,
-      });
-    }
-
-    const rawId = req.params['id'];
-    const reportId = typeof rawId === 'string' ? rawId : '';
-    if (!isDashboardId(reportId)) {
-      throw new PlatformError({
-        code: ERROR_CODES.REPORT_NOT_FOUND,
-        message: 'That report does not exist.',
-        correlationId: req.correlationId,
-      });
-    }
-
-    const rawYear = req.query['academic_year'];
-    const academicYear = typeof rawYear === 'string' ? rawYear : '';
-    if (!ACADEMIC_YEAR.test(academicYear)) {
-      throw new PlatformError({
-        code: ERROR_CODES.VALIDATION_FAILED,
-        message: 'Choose an academic year to view this report.',
-        details: { expected: 'YYYY-YY' },
-        correlationId: req.correlationId,
-      });
-    }
-
-    const rawAsOf = req.query['as_of'];
-    const asOfDate = typeof rawAsOf === 'string' && rawAsOf !== '' ? rawAsOf : today();
-    if (!AS_OF_DATE.test(asOfDate) || !isRealDate(asOfDate)) {
-      throw new PlatformError({
-        code: ERROR_CODES.VALIDATION_FAILED,
-        message: 'The "as of" date must be a calendar date.',
-        details: { expected: 'YYYY-MM-DD' },
-        correlationId: req.correlationId,
-      });
-    }
-
-    const schoolIds = await resolveRequestedSchools(req);
+    const { session, reportId, academicYear, asOfDate, schoolIds } = await parseReportRequest(req);
 
     const dashboard = await buildDashboard({
       session,
@@ -139,3 +155,84 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
     res.json(dashboard);
   })().catch(next);
 });
+
+
+/**
+ * GET /api/report/:id/export.pdf — the official document (ADR-021, docs/06 §5).
+ *
+ * The spec is REBUILT here rather than accepted from the caller. A PDF carries
+ * the school's name, the platform's branding and a generated-on stamp; it will
+ * be forwarded, printed and filed long after the session that made it. An
+ * endpoint that rendered a spec from the request body would let anyone POST
+ * arbitrary numbers and receive them back looking official — so the numbers in
+ * the file are always ones this service read for this request. The result cache
+ * (tier ①) makes that re-read cheap for anything recently viewed.
+ *
+ * A GET, and side-effect-free by contract: it changes nothing, so a link can
+ * open it and CSRF does not apply (ADR-029 clause 3). The audit write is a
+ * RECORD of the read, not a change to any state a caller can influence.
+ */
+reportRouter.get(
+  '/api/report/:id/export.pdf',
+  (req: Request, res: Response, next: NextFunction): void => {
+    void (async () => {
+      const { session, reportId, academicYear, asOfDate, schoolIds } = await parseReportRequest(req);
+
+      /** docs/06 §5: the logic summary prints as an appendix, on request. */
+      const includeLogic = req.query['logic'] === '1' || req.query['logic'] === 'true';
+
+      const dashboard = await buildDashboard({
+        session,
+        schoolIds,
+        reportId,
+        academicYear,
+        asOfDate,
+        correlationId: req.correlationId,
+      });
+
+      const scope = await schoolNames(schoolIds);
+      const pdf = await renderReportPdf({
+        dashboard,
+        title: dashboard.spec.title,
+        orgName: await orgName(session.org_id),
+        scopeLine: scope.map((s) => s.school_name).join(' · '),
+        includeLogic,
+      });
+
+      /**
+       * [MANDATORY] docs/08 §7: "Export — user, report, format". docs/06 §5
+       * calls the same record Export History. Written AFTER a successful
+       * render: a failed export produced no document, and logging one would put
+       * a file in the history that nobody can produce.
+       */
+      await auditSink.write({
+        kind: 'report.exported',
+        at: new Date().toISOString(),
+        actor_sub: session.sub,
+        org_id: session.org_id,
+        correlation_id: req.correlationId,
+        report_id: reportId,
+        school_ids: schoolIds,
+        format: 'pdf',
+      });
+
+      res.setHeader('content-type', 'application/pdf');
+      /**
+       * `attachment` with a dated filename: these end up in a downloads folder
+       * beside each other, and "report.pdf" three times is a filing problem the
+       * server can prevent for free.
+       */
+      res.setHeader(
+        'content-disposition',
+        `attachment; filename="${filename(reportId, asOfDate)}"`,
+      );
+      /** Never cached by a proxy: the content is school data (docs/08 §3). */
+      res.setHeader('cache-control', 'private, no-store');
+      res.end(Buffer.from(pdf));
+    })().catch(next);
+  },
+);
+
+function filename(reportId: string, asOfDate: string): string {
+  return `${reportId}-${asOfDate}.pdf`;
+}

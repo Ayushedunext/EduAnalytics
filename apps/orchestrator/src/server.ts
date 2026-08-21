@@ -23,6 +23,8 @@ import { sessionRouter } from './routes/session.js';
 import { homeRouter } from './routes/home.js';
 import { reportRouter } from './routes/report.js';
 import { settingsRouter } from './routes/settings.js';
+import { closePdfRenderer } from './services/pdf.js';
+import { closeCache } from './cache/result-cache.js';
 
 const app = express();
 
@@ -100,3 +102,20 @@ app.listen(config.ORCHESTRATOR_PORT, () => {
   console.log(`[orchestrator] secure cookies: ${String(isProduction)}`);
 });
 
+/**
+ * Shut the long-lived clients down on the way out.
+ *
+ * Chromium is a CHILD PROCESS, not a socket: a killed orchestrator that never
+ * closes it leaves a headless browser running with no parent, and a
+ * dev-server restart loop leaves one per restart until the machine notices.
+ * Redis is closed for tidiness rather than necessity — the socket would drop
+ * anyway, but a clean QUIT keeps the server's log free of resets it did not
+ * cause.
+ */
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => {
+    void Promise.allSettled([closePdfRenderer(), closeCache()]).then(() => {
+      process.exit(0);
+    });
+  });
+}

@@ -104,6 +104,22 @@ const schema = z.object({
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
 
   /**
+   * The print route Puppeteer loads (ADR-021). In development this is the Vite
+   * dev server's `print.html`; in production it is the built SPA served from
+   * wherever the bundle lives. It is CONFIGURATION, never a request parameter:
+   * a caller who could choose the URL could make the platform's browser fetch
+   * an arbitrary page and hand back a PDF of it.
+   */
+  PRINT_URL: z.string().url().default('http://localhost:5174/print.html'),
+
+  /**
+   * The whole render budget — navigation, layout and PDF generation each get
+   * this long. Generous, because a Fee Defaulters export draws fifty table rows
+   * and five charts, and a truncated PDF is worse than a slow one.
+   */
+  PDF_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
+  /**
    * docs/06 §2 puts predefined dashboards on a 5–15 minute TTL. Ten minutes is
    * the middle of that band: long enough that a class of readers opening the
    * same dashboard in a morning pay for one replica scan, short enough that a

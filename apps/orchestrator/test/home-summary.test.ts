@@ -19,6 +19,11 @@
  * also keeps these runnable with no database and no MCP server.
  */
 
+/**
+ * FIRST, before anything that reaches `config` — including the result cache,
+ * which these tests must run without. See env-defaults.ts.
+ */
+import './env-defaults.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlatformError } from '@sap/shared';
 

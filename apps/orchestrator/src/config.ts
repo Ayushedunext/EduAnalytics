@@ -96,6 +96,30 @@ const schema = z.object({
    */
   AI_VALIDATION_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
+  /**
+   * Tier ① of the serving order (docs/09 §4). Loopback in development; a
+   * VPC-internal address in production, never a public one — cached rows are
+   * school data.
+   */
+  REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
+
+  /**
+   * docs/06 §2 puts predefined dashboards on a 5–15 minute TTL. Ten minutes is
+   * the middle of that band: long enough that a class of readers opening the
+   * same dashboard in a morning pay for one replica scan, short enough that a
+   * fee collected before lunch shows up after it.
+   */
+  CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+
+  /**
+   * An escape hatch for debugging a data question without chasing a stale
+   * entry. Off means every read goes to the replica — correct, just slower.
+   */
+  CACHE_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false' && v !== '0'),
+
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 });
 

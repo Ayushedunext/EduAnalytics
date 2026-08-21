@@ -33,3 +33,19 @@ process.env['PLATFORM_DB_USER'] ??= 'no-such-user';
 process.env['PLATFORM_DB_PASSWORD'] ??= '';
 /** 32 bytes, so the vault's length check passes. Encrypts nothing real. */
 process.env['AI_KEY_ENCRYPTION_KEY'] ??= Buffer.alloc(32, 3).toString('base64');
+
+/**
+ * The result cache is OFF in tests, and this one is forced rather than
+ * defaulted — a developer's `.env` must not be able to switch it back on.
+ *
+ * Two reasons, and the first one is not hypothetical: with a Redis running
+ * locally, `buildDashboard` cached one test's canned response and served it to
+ * the next, so a test asserting 35 defaulters read 12 from the test above it.
+ * Tests that share state through a server outside the process are not tests.
+ *
+ * The second is portability: a suite that needs a Redis to pass cannot run on a
+ * machine that has none, and every test in this repo is meant to run anywhere.
+ * The cache's own logic is covered by cache-key.test.ts, which needs no server
+ * because the property that matters lives in the key.
+ */
+process.env['CACHE_ENABLED'] = 'false';

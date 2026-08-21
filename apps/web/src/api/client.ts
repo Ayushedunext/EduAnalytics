@@ -312,3 +312,24 @@ export function disconnectChannel(
     { method: 'POST' },
   );
 }
+
+/**
+ * The PDF is fetched by the BROWSER following a link, not by this module.
+ *
+ * A `fetch` here would have to buffer a multi-megabyte binary into memory and
+ * then re-offer it as a blob, which is more code and a worse download: no
+ * progress, no resume, and a filename this script would have to invent. The
+ * server already sets `Content-Disposition`, so a plain navigation does the
+ * right thing -- and the session cookie rides along with it.
+ */
+export function reportPdfUrl(
+  reportId: string,
+  schoolIds: readonly string[],
+  academicYear: string,
+  options: { logic?: boolean } = {},
+): string {
+  const query = new URLSearchParams({ academic_year: academicYear });
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  if (options.logic === true) query.set('logic', '1');
+  return `${API_BASE}/api/report/${encodeURIComponent(reportId)}/export.pdf?${query.toString()}`;
+}

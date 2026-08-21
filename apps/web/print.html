@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Report</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <!--
+      The print surface (ADR-021): a second ENTRY POINT, not a second renderer.
+      Puppeteer loads this page, the orchestrator injects the chart-spec into
+      `window.__CHART_SPEC__` before any script runs, and the same
+      `@sap/chart-spec/react` components that draw the screen draw the PDF. A
+      report cannot print differently from how it was approved on screen,
+      because there is only one drawing layer in the product.
+    -->
+    <div id="print-root"></div>
+    <script type="module" src="/src/print.tsx"></script>
+  </body>
+</html>

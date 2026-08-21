@@ -81,6 +81,21 @@ function axisNumber(value: number): string {
   return compact.format(value);
 }
 
+/**
+ * Entry animation is OFF, everywhere.
+ *
+ * The same renderer draws the screen and the PDF (ADR-021), and a PDF is a
+ * PHOTOGRAPH: Puppeteer captured a donut mid-grow and produced a report with an
+ * empty circle and a legend under it — a chart that looked like a panel with no
+ * data rather than one that had not finished drawing. Waiting out an animation
+ * would be a timer, and this codebase waits for facts.
+ *
+ * Losing it costs a flourish on first paint. Keeping it would mean the export
+ * could disagree with the screen about what the data is, which is the one thing
+ * the shared renderer exists to prevent.
+ */
+const ANIMATE = false;
+
 export function KpiTile({ widget }: { widget: KpiWidget }): ReactElement {
   return (
     <div className="card kpi">
@@ -207,7 +222,13 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
             {/* The tooltip carries the untruncated name: the axis may abbreviate,
                 the reader can still find out what a bar is. */}
             <Tooltip formatter={(v) => full.format(Number(v))} contentStyle={AXIS} />
-            <Bar dataKey={widget.y} fill={SERIES[0]} radius={[0, 3, 3, 0]} maxBarSize={14} />
+            <Bar
+              dataKey={widget.y}
+              fill={SERIES[0]}
+              radius={[0, 3, 3, 0]}
+              maxBarSize={14}
+              isAnimationActive={ANIMATE}
+            />
           </BarChart>
         </ResponsiveContainer>
       </Panel>
@@ -230,7 +251,13 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
           />
           <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
           <Tooltip formatter={(v) => full.format(Number(v))} contentStyle={AXIS} />
-          <Bar dataKey={widget.y} fill={SERIES[0]} radius={[3, 3, 0, 0]} maxBarSize={38} />
+          <Bar
+            dataKey={widget.y}
+            fill={SERIES[0]}
+            radius={[3, 3, 0, 0]}
+            maxBarSize={38}
+            isAnimationActive={ANIMATE}
+          />
         </BarChart>
       </ResponsiveContainer>
     </Panel>
@@ -262,6 +289,7 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
             stroke={SERIES[0]}
             strokeWidth={2}
             dot={{ r: 3 }}
+            isAnimationActive={ANIMATE}
           />
         </LineChart>
       </ResponsiveContainer>
@@ -281,6 +309,7 @@ export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
             innerRadius={54}
             outerRadius={88}
             paddingAngle={2}
+            isAnimationActive={ANIMATE}
           >
             {widget.data.map((row, index) => (
               <Cell

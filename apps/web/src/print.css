@@ -1,0 +1,196 @@
+/**
+ * Paper styling for the print route (docs/06 §5).
+ *
+ * Only what a page needs that a screen does not. Everything visual about the
+ * widgets themselves comes from tokens.css, so the PDF and the screen share one
+ * design system — a report that printed in different colours from the one
+ * approved on screen would defeat the point of ADR-021.
+ */
+
+@page {
+  /* A4 with room for Puppeteer's header and footer templates. */
+  size: A4;
+  margin: 18mm 12mm 16mm;
+}
+
+/**
+ * Undo the app shell's viewport lock — the single most important rule here.
+ *
+ * tokens.css pins `html, body` to `height: 100%; overflow: hidden` so the
+ * SCREEN is a fixed two-pane shell whose panes scroll internally. Paper has no
+ * viewport: with those rules in force Chromium renders exactly one page and
+ * CLIPS everything after it, which is how the first export came out as a single
+ * sheet with a chart sliced in half and no appendix at all — silently, because a
+ * clipped PDF looks like a finished one.
+ */
+html,
+body {
+  height: auto;
+  overflow: visible;
+}
+
+body {
+  background: #fff;
+  /* Print is read at arm's length on paper, not at 60cm on a backlit panel. */
+  font-size: 12px;
+}
+
+.printPage {
+  padding: 0;
+  max-width: 100%;
+}
+
+.printHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 2px solid var(--color-teal);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.printOrg {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-teal);
+}
+.printTitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-ink);
+  margin: 2px 0 0;
+  letter-spacing: -0.01em;
+}
+.printMark {
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.printMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 10.5px;
+  color: var(--color-slate);
+  margin-bottom: 14px;
+}
+.printMeta b {
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+/* The KPI row and panels come from tokens.css; only the paper geometry differs:
+   two columns rather than a fluid grid, because a page has a fixed width and
+   `auto-fit` on 340px would drop to one column and waste half the sheet. */
+.printPage .kpis {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.printPage .kpi {
+  padding: 10px 12px;
+}
+.printPage .kpi b {
+  font-size: 18px;
+}
+
+/**
+ * One column on paper, two on screen.
+ *
+ * A4 portrait is 210mm wide; two columns give each panel about 90mm, which is
+ * where the crowded-axis problem started on screen and is worse in print
+ * because there is no tooltip to recover a truncated label. Full width also
+ * lets a wide table print in full rather than being clipped -- the screen
+ * scrolls those inside the panel and paper cannot.
+ *
+ * It costs pages, and pages are the cheap part. The first two-column attempt
+ * paginated into a half-empty page 2 and a nearly blank page 3, because
+ * `break-inside: avoid` on a tall chart in a grid track pushes the whole panel
+ * forward and leaves the space it came from empty.
+ */
+.printPage .specPanels {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+.printPage .specPanel {
+  padding: 12px 14px;
+  /* Never split a chart across a page boundary — half a bar chart is not a
+     smaller chart, it is an unreadable one. */
+  break-inside: avoid;
+  page-break-inside: avoid;
+  box-shadow: none;
+}
+.printPage .specPanelTitle {
+  font-size: 12.5px;
+}
+
+/* Tables print in full: the screen scrolls them inside the panel, paper cannot,
+   and a silently clipped table is a report that lies by omission. */
+.printPage .specTableWrap {
+  max-height: none;
+  overflow: visible;
+}
+.printPage .specTable {
+  font-size: 10.5px;
+}
+.printPage .specTable td,
+.printPage .specTable th {
+  padding: 4px 8px;
+  white-space: normal;
+}
+
+.printAppendix {
+  break-before: page;
+  page-break-before: always;
+  padding-top: 4px;
+}
+.printAppendix h2 {
+  font-size: 15px;
+  color: var(--color-ink);
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.printAppendix h3 {
+  font-size: 12.5px;
+  color: var(--color-ink);
+  font-weight: 600;
+  margin: 16px 0 8px;
+}
+.printAppendixLine {
+  font-size: 11px;
+  margin: 0 0 4px;
+  color: var(--color-slate);
+}
+.printNote {
+  font-size: 10.5px;
+  color: var(--color-muted);
+  line-height: 1.6;
+  margin: 6px 0;
+}
+.printQuery {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  margin-bottom: 10px;
+}
+.printQueryTitle {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--color-slate);
+  margin-bottom: 3px;
+}
+.printSql {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 9.5px;
+  line-height: 1.55;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-slate);
+}

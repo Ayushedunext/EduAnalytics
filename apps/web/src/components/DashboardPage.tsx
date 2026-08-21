@@ -21,7 +21,12 @@
 
 import { useEffect, useState } from 'react';
 import { ChartSpecView } from '@sap/chart-spec/react';
-import { getReport, type DashboardResponse, type SessionResponse } from '../api/client';
+import {
+  getReport,
+  reportPdfUrl,
+  type DashboardResponse,
+  type SessionResponse,
+} from '../api/client';
 
 interface Props {
   session: SessionResponse;
@@ -109,14 +114,29 @@ export function DashboardPage({
               >
                 ⧉ Clone &amp; customise
               </button>
-              <button
-                type="button"
-                className="chipbtn disabled"
-                disabled
-                title="Server-side PDF rendering (ADR-021) — not built yet"
+              {/**
+                * A link, not a fetch. The server sets `Content-Disposition`, so
+                * the browser handles the download itself -- with a real
+                * progress indicator and the filename the server chose. Buffering
+                * a multi-megabyte binary through JavaScript to re-offer it as a
+                * blob would be more code and a worse download.
+                *
+                * `logic=1` prints the appendix docs/06 §5 describes: source,
+                * grouping, notes and every statement behind the numbers. On a
+                * document that will be forwarded and filed, "where did this come
+                * from?" should be answerable from the paper (Invariant 6).
+                */}
+              <a
+                className={`chipbtn ${academicYear === null ? 'disabled' : ''}`}
+                href={
+                  academicYear === null
+                    ? undefined
+                    : reportPdfUrl(reportId, schoolIds, academicYear, { logic: true })
+                }
+                title="Download this report as a branded PDF, with the SQL appendix"
               >
                 ⬇ PDF
-              </button>
+              </a>
               <button
                 type="button"
                 className="chipbtn disabled"

@@ -1,0 +1,76 @@
+# Development infrastructure this repository owns.
+#
+# WHY THIS FILE EXISTS
+#
+# The orchestrator's result cache (docs/09 §4, ADR-028) had been talking to
+# whatever happened to be answering on 127.0.0.1:6379. On 2026-08-22 that turned
+# out to be another project's container: `edutrack-redis`, holding that
+# application's session refresh tokens in the same keyspace as our report cache.
+# Nothing collided -- our keys are `sap:v1:*`, theirs `edutrack:*` -- but the two
+# applications shared one FLUSHDB, and the dangerous direction was ours: an
+# engineer clearing "the cache" while debugging a stale dashboard would have
+# signed out every user of an unrelated product.
+#
+# Sharing was never a decision anyone made; it was the default port being free.
+# So this repository now declares the infrastructure it depends on, and binds it
+# somewhere that cannot be taken by accident.
+#
+#   docker compose up -d          (or: npm run infra:up)
+#   docker compose down           (or: npm run infra:down)
+#
+# WHAT IS DELIBERATELY NOT HERE
+#
+# MySQL. Both databases this platform reads -- `analytics_platform` and the
+# `ai_analysis` extract -- live on the host instance at :3306 and hold restored
+# ERP dumps that took real effort to obtain. Containerising them would mean
+# either re-importing gigabytes into a volume or pointing a container at the
+# host's data directory, and neither buys anything: nobody is sharing :3306 by
+# accident the way :6379 was. If that changes, add it here rather than in a
+# second file.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: sap-redis
+
+    # PORT 6380, not 6379, and that is the entire point of the file. 6379 is the
+    # default every Redis on the machine reaches for first, which is exactly how
+    # we ended up inside somebody else's instance. Binding away from the default
+    # means this project's cache cannot be silently substituted -- if this
+    # container is down, REDIS_URL fails to connect and the orchestrator says so
+    # once and serves from the replica. A wrong-but-working Redis is worse than
+    # an absent one, because it looks fine.
+    #
+    # Loopback-only. The cache holds school data (docs/09 §4), and 0.0.0.0 would
+    # publish a school's rows to every device on the café wifi.
+    ports:
+      - "127.0.0.1:6380:6379"
+
+    # NO PERSISTENCE, on purpose. A cache that survives a restart is a cache
+    # nobody can clear by restarting it, and every entry here is reconstructible
+    # by definition -- it is a report the replica can produce again. Turning both
+    # RDB snapshots and the AOF off also means school data is never written to a
+    # container volume, which is one fewer place for it to outlive its TTL.
+    #
+    # maxmemory + allkeys-lru because a cache with no eviction policy does not
+    # stay small: it grows until Redis starts refusing writes, and then the
+    # symptom is dashboards silently missing cache rather than anything that
+    # looks like a memory problem. 256mb is far more than this workload needs
+    # (a report entry is a few KB); the policy is what matters, not the number.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+
+    # Compose reports "healthy" only once Redis actually answers, so
+    # `up --wait` is a real readiness signal rather than "the process started".
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+    restart: unless-stopped

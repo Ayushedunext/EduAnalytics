@@ -168,6 +168,34 @@ async function signFor(who: string, fault: Fault): Promise<string> {
   return token;
 }
 
+/**
+ * Send an HTML page that a browser must never reuse.
+ *
+ * Both pages this stub serves are snapshots of server state that changes under
+ * them, and both broke because of it:
+ *
+ *   * The PICKER lists IDENTITIES. Adding one and restarting left browsers
+ *     showing the old list -- a role that exists, is signable, and works, but
+ *     cannot be clicked because the page offering it is stale. That is a
+ *     confusing failure precisely because nothing is actually broken.
+ *   * The HANDOFF page carries a signed launch token in a form field. A cached
+ *     copy is a cached CREDENTIAL, and re-submitting it is the replay the
+ *     orchestrator rejects by jti (docs/02 §6) -- so the user sees an
+ *     authentication failure produced by their own back button.
+ *
+ * Neither page carried any cache directive at all, which does not mean "do not
+ * cache": with no directive a browser applies heuristic caching and is entitled
+ * to reuse the response. `no-store` is the only one of these that says what is
+ * actually true of both pages.
+ */
+function sendHtml(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store, must-revalidate',
+  });
+  res.end(body);
+}
+
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? '/', 'http://localhost:' + String(PORT));
 
@@ -184,8 +212,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     signFor(who, fault)
       .then((token) => {
         console.log('[erp-stub] signed for ' + who + ' (fault=' + fault + ')');
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        res.end(handoffPage(token));
+        sendHtml(res, 200, handoffPage(token));
       })
       .catch((err: unknown) => {
         res.writeHead(400, { 'content-type': 'text/plain' });
@@ -196,8 +223,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 
   if (url.pathname === '/') {
     const raw = url.searchParams.get('fault') ?? 'none';
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(pickerPage((raw in FAULTS ? raw : 'none') as Fault));
+    sendHtml(res, 200, pickerPage((raw in FAULTS ? raw : 'none') as Fault));
     return;
   }
 

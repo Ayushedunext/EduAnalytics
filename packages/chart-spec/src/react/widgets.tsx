@@ -28,14 +28,17 @@
  */
 
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
+import { useId } from 'react';
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
+  Label,
   Legend,
   Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -53,23 +56,26 @@ import type {
 } from '../spec.js';
 
 /**
- * docs/10 §1: the platform palette. Series colours come from the design tokens,
- * never from the spec — a spec that could choose its own colours could also
- * make a school's brand unrecognisable, and ADR-015's point is that the
- * PLATFORM owns the visual language.
+ * docs/10 §1: the platform palette, capped at four categorical steps.
+ *
+ * The previous seven-colour rotation failed a CVD/contrast audit: adjacent
+ * slots #02c39a/#00a896 sat ΔE 7.9 apart under normal vision (floor is 15) —
+ * two teal-family steps that close together are indistinguishable at
+ * chart-mark size, colourblind or not. docs/10 §1.2 mandates a teal-family
+ * chart language, which rules out reaching for an unrelated hue to fix the
+ * spacing; the fix is fewer, further-apart steps instead. This four-colour
+ * set is the largest subset of the existing brand tokens that clears the
+ * CVD-separation and normal-vision-floor checks (validated 2026-08-22).
+ * Categories beyond these four are never a fifth generated hue — see
+ * `SERIES_OTHER` below.
  */
-const SERIES: readonly [string, ...string[]] = [
-  '#028090',
-  '#00a896',
-  '#02c39a',
-  '#f2a93b',
-  '#e05252',
-  '#046e7c',
-  '#7c9aa5',
-];
+const SERIES: readonly [string, ...string[]] = ['#028090', '#02c39a', '#f2a93b', '#e05252'];
+/** The fold-in colour for any category past the fixed palette (dataviz non-negotiable: never a generated hue). */
+const SERIES_OTHER = '#64748b';
 const AXIS: CSSProperties = { fontSize: 11 };
 const GRID = '#e2e8f0';
 const MUTED = '#64748b';
+const INK = '#032e36';
 
 const tick = { fill: MUTED, fontSize: 11 };
 
@@ -95,6 +101,60 @@ function axisNumber(value: number): string {
  * the shared renderer exists to prevent.
  */
 const ANIMATE = false;
+
+/**
+ * A stable id for an `<svg><defs>` gradient, scoped to one chart instance.
+ *
+ * `useId()` returns colons (":r0:"), which are legal in an SVG id but break
+ * the `url(#id)` paint reference in some renderers unless the fragment is
+ * quoted — stripped here so the id is plain alphanumerics and every caller
+ * can reference it the same, simpler way.
+ */
+function useGradientId(prefix: string): string {
+  return `${prefix}-${useId().replace(/:/g, '')}`;
+}
+
+interface TooltipPayloadEntry {
+  readonly name?: string | number;
+  readonly value?: number | string;
+  readonly color?: string;
+  readonly dataKey?: string | number;
+  readonly payload?: { readonly fill?: string };
+}
+
+/**
+ * Replaces Recharts' default tooltip box, which doesn't share the product's
+ * card styling (docs/10 §1) — border, radius and shadow all drift from the
+ * `.card` the panel itself sits in. Pointer-driven only, so a headless PDF
+ * capture (which never moves a mouse) never renders it — the same reasoning
+ * that keeps `ANIMATE` off applies here without needing it.
+ */
+function ChartTooltip({
+  active,
+  label,
+  payload,
+}: {
+  readonly active?: boolean;
+  readonly label?: string | number;
+  readonly payload?: readonly TooltipPayloadEntry[];
+}): ReactElement | null {
+  if (active !== true || payload === undefined || payload.length === 0) return null;
+  return (
+    <div className="specTooltip">
+      {label !== undefined && <div className="specTooltipLabel">{String(label)}</div>}
+      {payload.map((entry, index) => (
+        <div className="specTooltipRow" key={String(entry.dataKey ?? entry.name ?? index)}>
+          <span
+            className="specTooltipDot"
+            style={{ background: entry.color ?? entry.payload?.fill ?? MUTED }}
+          />
+          {entry.name !== undefined && <span className="specTooltipName">{entry.name}</span>}
+          <span>{full.format(Number(entry.value))}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function KpiTile({ widget }: { widget: KpiWidget }): ReactElement {
   return (
@@ -180,6 +240,14 @@ function CategoryTick({ x = 0, y = 0, payload, maxChars = 24 }: TickProps): Reac
 
 export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
   const axis = categoryAxis(widget.data, widget.x);
+  /**
+   * A depth gradient built from ONE hue at two opacities, never a second
+   * colour — so it stays inside docs/10 §1's "teal-family series" rule and
+   * costs nothing on the CVD audit (opacity, unlike hue, isn't a channel a
+   * colour-vision deficiency affects). Solid at the value end, softer toward
+   * the baseline, so the gradient points at the number that matters.
+   */
+  const gradId = useGradientId('bar');
 
   if (axis.horizontal) {
     /**
@@ -211,6 +279,12 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
             {/* Grid lines run along the value axis only — the category axis has
                 no scale to read against. */}
             <CartesianGrid stroke={GRID} horizontal={false} />
+            <defs>
+              <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stopColor={SERIES[0]} stopOpacity={0.62} />
+                <stop offset="100%" stopColor={SERIES[0]} stopOpacity={1} />
+              </linearGradient>
+            </defs>
             <XAxis type="number" tick={tick} tickFormatter={axisNumber} height={28} />
             <YAxis
               type="category"
@@ -221,13 +295,14 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
             />
             {/* The tooltip carries the untruncated name: the axis may abbreviate,
                 the reader can still find out what a bar is. */}
-            <Tooltip formatter={(v) => full.format(Number(v))} contentStyle={AXIS} />
+            <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
             <Bar
               dataKey={widget.y}
-              fill={SERIES[0]}
+              fill={`url(#${gradId})`}
               radius={[0, 3, 3, 0]}
               maxBarSize={14}
               isAnimationActive={ANIMATE}
+              activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
             />
           </BarChart>
         </ResponsiveContainer>
@@ -240,6 +315,12 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
       <ResponsiveContainer width="100%" height={260}>
         <BarChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid stroke={GRID} vertical={false} />
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={SERIES[0]} stopOpacity={1} />
+              <stop offset="100%" stopColor={SERIES[0]} stopOpacity={0.62} />
+            </linearGradient>
+          </defs>
           <XAxis
             dataKey={widget.x}
             tick={tick}
@@ -250,13 +331,14 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
             height={clamp(axis.longest * 4.8 + 26, 40, 76)}
           />
           <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
-          <Tooltip formatter={(v) => full.format(Number(v))} contentStyle={AXIS} />
+          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
           <Bar
             dataKey={widget.y}
-            fill={SERIES[0]}
+            fill={`url(#${gradId})`}
             radius={[3, 3, 0, 0]}
             maxBarSize={38}
             isAnimationActive={ANIMATE}
+            activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
           />
         </BarChart>
       </ResponsiveContainer>
@@ -265,10 +347,20 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
 }
 
 export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
+  const gradId = useGradientId('area');
   return (
     <Panel title={widget.title}>
       <ResponsiveContainer width="100%" height={260}>
-        <LineChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+          <defs>
+            {/* A static fade to transparent — fixed SVG stops, not a timed
+                effect, so the PDF capture (ADR-021) still matches the screen
+                exactly at whatever instant Puppeteer takes the shot. */}
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={SERIES[0]} stopOpacity={0.24} />
+              <stop offset="100%" stopColor={SERIES[0]} stopOpacity={0} />
+            </linearGradient>
+          </defs>
           <CartesianGrid stroke={GRID} vertical={false} />
           {/* A line's x is a sequence — months, terms — so it stays horizontal
               and only sizes its band to the labels it actually has. */}
@@ -282,22 +374,40 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
             height={clamp(categoryAxis(widget.data, widget.x).longest * 4.8 + 26, 40, 76)}
           />
           <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
-          <Tooltip formatter={(v) => full.format(Number(v))} contentStyle={AXIS} />
+          <Tooltip
+            content={<ChartTooltip />}
+            cursor={{ stroke: SERIES[0], strokeWidth: 1, strokeDasharray: '3 3' }}
+          />
+          <Area
+            type="monotone"
+            dataKey={widget.y}
+            stroke="none"
+            fill={`url(#${gradId})`}
+            isAnimationActive={ANIMATE}
+            legendType="none"
+          />
           <Line
             type="monotone"
             dataKey={widget.y}
             stroke={SERIES[0]}
-            strokeWidth={2}
-            dot={{ r: 3 }}
+            strokeWidth={2.25}
+            dot={{ r: 3, fill: SERIES[0], strokeWidth: 0 }}
+            activeDot={{ r: 5.5, fill: SERIES[0], stroke: '#fff', strokeWidth: 2 }}
             isAnimationActive={ANIMATE}
           />
-        </LineChart>
+        </ComposedChart>
       </ResponsiveContainer>
     </Panel>
   );
 }
 
 export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
+  /** Restated at the centre of the ring — see the Label content below. */
+  const total = widget.data.reduce((sum, row) => {
+    const value = row[widget.value_field];
+    return sum + (typeof value === 'number' ? value : 0);
+  }, 0);
+
   return (
     <Panel title={widget.title}>
       <ResponsiveContainer width="100%" height={260}>
@@ -311,15 +421,43 @@ export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
             paddingAngle={2}
             isAnimationActive={ANIMATE}
           >
-            {widget.data.map((row, index) => (
-              <Cell
-                key={String(row[widget.label_field] ?? index)}
-                fill={SERIES[index % SERIES.length] ?? SERIES[0]}
-              />
-            ))}
+            {widget.data.map((row, index) => {
+              /* dataviz non-negotiable: a category past the validated,
+                 four-step palette is never a fifth generated hue — it folds
+                 into a single recessive "Other" fill instead. */
+              const inPalette = index < SERIES.length;
+              return (
+                <Cell
+                  key={String(row[widget.label_field] ?? index)}
+                  fill={inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
+                  fillOpacity={inPalette ? 1 : 0.55}
+                />
+              );
+            })}
+            {/* The KPI strip above already states this total; restating it
+                where the eye actually lands (the hole in the ring) saves the
+                reader from adding the legend up by hand. */}
+            <Label
+              position="center"
+              content={({ viewBox }) => {
+                if (viewBox === undefined || !('cx' in viewBox) || !('cy' in viewBox)) return null;
+                const { cx, cy } = viewBox;
+                if (cx === undefined || cy === undefined) return null;
+                return (
+                  <g>
+                    <text x={cx} y={cy - 5} textAnchor="middle" fontSize={19} fontWeight={700} fill={INK}>
+                      {compact.format(total)}
+                    </text>
+                    <text x={cx} y={cy + 13} textAnchor="middle" fontSize={9.5} fill={MUTED} letterSpacing={0.8}>
+                      TOTAL
+                    </text>
+                  </g>
+                );
+              }}
+            />
           </Pie>
           <Legend wrapperStyle={AXIS} />
-          <Tooltip formatter={(v) => full.format(Number(v))} contentStyle={AXIS} />
+          <Tooltip content={<ChartTooltip />} />
         </PieChart>
       </ResponsiveContainer>
     </Panel>

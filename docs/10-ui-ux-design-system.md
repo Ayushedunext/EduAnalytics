@@ -22,7 +22,7 @@ Type: **Inter**, one scale — Page title 28 semibold · Card heading 18 semibol
 ### Principles
 
 1. **Calm surfaces** — data is the color, chrome is quiet.
-2. **One chart language** — teal-family series, amber for warnings, no gridline clutter, values labelled on bars; identical across predefined, custom, AI reports and PDFs (a direct consequence of spec-driven rendering, doc 05).
+2. **One chart language** — teal-family series, amber for warnings, no gridline clutter, values labelled on bars; identical across predefined, custom, AI reports and PDFs (a direct consequence of spec-driven rendering, doc 05). Categorical series are capped at **four** steps (`#028090`, `#02c39a`, `#f2a93b`, `#e05252`) — a CVD/contrast audit (2026-08-22) failed the prior seven-color rotation, since two teal-family steps that close together are indistinguishable at chart-mark size regardless of color vision. A category past the fourth is never a fifth generated hue; it folds into a recessive "Other" fill (`#64748b` at reduced opacity).
 3. **Tenant theming** — each school/trust gets accent color + logo (topbar, buttons, PDF header) from the same token system; no per-client CSS forks.
 4. **Feels instant** — skeleton loaders, streamed AI widgets, optimistic filter changes; UI responds within 100 ms even while data loads.
 

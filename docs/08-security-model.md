@@ -45,6 +45,10 @@ The rollup rule above carries most of the minimisation argument, but it does not
 - **`permission_class` is part of every cache key.** Masking is role-dependent (§4.4, doc 04 rail 6) and drill leaves are rights-gated (§4.5); a key without a permission component would let a privileged user's cache entry be served to a restricted one. A masking rule enforced at query time and discarded at cache time is not enforced.
 - **Retention** is TTL-bounded at 5–15 min and is in scope for the compliance review (doc 11 §4.5) alongside audit and message_log retention.
 
+### 5.2 The AI path — no row-level PII to the model provider (ADR-030)
+
+Under BYOK (ADR-017) the model call transits the **customer's own** Anthropic account, so what the model receives is a different question from what the platform's own services may hold. The model plans queries (`get_dimensions`, then `run_query`/`run_multi`/`run_rollup`) and emits a chart-spec **skeleton** — widget types, encodings, narrative — but never receives result rows in context and never emits `data`/`rows` values itself (docs/05 §1.1). The orchestrator hydrates the skeleton with the actual query result server-side, in the same step that applies masking, so no school's row-level data ever leaves the platform's own infrastructure toward the model provider — matching the no-PII posture already held for the Rollup Store (§5 above) and extending it to the one AI-specific data path this document had not yet stated a rule for.
+
 ## 6. BYOK key protection
 
 AES-256 at rest, KMS-held master key; decrypt in memory at call time only; excluded from all logs; masked in UI after save; org-revocable from the Anthropic Console at any time (revocation auto-relocks AI via the `ai_status` error path — doc 05). Platform operators cannot read tenant keys in plaintext.

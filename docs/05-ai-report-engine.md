@@ -18,27 +18,42 @@ The AI **never produces renderable code**. It produces **chart-spec JSON** — a
 
 **Why:** safety (no AI-authored code executes in the client), speed (rendering is native, streaming widgets appear progressively), brand consistency (one visual language across predefined, custom and AI reports), reproducibility (a saved spec re-runs with fresh data), and portability (PDF/mobile/email render the same spec). The `drillable` flag is the future hook for AI artifacts to adopt drill-down using the hierarchy catalog — a config change, not a rebuild (doc 06 §7).
 
+### 1.1 Spec hydration — the model never sees or emits a row (ADR-030)
+
+The example above is the fully **hydrated** spec — what the client and the PDF renderer actually draw. What the model itself emits is a **draft**: the same widget vocabulary, but a data-bound widget (`bar`/`line`/`donut`/`table`) names a `query_ref` — the `query_key` of a `run_query`/`run_multi` call already made in this conversation — instead of carrying `data`/`rows`. The one exception is `kpi`, whose `value` the model writes directly, from a single safe aggregate scalar it was shown (never from row-level results — see below). `@sap/chart-spec`'s `ChartSpecDraft`/`widgetDraftSchema` are the enforced shape of this; `assertNoInlineData` rejects a `data`/`rows` key on a draft outright as defence in depth.
+
+The AI Agent Service hydrates each `query_ref` into its real rows in one step, the same step that applies row-level masking (docs/04 §3 rail 6), before anything reaches the client or the PDF renderer. A widget whose `query_ref` does not match a query actually run is `INVALID_CHART_SPEC`, and the model gets one retry with the reason.
+
+**The privacy property does not come from the draft schema alone.** `run_query`/`run_multi` return real rows over MCP, and forwarding those rows into the model's own conversation context would defeat ADR-030 no matter what the model is later asked to emit. So the orchestrator never relays row *contents* back to the model for these two tools — only `{ query_ref, row_count, columns, truncated }`, with the full result cached server-side for hydration. The one exception is a result of exactly one row where no column is tagged `pii` in the schema catalog (the same tagging that already drives masking) — that single safe aggregate's value is included, which is what lets the model write a truthful `kpi` value.
+
+This closes both problems the naive "model emits its own data" design has under BYOK (AUDIT_REPORT C15): student-level PII never transits the provider account under any billing mode, and a widget carries however many rows the query returned regardless of any model-context or token budget, so ADR-008's 5,000-row cap stays meaningful for the AI path exactly as it is for every other path.
+
+One consequence for the narrative text: it is written from aggregates the orchestrator can safely hand back (counts, sums, min/max), not from inspecting individual rows, since the model never has them.
+
 ## 2. Query lifecycle
 
 ```
-user question (WebSocket)
+user question (POST /api/ai/ask, chunked NDJSON response)
   → AI Agent Service builds context:
       schema doc (per schema_version, prompt-cached) ·
       dimension values (per school) ·
       selected school set + names ·
-      output contract (chart-spec)
+      output contract (chart-spec draft)
   → Claude plans → MCP tools:
       get_dimensions → generate SQL → run_query / run_multi / run_rollup
-  → Claude emits chart-spec JSON
-  → streamed to the artifact canvas; widgets render progressively
+  → Claude emits a chart-spec DRAFT (§1.1) — never data
+  → orchestrator hydrates it server-side and streams status/result events
+    down the same response; widgets render as soon as the hydrated spec lands
   → follow-ups continue the conversation with full context (Refine,
     suggestion chips); "Ask AI about this data" from a dashboard, and
     "Ask AI about this slice" from a drill view, pre-load context.
 ```
 
-Tool-choice rule taught in the system prompt: **aggregate metric → `run_rollup` · fresh row-level detail → `run_multi` · single school → `run_query`.** "By school" is just a chart dimension, not a special report type.
+**Transport, corrected 2026-08-25.** This was originally specified as a WebSocket. No WebSocket or SSE infrastructure exists anywhere in this codebase, and `EventSource` cannot carry the POST body a question needs, so the built transport is a plain chunked HTTP response on `POST /api/ai/ask`: the server writes one newline-delimited JSON event per status step and a final `result`/`error`, which avoids a new dependency entirely. This is unrelated to ADR-017's separate mention of pushing `ai_status` changes to every logged-in user over a WebSocket — that cross-user live-status push is still unbuilt and remains a WebSocket question for whenever it is built; it does not touch this chat stream, which is a private response to the one request that opened it.
 
-Streaming status steps in the chat ("Scope: Delhi · Noida · Gurgaon → Answered from rollup store → Building chart") are a deliberate trust device: users see the scope confirmation and the data path before results land.
+Tool-choice rule taught in the system prompt: **aggregate metric → `run_rollup` · fresh row-level detail → `run_multi` · single school → `run_query`.** "By school" is just a chart dimension, not a special report type. `run_rollup` needs the Rollup Store (Phase 2, not yet built — CODING_GUIDELINES §23); until then Ask AI's tool set is `get_dimensions`/`run_query`/`run_multi` plus the closing `emit_report` call, which covers exactly the single-school and fan-out cases the rule above already names.
+
+Streaming status steps in the chat ("Confirming scope → Reading schema → Running query → Building chart") are a deliberate trust device: users see the scope confirmation and the data path before results land.
 
 ## 3. Model strategy & latency
 

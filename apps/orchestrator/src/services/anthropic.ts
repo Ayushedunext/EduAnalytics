@@ -101,8 +101,13 @@ export async function validateApiKey(args: {
  *
  * Typed SDK classes, not string matching on messages (which change without
  * notice and are not part of any contract).
+ *
+ * Exported because `services/ai-chat.ts` (ADR-030) hits the same SDK error
+ * classes mid-conversation and reuses this mapping rather than a second copy —
+ * a rejected key reads the same whether it failed at Settings' "Test & Save"
+ * or three tool calls into an Ask AI question.
  */
-function translate(err: unknown): ValidationResult {
+export function translate(err: unknown): ValidationResult {
   if (err instanceof Anthropic.AuthenticationError) {
     return {
       ok: false,

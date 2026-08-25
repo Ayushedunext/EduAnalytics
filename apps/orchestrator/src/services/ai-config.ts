@@ -34,7 +34,7 @@ import {
   validateApiKey,
   type AiModelId,
 } from './anthropic.js';
-import { encryptApiKey, keyHint, looksLikeAnthropicKey } from './key-vault.js';
+import { decryptApiKey, encryptApiKey, keyHint, looksLikeAnthropicKey } from './key-vault.js';
 
 export type AiStatus = 'not_configured' | 'pending_validation' | 'active' | 'error';
 
@@ -126,6 +126,35 @@ export async function readAiConfig(orgId: string): Promise<AiConfig> {
  */
 export async function readAiStatus(orgId: string): Promise<AiStatus> {
   return (await readAiConfig(orgId)).ai_status;
+}
+
+/**
+ * The decrypted key, for the one caller that is allowed to hold it: the
+ * Ask-AI chat loop making the actual provider call (services/ai-chat.ts).
+ *
+ * Deliberately separate from `readAiConfig`, which never touches the
+ * ciphertext (docs/08 §6: "platform operators cannot read tenant keys in
+ * plaintext" — a function that could return one is a function that should not
+ * exist on any path a human-facing endpoint calls). `null` covers every
+ * reason a call cannot proceed — no row, no key, or `ai_status` not `active`
+ * — as one state, since the caller's only correct response to any of them is
+ * the same `AI_NOT_ACTIVE` refusal (Invariant 5).
+ */
+export async function getDecryptedApiKeyForOrg(
+  orgId: string,
+): Promise<{ apiKey: string; model: AiModelId } | null> {
+  const [rows] = await platformDb.query<RowDataPacket[]>(
+    'SELECT encrypted_api_key, model, ai_status FROM tenant_ai_config WHERE org_id = ?',
+    [orgId],
+  );
+  const row = rows[0];
+  if (row === undefined || row['ai_status'] !== 'active' || row['encrypted_api_key'] === null) {
+    return null;
+  }
+  return {
+    apiKey: decryptApiKey(row['encrypted_api_key'] as Buffer),
+    model: String(row['model']) as AiModelId,
+  };
 }
 
 export interface SaveResult {

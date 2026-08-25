@@ -333,3 +333,89 @@ export function reportPdfUrl(
   if (options.logic === true) query.set('logic', '1');
   return `${API_BASE}/api/report/${encodeURIComponent(reportId)}/export.pdf?${query.toString()}`;
 }
+
+// -- Ask AI (ADR-030) ---------------------------------------------------------
+
+/**
+ * A fully hydrated chart-spec, same as a report's — Ask AI shares the one
+ * rendering vocabulary (ADR-015). Typed loosely for the same reason
+ * `DashboardResponse['spec']` is: `ChartSpecView` validates against the real
+ * schema in `@sap/chart-spec` before drawing, so narrowing it again here would
+ * be a second, weaker copy of that check.
+ */
+export interface AskAiSpec {
+  spec_version: 1;
+  title: string;
+  narrative?: string;
+  widgets: unknown[];
+  meta: {
+    scope: { school_id: string; school_name: string }[];
+    generated_at: string;
+    as_of?: string;
+    served_from: 'cache' | 'rollup' | 'replica';
+  };
+}
+
+/**
+ * The stream this endpoint sends: zero or more `status` steps (docs/05 §2's
+ * "Scope confirmed → Planning → Running query → Building chart" trust device),
+ * then exactly one `result` or `error`.
+ */
+export type AskAiEvent =
+  | { type: 'status'; step: string }
+  | { type: 'result'; spec: AskAiSpec }
+  | { type: 'error'; code: string; message: string };
+
+/**
+ * Not `request()`: that helper always resolves the whole body as one JSON
+ * value, and this endpoint's whole point is to hand events to the caller as
+ * they arrive rather than after everything is in. Still the same CSRF-cookie
+ * echo and credentialed-fetch pattern as every other mutating call.
+ */
+export async function askAI(
+  question: string,
+  schoolIds: readonly string[],
+  onEvent: (event: AskAiEvent) => void,
+): Promise<void> {
+  const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
+  const headers = new Headers({ 'content-type': 'application/json' });
+  const token = readCookie(CSRF_COOKIE);
+  if (token !== undefined) headers.set(CSRF_HEADER, token);
+
+  const res = await fetch(`${API_BASE}/api/ai/ask${query}`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: JSON.stringify({ question }),
+  });
+
+  if (!res.ok) {
+    let body: ApiError = { code: 'UNKNOWN', message: res.statusText };
+    try {
+      body = (await res.json()) as ApiError;
+    } catch {
+      /* a non-JSON error body stays as the status text */
+    }
+    throw new ApiFailure(res.status, body);
+  }
+
+  const reader = res.body?.getReader();
+  if (reader === undefined) {
+    throw new Error('Streaming is not supported in this browser.');
+  }
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      onEvent(JSON.parse(line) as AskAiEvent);
+    }
+  }
+  if (buffer.trim() !== '') onEvent(JSON.parse(buffer) as AskAiEvent);
+}

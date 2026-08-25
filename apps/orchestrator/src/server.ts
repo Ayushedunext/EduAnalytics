@@ -23,6 +23,7 @@ import { sessionRouter } from './routes/session.js';
 import { homeRouter } from './routes/home.js';
 import { reportRouter } from './routes/report.js';
 import { settingsRouter } from './routes/settings.js';
+import { aiRouter } from './routes/ai.js';
 import { closePdfRenderer } from './services/pdf.js';
 import { closeCache } from './cache/result-cache.js';
 
@@ -79,6 +80,7 @@ app.use(sessionRouter);
 app.use(homeRouter);
 app.use(reportRouter);
 app.use(settingsRouter);
+app.use(aiRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -1,29 +1,33 @@
 /**
  * Ask AI — the tool-planning loop and server-side chart-spec hydration.
  *
- * Contract: ADR-030 · docs/05 §2 (query lifecycle) · Invariant 4 (spec-driven
- * rendering) · Invariant 5 (BYOK gating — checked by routes/ai.ts before this
- * runs, not re-checked here) · Invariant 2 (scope — enforced by the enum tool
- * schemas in ai-tools.ts and independently again at the MCP layer).
+ * Contract: ADR-030 (redaction/hydration) · ADR-031 (provider-generic loop) ·
+ * docs/05 §2 (query lifecycle) · Invariant 4 (spec-driven rendering) ·
+ * Invariant 5 (BYOK gating — checked by routes/ai.ts before this runs, not
+ * re-checked here) · Invariant 2 (scope — enforced by the enum tool schemas
+ * in ai-tools.ts and independently again at the MCP layer).
  *
  * -- What this file does, in order --------------------------------------------
  * 1. Resolve the schema catalog for the scoped schools (one `get_schema` call,
  *    sent to the model as a prompt-cached system block — ADR-026's "the schema
  *    block is the single biggest AI cost/latency lever", applied here exactly
  *    as it already is for the schema/dimension caches on the MCP side).
- * 2. Loop: send the question, execute whatever tool calls the model makes via
- *    `ai-tools.ts` (which redacts every result before it comes back), until the
- *    model calls `emit_report` with a valid chart-spec DRAFT — never data.
+ * 2. Loop: send the question through the org's chosen provider's `ModelClient`
+ *    (ADR-031), execute whatever tool calls it makes via `ai-tools.ts` (which
+ *    redacts every result before it comes back), until it calls `emit_report`
+ *    with a valid chart-spec DRAFT — never data.
  * 3. Hydrate: attach the real, cached rows onto the draft's widgets by
  *    `query_ref`, producing a `ChartSpec` that validates against the same
  *    schema every other serving path uses.
  * 4. Write the `ai.query` audit event (docs/08 §7) with real token usage.
  *
  * The model never receives a school_id, a database name, or a row — only what
- * `ai-tools.ts` chooses to hand back.
+ * `ai-tools.ts` chooses to hand back. None of this file's logic differs by
+ * provider; that is the entire point of routing every SDK call through
+ * `ModelClient` (services/ai-providers/types.ts) instead of importing an SDK
+ * here directly.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import {
   chartSpecSchema,
@@ -44,7 +48,7 @@ import { schoolNames } from '../db/registry.js';
 import { withMcp } from '../mcp/client.js';
 import { auditSink } from '../db/audit.js';
 import { getDecryptedApiKeyForOrg } from './ai-config.js';
-import { translate } from './anthropic.js';
+import { PROVIDERS, type ProviderTool, type ProviderToolCall, type ProviderToolOutcome } from './ai-providers/index.js';
 import {
   buildToolDefinitions,
   executeTool,
@@ -93,21 +97,20 @@ export async function runAskAi(args: {
   onEvent({ type: 'status', step: 'Reading schema' });
   const catalog = await resolveCatalog(session, schoolIds, correlationId);
 
-  const client = new Anthropic({
-    apiKey: keyInfo.apiKey,
-    timeout: config.AI_CHAT_TIMEOUT_MS,
-    maxRetries: 0,
-  });
+  const provider = PROVIDERS[keyInfo.provider];
+  const client = provider.createClient({ apiKey: keyInfo.apiKey, model: keyInfo.model });
+  const systemPrompt = buildSystemPrompt(catalog, scope);
 
-  const tools: Anthropic.Tool[] = buildToolDefinitions(schoolIds).map((t) => ({
-    ...t,
-    input_schema: t.input_schema as Anthropic.Tool.InputSchema,
+  const tools: ProviderTool[] = buildToolDefinitions(schoolIds).map((t) => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.input_schema,
   }));
   tools.push({
     name: 'emit_report',
     description:
       'End the turn by answering the question as a chart-spec SKELETON. Widgets reference query_ref, the query_key of a run_query/run_multi call you already made — never put data rows here. A kpi widget is the only type where you write the display value yourself, and only from a value you were shown (a safe single-row aggregate).',
-    input_schema: chartSpecDraftJsonSchema(),
+    inputSchema: zodToJsonSchema(chartSpecDraftSchema, { $refStrategy: 'none', target: 'jsonSchema7' }),
   });
 
   const resultCache = new Map<string, CachedResult>();
@@ -116,7 +119,7 @@ export async function runAskAi(args: {
   let outputTokens = 0;
   let cacheReadTokens = 0;
 
-  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: question }];
+  let state = client.initialState(question);
   let draft: ChartSpecDraft | null = null;
   let nudged = false;
 
@@ -129,94 +132,67 @@ export async function runAskAi(args: {
       });
     }
 
-    let response: Anthropic.Message;
+    let toolCalls: readonly ProviderToolCall[];
     try {
-      response = await client.messages.create({
-        model: keyInfo.model,
-        max_tokens: 4096,
-        system: [
-          { type: 'text', text: buildSystemPrompt(catalog, scope), cache_control: { type: 'ephemeral' } },
-        ],
-        tools,
-        messages,
-      });
+      const stepResult = await client.step(state, systemPrompt, tools);
+      state = stepResult.state;
+      toolCalls = stepResult.toolCalls;
+      inputTokens += stepResult.usage.inputTokens;
+      outputTokens += stepResult.usage.outputTokens;
+      cacheReadTokens += stepResult.usage.cacheReadTokens;
     } catch (err) {
-      const translated = translate(err);
       throw new PlatformError({
         code: ERROR_CODES.AI_PROVIDER_ERROR,
-        message: translated.message,
+        message: err instanceof Error ? err.message : 'The AI provider could not answer that.',
         correlationId,
       });
     }
 
-    inputTokens += response.usage.input_tokens;
-    outputTokens += response.usage.output_tokens;
-    cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
-
-    messages.push({ role: 'assistant', content: response.content });
-
-    const toolUses = response.content.filter(
-      (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use',
-    );
-
-    const emitBlock = toolUses.find((b) => b.name === 'emit_report');
-    if (emitBlock !== undefined) {
-      const shapeCheck = validateChartSpecDraft(emitBlock.input);
-      const inlineCheck = shapeCheck.ok ? assertNoInlineData(emitBlock.input) : shapeCheck;
+    const emitCall = toolCalls.find((c) => c.name === 'emit_report');
+    if (emitCall !== undefined) {
+      const shapeCheck = validateChartSpecDraft(emitCall.args);
+      const inlineCheck = shapeCheck.ok ? assertNoInlineData(emitCall.args) : shapeCheck;
       if (shapeCheck.ok && inlineCheck.ok) {
         draft = shapeCheck.value;
         break;
       }
       const issues = shapeCheck.ok ? (inlineCheck.ok ? [] : inlineCheck.issues) : shapeCheck.issues;
-      messages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'tool_result',
-            tool_use_id: emitBlock.id,
-            is_error: true,
-            content: `That report was invalid: ${formatIssues(issues)}. Fix it and call emit_report again.`,
-          },
-        ],
-      });
+      state = client.withToolOutcomes(state, [
+        {
+          callId: emitCall.id,
+          name: 'emit_report',
+          error: `That report was invalid: ${formatIssues(issues)}. Fix it and call emit_report again.`,
+        },
+      ]);
       continue;
     }
 
-    if (toolUses.length === 0) {
+    if (toolCalls.length === 0) {
       // The model answered in plain text instead of calling a tool. Nudge once;
       // if it happens again the iteration cap above ends the turn honestly.
       if (nudged) continue;
       nudged = true;
-      messages.push({
-        role: 'user',
-        content: 'Answer by calling tools, ending with emit_report — not with plain text.',
-      });
+      state = client.withNudge(state, 'Answer by calling tools, ending with emit_report — not with plain text.');
       continue;
     }
 
-    onEvent({ type: 'status', step: statusFor(toolUses) });
+    onEvent({ type: 'status', step: statusFor(toolCalls) });
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const use of toolUses) {
-      toolsInvoked.push(use.name);
+    const outcomes: ProviderToolOutcome[] = [];
+    for (const call of toolCalls) {
+      toolsInvoked.push(call.name);
       try {
-        const summary = await executeTool(use.name, use.input as Record<string, unknown>, {
-          session,
-          correlationId,
-          catalog,
-          resultCache,
-        });
-        toolResults.push({ type: 'tool_result', tool_use_id: use.id, content: JSON.stringify(summary) });
+        const summary = await executeTool(call.name, call.args, { session, correlationId, catalog, resultCache });
+        outcomes.push({ callId: call.id, name: call.name, output: summary });
       } catch (err) {
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: use.id,
-          is_error: true,
-          content: err instanceof PlatformError ? err.message : err instanceof Error ? err.message : 'That call failed.',
+        outcomes.push({
+          callId: call.id,
+          name: call.name,
+          error: err instanceof PlatformError ? err.message : err instanceof Error ? err.message : 'That call failed.',
         });
       }
     }
-    messages.push({ role: 'user', content: toolResults });
+    state = client.withToolOutcomes(state, outcomes);
   }
 
   onEvent({ type: 'status', step: 'Building chart' });
@@ -266,15 +242,8 @@ async function resolveCatalog(
   });
 }
 
-function chartSpecDraftJsonSchema(): Anthropic.Tool.InputSchema {
-  return zodToJsonSchema(chartSpecDraftSchema, {
-    $refStrategy: 'none',
-    target: 'jsonSchema7',
-  }) as Anthropic.Tool.InputSchema;
-}
-
-function statusFor(toolUses: readonly Anthropic.ToolUseBlock[]): string {
-  const names = new Set(toolUses.map((t) => t.name));
+function statusFor(toolCalls: readonly ProviderToolCall[]): string {
+  const names = new Set(toolCalls.map((t) => t.name));
   if (names.has('get_dimensions')) return 'Checking filter values';
   if (names.has('run_multi')) return 'Running query across schools';
   return 'Running query';

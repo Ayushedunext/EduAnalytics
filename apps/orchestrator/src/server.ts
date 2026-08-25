@@ -44,7 +44,14 @@ app.use((req, res, next) => {
     res.setHeader('access-control-allow-origin', origin);
     res.setHeader('access-control-allow-credentials', 'true');
     res.setHeader('access-control-allow-headers', 'content-type, x-csrf-token');
-    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    /**
+     * PUT is required for `PUT /api/settings/ai` (saveAiKey) — its absence here
+     * silently broke that endpoint's CORS preflight for every real browser
+     * caller, never caught before because prior testing of it went through
+     * curl/server-side calls rather than the actual SPA. Found and fixed while
+     * verifying ADR-031's provider picker live.
+     */
+    res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
     res.setHeader('vary', 'origin');
   }
   if (req.method === 'OPTIONS') {

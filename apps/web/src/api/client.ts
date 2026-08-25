@@ -231,16 +231,35 @@ export function getHome(schoolIds: readonly string[]): Promise<HomeResponse> {
 
 // -- Settings ----------------------------------------------------------------
 
+/** ADR-031: an org picks one provider at a time; `provider` says which. */
+export type AiProviderId = 'anthropic' | 'gemini';
+
+/**
+ * Everything Settings needs to know about one provider — server-supplied, not
+ * hardcoded here, for the same reason `models` always was: a provider's model
+ * catalog and console URL are the platform's facts, not the client's.
+ */
+export interface ProviderMeta {
+  id: AiProviderId;
+  label: string;
+  console_url: string;
+  key_placeholder: string;
+  /** A reliable prefix real keys start with, or null when the provider has none worth asserting on. */
+  key_prefix: string | null;
+  models: { id: string; label: string }[];
+}
+
 /**
  * The AI configuration as the SERVER reports it.
  *
  * Note what is absent: the API key. It can be written and never read back —
- * `key_hint` (`sk-ant-…1G4a`) is the only key-derived value that crosses this
- * boundary, which is what makes ADR-017's "operators cannot read tenant keys in
- * plaintext" true of the API and not only of the database.
+ * `key_hint` (e.g. `sk-ant-…1G4a`) is the only key-derived value that crosses
+ * this boundary, which is what makes ADR-017's "operators cannot read tenant
+ * keys in plaintext" true of the API and not only of the database.
  */
 export interface AiConfig {
   ai_status: 'not_configured' | 'pending_validation' | 'active' | 'error';
+  provider: AiProviderId;
   model: string;
   billing_mode: 'byok' | 'platform';
   monthly_query_cap: number;
@@ -269,7 +288,7 @@ export interface SettingsResponse {
   can_configure: boolean;
   /** The platform's wording for a non-admin, so screen and 403 body agree. */
   contact_admin: string;
-  models: { id: string; label: string }[];
+  providers: ProviderMeta[];
   channels: ChannelRow[];
 }
 
@@ -289,6 +308,7 @@ export function getSettings(): Promise<SettingsResponse> {
  * outlives the submit, not in localStorage, not in the URL.
  */
 export function saveAiKey(body: {
+  provider: AiProviderId;
   api_key: string;
   model: string;
   monthly_query_cap: number;

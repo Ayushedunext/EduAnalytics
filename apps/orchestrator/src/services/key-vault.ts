@@ -1,16 +1,25 @@
 /**
- * The BYOK key vault — encryption of the org's own Anthropic API key.
+ * The BYOK key vault — encryption of an org's provider API key.
  *
  * Contract source: ADR-017 ("AES-256 at rest, KMS master key, decrypted in
- * memory at call time, never logged, masked in UI") · docs/05 §4.1 · docs/08 §6
- * ("Platform operators cannot read tenant keys in plaintext").
+ * memory at call time, never logged, masked in UI") · ADR-031 (multi-provider;
+ * this module's crypto needed no changes for it — see below) · docs/05 §4.1 ·
+ * docs/08 §6 ("Platform operators cannot read tenant keys in plaintext").
+ *
+ * -- Provider-agnostic on purpose -----------------------------------------------
+ * Encryption doesn't care whose key it is: `encryptApiKey`/`decryptApiKey` take
+ * and return a plain string regardless of provider. What DOES vary by provider —
+ * what a valid key looks like, how its hint is formatted — lives on each
+ * provider's own `ProviderMeta` (services/ai-providers/*.ts), not here. A vault
+ * that had to import a provider module to encrypt a key would be a vault that
+ * knows too much.
  *
  * -- Why GCM and not CBC -------------------------------------------------------
  * Authenticated encryption. Without the tag, a row edited in the database — by
  * an operator, a restore from a tampered backup, a bug — decrypts to *something*
- * and that something gets sent to Anthropic as a key. With GCM the decrypt fails
- * loudly instead, which is the behaviour we want at every layer of this system:
- * refuse rather than proceed on data you cannot account for.
+ * and that something gets sent to the provider as a key. With GCM the decrypt
+ * fails loudly instead, which is the behaviour we want at every layer of this
+ * system: refuse rather than proceed on data you cannot account for.
  *
  * -- What is stored ------------------------------------------------------------
  *   iv (12 bytes) || auth tag (16 bytes) || ciphertext
@@ -38,33 +47,6 @@ import { config } from '../config.js';
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12; // GCM's standard nonce length
 const TAG_BYTES = 16;
-
-/**
- * Anthropic keys are `sk-ant-…`. Checked before the network call so an obvious
- * paste error ("sk_ant", a whole curl command, a Slack quote) is a form error in
- * milliseconds rather than a 401 the user has to interpret as their own fault.
- *
- * Deliberately loose about the tail: the platform does not get to decide what a
- * valid provider key looks like beyond its documented prefix, and a stricter
- * pattern would reject a legitimate key the day Anthropic changes its format.
- */
-const KEY_SHAPE = /^sk-ant-[A-Za-z0-9_-]{16,200}$/;
-
-export function looksLikeAnthropicKey(value: string): boolean {
-  return KEY_SHAPE.test(value.trim());
-}
-
-/**
- * The only key-derived value that ever crosses the API boundary.
- *
- * docs/05 §4.1 shows `sk-ant-…****1G4a`: enough for an admin to tell which of
- * their keys is installed, not enough to be one. The last four characters are a
- * recognition aid, not a secret — the Anthropic Console shows the same tail.
- */
-export function keyHint(apiKey: string): string {
-  const trimmed = apiKey.trim();
-  return `sk-ant-…${trimmed.slice(-4)}`;
-}
 
 function masterKey(): Buffer {
   const key = Buffer.from(config.AI_KEY_ENCRYPTION_KEY, 'base64');

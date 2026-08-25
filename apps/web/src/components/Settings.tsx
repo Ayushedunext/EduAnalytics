@@ -32,7 +32,9 @@ import {
   getSettings,
   saveAiKey,
   type AiConfig,
+  type AiProviderId,
   type ChannelRow,
+  type ProviderMeta,
   type SettingsResponse,
   type SessionResponse,
 } from '../api/client';
@@ -44,8 +46,6 @@ const STATUS_LABEL: Record<AiConfig['ai_status'], { text: string; tone: string }
   active: { text: 'Active', tone: 'live' },
   error: { text: 'Needs attention', tone: 'nodata' },
 };
-
-const CONSOLE_URL = 'https://console.anthropic.com';
 
 interface Props {
   session: SessionResponse;
@@ -121,11 +121,43 @@ function AiPanel({
    */
   const [replacing, setReplacing] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  /**
+   * ADR-031: which provider the form is currently filling in for — seeded
+   * from the org's stored choice, not always Anthropic. Changing it resets
+   * `model` to that provider's own first offering, since a model id from one
+   * provider's catalog means nothing to another's.
+   */
+  const [provider, setProviderState] = useState<AiProviderId>(ai.provider);
+  const currentProvider: ProviderMeta =
+    settings.providers.find((p) => p.id === provider) ?? settings.providers[0]!;
   const [model, setModel] = useState(ai.model);
   const [cap, setCap] = useState(String(ai.monthly_query_cap));
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(ai.last_error);
   const [done, setDone] = useState<string | null>(null);
+
+  function setProvider(next: AiProviderId): void {
+    setProviderState(next);
+    const firstModel = settings.providers.find((p) => p.id === next)?.models[0]?.id;
+    if (firstModel !== undefined) setModel(firstModel);
+  }
+
+  /**
+   * Advisory only — catches the mismatch before a live API call has to. Only
+   * detectable one direction today: Anthropic's `sk-ant-` prefix is reliable
+   * enough to assert on; Gemini's isn't (a real key seen this session,
+   * `AQ.Ab8RN6...`, doesn't match the commonly assumed shape), so
+   * `key_prefix` is null for it and this never fires the other way. The
+   * server's own `looksLikeValidKey`/`validateApiKey` remain the real gate —
+   * this only saves a round trip for the case it can actually detect.
+   */
+  const trimmedKey = apiKey.trim();
+  const suggestedProvider =
+    trimmedKey === ''
+      ? undefined
+      : settings.providers.find(
+          (p) => p.id !== provider && p.key_prefix !== null && trimmedKey.startsWith(p.key_prefix),
+        );
 
   const showForm = canConfigure && (!active || replacing);
 
@@ -133,7 +165,7 @@ function AiPanel({
     setBusy(true);
     setProblem(null);
     setDone(null);
-    saveAiKey({ api_key: apiKey, model, monthly_query_cap: Number(cap) })
+    saveAiKey({ provider, api_key: apiKey, model, monthly_query_cap: Number(cap) })
       .then((result) => {
         // Cleared on every outcome: the key has done its one journey, and
         // holding it in state past that is holding a secret for no reason.
@@ -181,36 +213,45 @@ function AiPanel({
         <span className={`pill ${status.tone}`}>● {status.text}</span>
       </div>
 
-      {/* ① The Console account. Guidance only — nothing here touches the API. */}
+      {/* ① The provider account. Guidance only — nothing here touches the API. */}
       <div className="card stepCard">
         <div className="stepRow">
           <span className="stepNum">1</span>
           <div className="stepBody">
-            <h3 className="stepTitle">Create the trust’s Anthropic account</h3>
+            <h3 className="stepTitle">Create an account with {currentProvider.label}</h3>
             <p className="stepText">
               <a
                 className="stepLink"
-                href={CONSOLE_URL}
+                href={currentProvider.console_url}
                 /* Opens in a new tab, and `noopener` with it: a bare
                    target="_blank" hands the opened page a live `window.opener`
                    reference back into this session's tab. */
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                console.anthropic.com
+                {currentProvider.console_url.replace(/^https?:\/\//, '')}
               </a>{' '}
-              → sign up free → <b>Billing</b>: add a card or prepaid credits (even $5 ≈ hundreds of
-              reports) → <b>API Keys</b> → Create Key → copy it — it’s shown only once and starts
-              with <code>sk-ant-…</code>
+              {provider === 'anthropic' ? (
+                <>
+                  → sign up free → <b>Billing</b>: add a card or prepaid credits (even $5 ≈
+                  hundreds of reports) → <b>API Keys</b> → Create Key → copy it — it’s shown only
+                  once and starts with <code>sk-ant-…</code>
+                </>
+              ) : (
+                <>
+                  → sign in with a Google account → <b>Create API key</b> → copy it. Gemini has a
+                  free usage tier, so this can be tested before any billing is set up.
+                </>
+              )}
             </p>
             <div className="stepActions">
               <a
                 className="btn btnOutline"
-                href={CONSOLE_URL}
+                href={currentProvider.console_url}
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Open Anthropic Console ↗
+                Open {currentProvider.label} ↗
               </a>
               <button
                 type="button"
@@ -254,12 +295,12 @@ function AiPanel({
             {canConfigure && active && !replacing && (
               <div className="keyStatus">
                 <div>
-                  <div className="keyMasked">{ai.key_hint ?? 'sk-ant-…'}</div>
+                  <div className="keyMasked">{ai.key_hint ?? currentProvider.key_placeholder}</div>
                   <p className="stepText">
                     {ai.last_validated_at === null
                       ? 'Verified.'
                       : `Verified ${new Date(ai.last_validated_at).toLocaleString()}.`}{' '}
-                    Model: {modelLabel(settings, ai.model)} · cap{' '}
+                    {providerLabel(settings, ai.provider)} · {modelLabel(settings, ai.provider, ai.model)} · cap{' '}
                     {ai.monthly_query_cap.toLocaleString('en-IN')} queries/month.
                   </p>
                 </div>
@@ -281,21 +322,50 @@ function AiPanel({
 
             {showForm && (
               <>
+                {/* ADR-031: an org picks one provider, not both — switching
+                    resets the model choice below to that provider's own list. */}
+                <div className="modelChoice mb-2">
+                  {settings.providers.map((option) => (
+                    <label key={option.id}>
+                      <input
+                        type="radio"
+                        name="ai-provider"
+                        value={option.id}
+                        checked={provider === option.id}
+                        onChange={() => { setProvider(option.id); }}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
                 <input
                   /* Dots, not text — the key is never legible on screen, not
                      even to the person pasting it. */
                   type="password"
                   className="keyInput"
-                  placeholder="sk-ant-…"
+                  placeholder={currentProvider.key_placeholder}
                   value={apiKey}
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(e) => { setApiKey(e.target.value); }}
-                  aria-label="Anthropic API key"
+                  aria-label={`${currentProvider.label} API key`}
                 />
+                {suggestedProvider !== undefined && (
+                  <p className="stepText mt-1 text-[var(--color-amber)]">
+                    This looks like {article(suggestedProvider.label)} {suggestedProvider.label} key,
+                    not {article(currentProvider.label)} {currentProvider.label} one.{' '}
+                    <button
+                      type="button"
+                      className="stepLink bg-transparent border-0 p-0 cursor-pointer"
+                      onClick={() => { setProvider(suggestedProvider.id); }}
+                    >
+                      Switch to {suggestedProvider.label}
+                    </button>
+                  </p>
+                )}
                 <div className="keyRow">
                   <div className="modelChoice">
-                    {settings.models.map((option) => (
+                    {currentProvider.models.map((option) => (
                       <label key={option.id}>
                         <input
                           type="radio"
@@ -368,15 +438,25 @@ function AiPanel({
       {/* The security posture, stated where the key is entered rather than in a
           policy document nobody reading this screen will open (ADR-017). */}
       <p className="settingsFine">
-        Key stored AES-256 encrypted · masked after save · never logged · revocable anytime from the
-        Anthropic Console.
+        Key stored AES-256 encrypted · masked after save · never logged · revocable anytime from
+        the provider's own console.
       </p>
     </section>
   );
 }
 
-function modelLabel(settings: SettingsResponse, id: string): string {
-  return settings.models.find((m) => m.id === id)?.label ?? id;
+/** "a Google key" vs "an Anthropic key" — provider labels are server data, not a fixed set. */
+function article(label: string): string {
+  return /^[aeiou]/i.test(label) ? 'an' : 'a';
+}
+
+function providerLabel(settings: SettingsResponse, providerId: string): string {
+  return settings.providers.find((p) => p.id === providerId)?.label ?? providerId;
+}
+
+function modelLabel(settings: SettingsResponse, providerId: string, modelId: string): string {
+  const models = settings.providers.find((p) => p.id === providerId)?.models ?? [];
+  return models.find((m) => m.id === modelId)?.label ?? modelId;
 }
 
 function ChannelsPanel({

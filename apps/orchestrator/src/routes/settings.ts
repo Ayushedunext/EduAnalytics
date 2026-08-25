@@ -28,12 +28,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ERROR_CODES, PlatformError, effectiveScope } from '@sap/shared';
 import { orgName, schoolNames, servableSchoolIds } from '../db/registry.js';
-import {
-  AI_MODELS,
-  DEFAULT_MODEL,
-  isAiModelId,
-  type AiModelId,
-} from '../services/anthropic.js';
+import { PROVIDERS, DEFAULT_PROVIDER, isAiProviderId, type AiProviderId } from '../services/ai-providers/index.js';
 import {
   CONTACT_ADMIN,
   canConfigureAi,
@@ -79,7 +74,14 @@ settingsRouter.get('/api/settings', (req: Request, res: Response, next: NextFunc
        */
       can_configure: canConfigureAi(session.role),
       contact_admin: CONTACT_ADMIN,
-      models: Object.values(AI_MODELS),
+      providers: Object.values(PROVIDERS).map((p) => ({
+        id: p.id,
+        label: p.label,
+        console_url: p.consoleUrl,
+        key_placeholder: p.keyPlaceholder,
+        key_prefix: p.keyPrefix,
+        models: p.models,
+      })),
       channels: await readChannels(scope),
     });
   })().catch(next);
@@ -100,25 +102,36 @@ settingsRouter.put('/api/settings/ai', (req: Request, res: Response, next: NextF
      * validated. The key is read as a string and passed straight to the vault —
      * it is never interpolated into a log line, an error, or a response.
      */
+    const rawProvider = typeof body['provider'] === 'string' ? body['provider'] : DEFAULT_PROVIDER;
+    if (!isAiProviderId(rawProvider)) {
+      throw new PlatformError({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'Choose one of the offered providers.',
+        details: { allowed: Object.keys(PROVIDERS).join(', ') },
+        correlationId: req.correlationId,
+      });
+    }
+    const provider: AiProviderId = rawProvider;
+
     const apiKey = typeof body['api_key'] === 'string' ? body['api_key'] : '';
     if (apiKey === '') {
       throw new PlatformError({
         code: ERROR_CODES.VALIDATION_FAILED,
-        message: 'Paste your Anthropic API key to continue.',
+        message: `Paste your ${PROVIDERS[provider].label} API key to continue.`,
         correlationId: req.correlationId,
       });
     }
 
-    const rawModel = typeof body['model'] === 'string' ? body['model'] : DEFAULT_MODEL;
-    if (!isAiModelId(rawModel)) {
+    const rawModel = typeof body['model'] === 'string' ? body['model'] : PROVIDERS[provider].defaultModel;
+    if (!PROVIDERS[provider].isValidModelId(rawModel)) {
       throw new PlatformError({
         code: ERROR_CODES.VALIDATION_FAILED,
         message: 'Choose one of the offered models.',
-        details: { allowed: Object.keys(AI_MODELS).join(', ') },
+        details: { allowed: PROVIDERS[provider].models.map((m) => m.id).join(', ') },
         correlationId: req.correlationId,
       });
     }
-    const model: AiModelId = rawModel;
+    const model = rawModel;
 
     const cap = Number(body['monthly_query_cap'] ?? 1500);
 
@@ -126,6 +139,7 @@ settingsRouter.put('/api/settings/ai', (req: Request, res: Response, next: NextF
       orgId: session.org_id,
       actorSub: session.sub,
       role: session.role,
+      provider,
       apiKey,
       model,
       monthlyQueryCap: cap,

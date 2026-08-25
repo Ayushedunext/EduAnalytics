@@ -102,24 +102,23 @@ export function Sidebar({
         })}
 
         {/**
-         * Two different reasons Ask AI is not available, and it must show the
-         * one that is true right now. Before a key: 🔒, and Settings is where
-         * that is fixed. After a key: the lock is GONE — leaving it would tell
-         * an admin their setup failed — and the trail becomes SOON, because the
-         * chat screen itself is not written yet. Same entry, honest at both
-         * moments (docs/10 §3's three states).
+         * Two different reasons Ask AI could be unreachable, and it must show
+         * the one that is true right now. Before a key: 🔒, and Settings is
+         * where that is fixed — the item stays `muted` and unclickable. After a
+         * key: the lock is GONE — leaving it would tell an admin their setup
+         * failed — and the item becomes `clickable` like any other real screen,
+         * because the chat screen is built now (docs/10 §3's three states).
          */}
         <li
-          className="muted"
-          title={
-            aiStatus === 'active'
-              ? 'AI is unlocked for this org — the chat screen is not built yet'
-              : 'Complete AI setup in Settings'
-          }
+          className={aiStatus === 'active' ? `clickable ${active === 'ask' ? 'active' : ''}` : 'muted'}
+          title={aiStatus === 'active' ? 'Ask AI about your schools' : 'Complete AI setup in Settings'}
+          onClick={() => {
+            if (aiStatus === 'active') onNavigate('ask');
+          }}
         >
           <span className="w-4 text-center opacity-80">🤖</span>
           <span className="flex-1">Ask AI</span>
-          <span className="trail">{aiStatus === 'active' ? 'SOON' : '🔒'}</span>
+          {aiStatus !== 'active' && <span className="trail">🔒</span>}
         </li>
         {/*
           Agents carries NO padlock at any ai_status, and that is not an

@@ -367,6 +367,22 @@ Separately, the Redis result cache is the only store where row-level PII leaves 
 
 **Status.** Accepted. Updates docs/02 §2/§4/§5 and docs/08 §2, and adds the transport requirement to the ERP-side build in docs/11 §2.
 
+## ADR-030 — Ask-AI chart-specs are hydrated server-side; the model never receives or emits row data
+
+**Context.** AUDIT_REPORT C15 (High). docs/05 §1's chart-spec example has the model emitting its own payload — `"data": [...]` on a bar widget, `"rows": [...]` on a table. Under ADR-017's BYOK model that traffic transits the *customer's own* Anthropic account, so this is not an internal engineering detail but row-level student data — names, fee amounts, contact numbers — leaving the school's control boundary through the model. docs/08 governs PII movement meticulously everywhere else (§5's Rollup Store no-PII rule, ADR-028's cache encryption and `permission_class` key) and was silent on the single largest data egress in the design. It is also infeasible as specified: ADR-008 caps results at 5,000 rows, and no result near that size can round-trip through model output within any practical latency or token budget.
+
+**Decision.** The model emits a chart-spec **skeleton only** — widget types, encodings (`x`/`y`/`group` field names), the narrative text, and table column definitions. It never receives result rows in its context beyond what `get_dimensions` needs for planning, and it never emits `data`/`rows` values. The orchestrator's AI Agent Service runs the MCP tool calls the model plans (`run_query` / `run_multi` / `run_rollup`), then **hydrates** the skeleton server-side: it binds each query result onto the widget the model specified, in the same step that already applies row-level masking (docs/04 §3 rail 6, docs/08 §4.4) before anything reaches the client. A spec that fails to hydrate — a field name the model invented that isn't in the result columns — is a `INVALID_CHART_SPEC` and the model gets one retry with the actual column list, never a partially-populated widget.
+
+**Reasoning.** This is the same shape as every other data-plane rule in the doc set (ADR-006, ADR-008, ADR-011): the model plans, the platform's own code touches school rows. It resolves both C15 problems at once — no row-level PII crosses to the provider under any billing mode, and the widget carries however many rows the query actually returned, independent of any model context limit. It also makes masking uniform: today masking is applied once, at query time, for every rendering path (predefined, custom, AI) instead of needing a second enforcement point for whatever the model chooses to echo back.
+
+**Alternatives considered.** (a) Model emits full rows as docs/05 §1 currently shows — rejected: the PII-egress and row-cap-feasibility problems this ADR exists to close. (b) Client-side hydration (SPA fetches raw rows separately and merges onto the streamed skeleton) — rejected: duplicates the masking/scope check the orchestrator already owns, and reopens the "does the client ever see an unmasked row" question ADR-028 closed for the cache. (c) Truncate rows to a small sample before sending to the model — rejected: still egresses real student PII per question asked, just less of it, and does not fix the row-cap infeasibility for the table widget.
+
+**Trade-offs.** The model cannot describe individual data points in its narrative from direct inspection — "narrative" is written from aggregates/summary values the orchestrator can safely pass back in a second turn (count, sum, min/max), not raw rows. Streaming becomes two phases (skeleton, then hydrated widgets) rather than one; docs/05 §2's "widgets render progressively" still holds, it progresses per-widget-hydrated rather than per-token-streamed.
+
+**Future impact.** This is the mechanism ADR-015 always needed but never specified; ADR-015 itself is unchanged; “the model never produces renderable code” now also reads “the model never produces the data such code would render.” Any future AI surface built on chart-spec (Modify-with-AI, AI-compose in workflow agents) inherits hydration for free — it is a property of the spec pipeline, not of the chat feature.
+
+**Status.** Accepted. Amends docs/05 §1 (example + a new §1.1 on the hydration step) and docs/08 §5 (new §5.2 stating the no-PII-to-provider posture explicitly). Resolves AUDIT_REPORT C15 and docs/11 §2 Phase-3-blocking item 14.
+
 ---
 
 ## Amendment process

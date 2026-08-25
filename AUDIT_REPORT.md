@@ -36,6 +36,18 @@
 > **Files changed:** CLAUDE.md · PROJECT_CONTEXT.md *(renamed from `.MD`)* · docs/DECISIONS.md · docs/CODING_GUIDELINES.md · docs/01 · docs/02 · docs/03 · docs/04 · docs/07 · docs/08 · docs/09 · docs/11 · this file.
 >
 > **Deliberately left open** (deciding them now would pre-empt architecture): A2, A3, A4, A6, A7, A8, A10, B2–B6, C1, C2, C6–C13, C15, C16, C17, C18, C19, E3's technology choice. Running tally after this pass: **6 contradictions/tensions open · 4 unconfirmed assumptions · 14 missing items · 1 hygiene item partially open.**
+>
+> ---
+>
+> ## Resolution log — 2026-08-24
+>
+> One decision taken ahead of starting Phase 3's Ask-AI build, since C15 was explicitly flagged blocking that work.
+>
+> | New ADR | Carries | Closes |
+> |---|---|---|
+> | **ADR-030** — Ask-AI chart-specs are hydrated server-side; the model never receives or emits row data | Phase-3-blocking question 14 | C15 |
+>
+> **Files changed:** docs/DECISIONS.md · docs/05 · docs/08 · docs/11 · this file.
 
 ---
 
@@ -231,7 +243,8 @@
 - **Recommended action:** decide whether the cache may hold PII (if yes: encryption, retention, and Redis added to docs/08 §5), and **amend the cache-key contract in ADR-012 to include the caller's effective permission/masking class**. This is a change to a clause designated "law" and to a `[MANDATORY]` guideline, so it is ADR work, not implementation detail — and it must land before Phase 1 builds the Dashboard Service.
 
 **C15 — Chart-specs carry their own data: PII through the LLM, and no path for large results** *(new in Rev 2)*
-- **Status:** `OPEN` · **Severity:** High (privacy posture + a feasibility gap)
+- **Status:** `RESOLVED` — see ADR-030 · **Severity:** High (privacy posture + a feasibility gap)
+- **Resolution (2026-08-24).** The model emits a chart-spec skeleton only (widget types, encodings, narrative); the orchestrator hydrates it server-side from the MCP result in the same step that applies masking. No row-level data transits the model provider under any billing mode, and widget size is independent of any model-context budget, so ADR-008's row cap stays meaningful for the AI path. docs/05 §1.1 and docs/08 §5.2 updated.
 - **Document:** docs/05 §1 vs docs/08 §5, ADR-008 caps, ADR-015.
 - **Issue:** the chart-spec example in docs/05 §1 embeds its own payload — `"data": [...]` on the bar widget and `"rows": [...]` on the table. Since ADR-015 makes the spec the *only* thing the AI emits for rendering, the model must receive result rows and re-emit them. Two consequences, neither addressed anywhere:
   1. **Privacy.** Row-level student data would pass through the model — and under BYOK that traffic goes to the *customer's* Anthropic account. docs/08 governs PII movement meticulously everywhere else (rollups, masking, minimisation, audit) and is silent on the single largest data egress in the design. Whether this is acceptable is a **decision**, not an oversight to patch — but it must be stated, especially given Indian school-data compliance is already an open item (docs/11 #5).
@@ -353,7 +366,7 @@
 
 ### Blocking Phase 3
 
-14. **PII through the LLM.** Are row-level student rows permitted in model context and in model-emitted chart-specs — under BYOK, on the customer's own Anthropic account? If not, approve server-side spec hydration (model emits the skeleton, orchestrator attaches data). This also resolves how a 5,000-row result becomes a table widget. *(C15 — new)*
+14. ~~**PII through the LLM.**~~ **RESOLVED 2026-08-24 — ADR-030.** Server-side spec hydration: the model emits a skeleton, the orchestrator attaches data from the MCP result. *(C15 — new)*
 15. **RBAC matrix**, including how admin capability is carried given `role` is a scalar — a Principal who is also the org admin cannot hold both today — and whether org-admin and school-admin are distinct. Recommend `perms[]` values for consistency with ADR-002. *(A3 revised, C1 — Rev 1 Q5)*
 16. **Teacher class-scoping.** Will the ERP token carry `class_ids`, or is class-level scoping dropped from v1? Blocks docs/08 §4.5 *and* drill leaf role-gating. *(C2 — Rev 1 Q6)*
 17. **BYOK granularity.** Org-level confirmed, or per-school keys inside a trust? Middle option available: keep one org key, add per-school **budgets** on the metering that already exists. *(B2 — Rev 1 Q2)*

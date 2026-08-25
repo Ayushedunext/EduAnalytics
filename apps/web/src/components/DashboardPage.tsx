@@ -34,6 +34,7 @@ interface Props {
   schoolIds: readonly string[];
   academicYear: string | null;
   onBack: () => void;
+  onAskAI: (seedQuestion: string) => void;
 }
 
 export function DashboardPage({
@@ -42,6 +43,7 @@ export function DashboardPage({
   schoolIds,
   academicYear,
   onBack,
+  onAskAI,
 }: Props): JSX.Element {
   const [report, setReport] = useState<DashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,13 +141,20 @@ export function DashboardPage({
               </a>
               <button
                 type="button"
-                className="chipbtn disabled"
-                disabled
+                className={`chipbtn ${session.ai_status === 'active' ? '' : 'disabled'}`}
+                disabled={session.ai_status !== 'active'}
                 title={
                   session.ai_status === 'active'
                     ? 'Ask AI about this data'
                     : 'Complete AI setup in Settings to ask about this data'
                 }
+                onClick={() => {
+                  // docs/05 §2: "Ask AI about this data" is the deliberate
+                  // bridge from the deterministic path into the AI path with
+                  // context (ADR-016) -- a seed question naming the report,
+                  // not a full context thread (that is later work).
+                  onAskAI(`About ${report?.spec.title ?? 'this report'}: `);
+                }}
               >
                 🤖 Ask AI about this data
               </button>

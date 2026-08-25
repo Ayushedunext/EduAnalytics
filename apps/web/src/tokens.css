@@ -219,6 +219,7 @@ body {
 .askbar {
   display: flex; align-items: center; gap: 12px; background: var(--color-card);
   border: 1.5px solid var(--color-teal); border-radius: 12px; padding: 12px 16px;
+  cursor: pointer;
 }
 .askbar.locked { border-color: var(--color-line); background: var(--color-locked-bg); cursor: default; }
 .askbar .bot {

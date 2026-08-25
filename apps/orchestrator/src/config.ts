@@ -97,6 +97,21 @@ const schema = z.object({
   AI_VALIDATION_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
   /**
+   * Per-model-call timeout inside the Ask-AI tool-planning loop (ADR-030).
+   * Generous relative to the validation ping above: a real turn plans SQL and
+   * may run several MCP tool calls before the model responds, not just prove a
+   * credential works.
+   */
+  AI_CHAT_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
+  /**
+   * Bounds one Ask-AI question to a fixed number of model turns. Not a cost
+   * control (the org's own monthly_query_cap is that) but a liveness one: a
+   * question the model cannot resolve must fail loudly rather than loop.
+   */
+  AI_CHAT_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(8),
+
+  /**
    * Tier ① of the serving order (docs/09 §4). Loopback in development; a
    * VPC-internal address in production, never a public one — cached rows are
    * school data.

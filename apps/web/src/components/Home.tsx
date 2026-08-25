@@ -14,11 +14,12 @@
  * as markup.
  *
  * -- The locked ask-bar is load-bearing --------------------------------------
- * It renders locked whenever `ai_status !== 'active'` (ADR-017). The lock is
- * cosmetic on top of a real server-side 403 -- every `/api/ai/*` endpoint
- * re-checks the gate regardless of what this UI shows. It stays visible because
- * docs/10 §3 wants gated features discoverable: an admin who cannot see it
- * cannot learn that adding a key would unlock it.
+ * It renders locked whenever `ai_status !== 'active'` (ADR-017), and stays
+ * unclickable in that state -- the lock is cosmetic on top of a real
+ * server-side 403 that /api/ai/ask re-checks regardless of what this UI shows.
+ * It stays visible because docs/10 §3 wants gated features discoverable: an
+ * admin who cannot see it cannot learn that adding a key would unlock it. Once
+ * active it opens the Ask AI screen (components/AskAI.tsx).
  *
  * -- Three card states, deliberately distinct --------------------------------
  * `available` is built. `coming` means the serving path is not written yet.
@@ -38,9 +39,10 @@ interface Props {
   home: HomeResponse;
   loading: boolean;
   onOpen: (reportId: string) => void;
+  onAskAI: () => void;
 }
 
-export function Home({ session, home, loading, onOpen }: Props): JSX.Element {
+export function Home({ session, home, loading, onOpen, onAskAI }: Props): JSX.Element {
   const aiActive = session.ai_status === 'active';
   const scopeNames = home.spec.meta.scope.map((s) => s.school_name).join(' · ');
   const director = home.dashboards.filter((c) => c.group === 'director');
@@ -79,7 +81,13 @@ export function Home({ session, home, loading, onOpen }: Props): JSX.Element {
           </div>
         )}
 
-        <div className={`askbar mb-5 ${aiActive ? '' : 'locked'}`}>
+        <div
+          className={`askbar mb-5 ${aiActive ? '' : 'locked'}`}
+          onClick={() => {
+            if (aiActive) onAskAI();
+          }}
+          role={aiActive ? 'button' : undefined}
+        >
           <div className="bot">🤖</div>
           {/**
            * docs/10 §2: "admins get 'Set up now →', others 'ask your

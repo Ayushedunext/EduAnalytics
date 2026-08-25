@@ -28,6 +28,7 @@ import { Topbar } from './components/Topbar';
 import { Home } from './components/Home';
 import { DashboardPage } from './components/DashboardPage';
 import { Settings } from './components/Settings';
+import { AskAI } from './components/AskAI';
 
 type State =
   | { kind: 'loading' }
@@ -52,7 +53,10 @@ export function App(): JSX.Element {
    * accident here.
    */
   const [route, setRoute] = useState<
-    { kind: 'home' } | { kind: 'report'; id: string } | { kind: 'settings' }
+    | { kind: 'home' }
+    | { kind: 'report'; id: string }
+    | { kind: 'settings' }
+    | { kind: 'ask'; seedQuestion?: string }
   >({ kind: 'home' });
 
   useEffect(() => {
@@ -161,7 +165,9 @@ export function App(): JSX.Element {
               ? { kind: 'home' }
               : id === 'settings'
                 ? { kind: 'settings' }
-                : { kind: 'report', id },
+                : id === 'ask'
+                  ? { kind: 'ask' }
+                  : { kind: 'report', id },
           );
         }}
       />
@@ -176,7 +182,9 @@ export function App(): JSX.Element {
               ? 'Home'
               : route.kind === 'settings'
                 ? 'Settings'
-                : titleOf(route.id)
+                : route.kind === 'ask'
+                  ? 'Ask AI'
+                  : titleOf(route.id)
           }
         />
 
@@ -201,6 +209,13 @@ export function App(): JSX.Element {
               setState({ kind: 'ready', session: { ...state.session, ai_status } });
             }}
           />
+        ) : route.kind === 'ask' ? (
+          <AskAI
+            session={state.session}
+            schoolIds={selected}
+            onBack={() => { setRoute({ kind: 'home' }); }}
+            {...(route.seedQuestion === undefined ? {} : { seedQuestion: route.seedQuestion })}
+          />
         ) : route.kind === 'report' ? (
           <DashboardPage
             session={state.session}
@@ -208,6 +223,7 @@ export function App(): JSX.Element {
             schoolIds={selected}
             academicYear={home?.academic_year ?? null}
             onBack={() => { setRoute({ kind: 'home' }); }}
+            onAskAI={(seedQuestion) => { setRoute({ kind: 'ask', seedQuestion }); }}
           />
         ) : home === null ? (
           <div className="flex-1 flex items-start justify-center pt-24">
@@ -221,6 +237,7 @@ export function App(): JSX.Element {
             home={home}
             loading={homeLoading}
             onOpen={(id) => { setRoute({ kind: 'report', id }); }}
+            onAskAI={() => { setRoute({ kind: 'ask' }); }}
           />
         )}
       </div>

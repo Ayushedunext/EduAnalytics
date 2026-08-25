@@ -44,15 +44,18 @@ vi.mock('../src/db/audit.js', () => ({
 
 /** Counts calls so a refusal that still hit Anthropic would fail the test. */
 let validateCalls = 0;
-vi.mock('../src/services/anthropic.js', async () => {
-  const actual = await vi.importActual<typeof import('../src/services/anthropic.js')>(
-    '../src/services/anthropic.js',
+vi.mock('../src/services/ai-providers/anthropic.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/services/ai-providers/anthropic.js')>(
+    '../src/services/ai-providers/anthropic.js',
   );
   return {
     ...actual,
-    validateApiKey: () => {
-      validateCalls += 1;
-      return Promise.resolve({ ok: true, message: '', transient: false });
+    anthropicProvider: {
+      ...actual.anthropicProvider,
+      validateApiKey: () => {
+        validateCalls += 1;
+        return Promise.resolve({ ok: true, message: '', transient: false });
+      },
     },
   };
 });
@@ -68,6 +71,7 @@ function save(role: Role) {
     orgId: 'stmarks',
     actorSub: 'erp-user-1',
     role,
+    provider: 'anthropic',
     apiKey: KEY,
     model: 'claude-haiku-4-5',
     monthlyQueryCap: 1500,
@@ -145,6 +149,7 @@ describe('a malformed key never reaches the provider', () => {
         orgId: 'stmarks',
         actorSub: 'erp-user-1',
         role: 'ADMIN',
+        provider: 'anthropic',
         apiKey: 'not-a-key',
         model: 'claude-haiku-4-5',
         monthlyQueryCap: 1500,

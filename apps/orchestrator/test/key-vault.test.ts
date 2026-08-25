@@ -1,24 +1,25 @@
 /**
  * Invariant tests for the BYOK key vault.
  *
- * ADR-017 makes four promises about an org's API key: AES-256 at rest, a master
- * key held outside the database, never logged, and masked in the UI. Three of
- * those are properties of this module and are asserted here. The fourth — never
- * logged — is a property of every call site, and is covered by the settings
- * tests asserting the key never appears in a response body.
+ * ADR-017 makes three promises about an org's API key that are properties of
+ * THIS module: AES-256 at rest, a master key held outside the database, and
+ * masking (via each provider's own `keyHint` now — see
+ * ai-providers-shape.test.ts, since ADR-031 moved key-shape/hint formatting
+ * onto `ProviderMeta`, out of the vault). "Never logged" is a property of
+ * every call site, covered by the settings tests asserting the key never
+ * appears in a response body.
  *
  * The point of the tamper test in particular: under GCM a modified row fails to
  * decrypt instead of yielding plausible bytes. Without it, an edited ciphertext
- * would decrypt to *something* and that something would be sent to Anthropic as
- * a credential.
+ * would decrypt to *something* and that something would be sent to the provider
+ * as a credential.
  */
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PlatformError } from '@sap/shared';
 import './env-defaults.js';
 
-const { encryptApiKey, decryptApiKey, keyHint, looksLikeAnthropicKey, secretEquals } =
-  await import('../src/services/key-vault.js');
+const { encryptApiKey, decryptApiKey, secretEquals } = await import('../src/services/key-vault.js');
 
 const KEY = 'sk-ant-api03-Zx9QvT2mKp7LrN4wBhs6YdEuJc1AoFgHiK3lMnPqRsTuVwXyZ1G4a';
 
@@ -66,31 +67,6 @@ describe('a stored key round-trips and nothing else does', () => {
 
   it('refuses a truncated row', () => {
     expect(() => decryptApiKey(Buffer.alloc(8))).toThrow(PlatformError);
-  });
-});
-
-describe('the hint is a recognition aid, not a key', () => {
-  it('shows only the last four characters', () => {
-    const hint = keyHint(KEY);
-    expect(hint).toBe('sk-ant-…1G4a');
-    // Everything between the prefix and the tail must be gone: a "masked" value
-    // that still carries most of the secret is not masked.
-    expect(hint.length).toBeLessThan(20);
-    expect(KEY).toContain(hint.slice(-4));
-    expect(hint).not.toContain(KEY.slice(8, 20));
-  });
-});
-
-describe('an obvious paste error is caught before the network call', () => {
-  it.each([
-    ['a real-looking key', KEY, true],
-    ['whitespace around it', `  ${KEY}\n`, true],
-    ['the wrong separator', KEY.replace('sk-ant-', 'sk_ant_'), false],
-    ['a whole curl command', `curl -H "x-api-key: ${KEY}"`, false],
-    ['empty', '', false],
-    ['just the prefix', 'sk-ant-', false],
-  ])('%s → %s', (_label, value, expected) => {
-    expect(looksLikeAnthropicKey(value)).toBe(expected);
   });
 });
 

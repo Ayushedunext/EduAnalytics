@@ -64,18 +64,20 @@ Streaming status steps in the chat ("Confirming scope → Reading schema → Run
 
 ## 4. BYOK — the billing and trust model
 
-**Decision:** AI usage bills to the **organization's own Anthropic account** (org creates a Console account, adds billing, generates an API key). One org key covers all its schools. The platform carries zero AI cost. A **hybrid mode** exists: `billing_mode = 'platform' | 'byok'` — small schools may run on the platform key bundled into ERP pricing; the gating logic is identical, only the vault entry differs.
+**Decision:** AI usage bills to the **organization's own account with its chosen provider** — Anthropic or Google Gemini, picked once at setup (ADR-031; org creates a provider account, adds billing, generates an API key). One org key, for one provider, covers all its schools. The platform carries zero AI cost. A **hybrid mode** exists: `billing_mode = 'platform' | 'byok'` — small schools may run on the platform key bundled into ERP pricing; the gating logic is identical, only the vault entry differs.
 
 *Why org-level, not school-level:* trusts administer centrally; one key, one billing relationship, per-school usage metering on top (below).
+
+*Why one provider, not both at once:* an admin picks the provider the org is going to use; switching later overwrites the stored key exactly like replacing a same-provider key. Everything provider-specific — model catalog, live key validation, SDK error translation, the tool-planning loop's message format — sits behind one interface (`services/ai-providers/`) so the redaction (ADR-030), hydration, MCP execution and audit trail are written once and never differ by provider.
 
 ### 4.1 Key Vault
 
 ```
-tenant_ai_config(org_id, encrypted_api_key, model, billing_mode,
+tenant_ai_config(org_id, provider, encrypted_api_key, model, billing_mode,
                  monthly_query_cap, ai_status, last_validated_at)
 ```
-- AES-256 at rest; master key in KMS/Vault; decrypted only in memory at call time; never logged; UI shows only a masked form (`sk-ant-…****1G4a`).
-- Validation on save: a 1-token live test call to the Messages API; only success activates.
+- AES-256 at rest; master key in KMS/Vault; decrypted only in memory at call time; never logged; UI shows only a masked form (e.g. `sk-ant-…****1G4a`) whose shape is provider-specific.
+- Validation on save: a 1-token (or equivalent) live test call to the provider's own API; only success activates.
 
 ### 4.2 Gating state machine (`ai_status`)
 
@@ -104,9 +106,9 @@ Ask-AI chat and artifact canvas; "Modify with AI" in the report editor; "Describ
 
 *"Admin" means the `ADMIN` role, decided 2026-08-20.* The launch token carries one of DIRECTOR · PRINCIPAL · TEACHER · ACCOUNTANT · ADMIN, and only `ADMIN` may save, replace or disable the key. The narrower reading is deliberate: the key is a **billable credential for the whole org**, so "who may spend the trust's money with a provider" is a smaller question than "who may read the trust's numbers" — a Director sees every school's data and still cannot connect a key. Everyone else is shown *"Contact your admin for key configuration."* and receives the same sentence as a 403 if they call the endpoint directly; the screen is the polite half of a rule enforced in the service layer (`services/ai-config.ts`), never a client-side role check.
 
-*Key handling on the screen (2026-08-20).* The key field is a password input, so the value is never legible even to the person pasting it; it is held in component state for one submit and cleared on every outcome. After save the API returns `key_hint` (`sk-ant-…1G4a`) and **no endpoint returns the key to any caller at any role** — which is what makes docs/08 §6's "platform operators cannot read tenant keys in plaintext" true of the API surface and not only of the database. "Open Anthropic Console" opens in a new tab with `rel="noopener"`.
+*Key handling on the screen (2026-08-20).* The key field is a password input, so the value is never legible even to the person pasting it; it is held in component state for one submit and cleared on every outcome. After save the API returns `key_hint` (e.g. `sk-ant-…1G4a`) and **no endpoint returns the key to any caller at any role** — which is what makes docs/08 §6's "platform operators cannot read tenant keys in plaintext" true of the API surface and not only of the database. "Open [provider] Console" opens in a new tab with `rel="noopener"`.
 
-A 3-step wizard: ① create the Anthropic Console account (guided, with an illustrated PDF guide; billing added by the org) → ② paste key, choose model (Economical–Haiku / Best–Sonnet), optional monthly cap → **Test & Save** → ③ verification result; on success "AI Reports UNLOCKED for all schools & users". After activation the page becomes a status panel: usage meter, Replace Key, Disable AI; on later key failure, an explanatory banner with a fix-it path (never a silent failure).
+A 3-step wizard, step ① provider-conditional (ADR-031): ① pick Anthropic or Gemini, then create that provider's console account (guided, with an illustrated PDF guide; billing added by the org — Gemini's free tier means this step can be skipped entirely for evaluation) → ② paste key, choose that provider's model (Anthropic: Economical–Haiku / Best–Sonnet; Gemini: Economical–Flash-Lite / Best–Flash), optional monthly cap → **Test & Save** → ③ verification result; on success "AI Reports UNLOCKED for all schools & users". After activation the page becomes a status panel: usage meter, Replace Key, Disable AI; on later key failure, an explanatory banner with a fix-it path (never a silent failure).
 
 ## 6. Assumptions
 
@@ -115,6 +117,6 @@ A 3-step wizard: ① create the Anthropic Console account (guided, with an illus
 
 ## 7. Extensibility
 
-- Provider adapters: institutions on AWS/GCP procurement can supply **Bedrock or Vertex** credentials instead; the agent service isolates the provider call behind one interface.
+- Provider adapters: built (ADR-031) — Anthropic and Google Gemini today, behind `services/ai-providers/`'s `ProviderMeta`/`ModelClient` interface. Institutions on AWS/GCP procurement wanting **Bedrock or Vertex** credentials specifically are a new adapter file in that same directory, not a redesign — Settings, the vault and the tool-planning loop need no changes for a third provider.
 - The chart-spec contract may gain widget types (heatmap, funnel) — additive, renderer-gated; old specs stay valid.
 - Saved AI reports already persist their spec + SQL; scheduled re-runs (email digests) are an orchestration feature, not an AI change.

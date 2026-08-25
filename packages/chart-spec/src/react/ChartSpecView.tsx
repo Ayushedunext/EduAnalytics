@@ -59,8 +59,11 @@ export function ChartSpecView({ spec, header }: ChartSpecViewProps): ReactElemen
           report in the product lay out the same way (ADR-016). */}
       {kpis.length > 0 && (
         <div className="kpis mb-4">
-          {kpis.map((widget) => (
-            <WidgetView key={widget.id} widget={widget} />
+          {kpis.map((widget, index) => (
+            // The first KPI is the server's own headline metric (dashboards.ts
+            // and home.ts both emit the lead figure first) — never re-picked
+            // here by inspecting values, only by position (§22).
+            <WidgetView key={widget.id} widget={widget} hero={index === 0 && kpis.length > 1} />
           ))}
         </div>
       )}

@@ -36,8 +36,6 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
-  Label,
-  Legend,
   Line,
   Pie,
   PieChart,
@@ -156,14 +154,37 @@ function ChartTooltip({
   );
 }
 
-export function KpiTile({ widget }: { widget: KpiWidget }): ReactElement {
+/**
+ * Reads the SIGN already present in a server-formatted delta string ("+12.4%",
+ * "-3.1 pts") to decide the pill's colour and arrow. This is presentation of a
+ * fact the server already computed, not a client-side trend calculation — a
+ * widget with no `delta` renders no pill at all rather than a fabricated one
+ * (§4 "do not add fake trends").
+ */
+function deltaDirection(delta: string): 'up' | 'down' | 'flat' {
+  const trimmed = delta.trim();
+  if (trimmed.startsWith('+')) return 'up';
+  if (trimmed.startsWith('-') || trimmed.startsWith('−')) return 'down';
+  return 'flat';
+}
+
+const DELTA_ARROW: Record<'up' | 'down' | 'flat', string> = { up: '▲', down: '▼', flat: '•' };
+
+export function KpiTile({ widget, hero }: { widget: KpiWidget; hero?: boolean | undefined }): ReactElement {
+  const tone = widget.tone ?? 'neutral';
+  const direction = widget.delta !== undefined ? deltaDirection(widget.delta) : null;
   return (
-    <div className="card kpi">
-      <b style={{ color: toneColour(widget.tone) }}>{widget.value}</b>
-      <span>
-        {widget.label}
-        {widget.delta !== undefined && <span className="pill live ml-2">{widget.delta}</span>}
-      </span>
+    <div className={`card kpi kpi--${tone}${hero === true ? ' kpi--hero' : ''}`}>
+      <span className="kpiLabel">{widget.label}</span>
+      <b className="kpiValue" style={{ color: toneColour(widget.tone) }}>
+        {widget.value}
+      </b>
+      {widget.delta !== undefined && direction !== null && (
+        <span className={`kpiDelta ${direction}`}>
+          <span aria-hidden="true">{DELTA_ARROW[direction]}</span>
+          {widget.delta}
+        </span>
+      )}
     </div>
   );
 }
@@ -238,8 +259,41 @@ function CategoryTick({ x = 0, y = 0, payload, maxChars = 24 }: TickProps): Reac
   );
 }
 
+/**
+ * The tallest bar, so a chart with a genuine standout can say so visually
+ * (§8 "highlighting of the highest category when analytically meaningful").
+ * Only computed with more than one bar — a single-category chart has no
+ * "highest" to point at, and pointing at it anyway would be decoration, not
+ * an observation.
+ */
+function maxValueIndex(rows: readonly Record<string, unknown>[], field: string): number | null {
+  if (rows.length < 2) return null;
+  let best = -1;
+  let bestValue = -Infinity;
+  rows.forEach((row, index) => {
+    const value = row[field];
+    if (typeof value === 'number' && value > bestValue) {
+      bestValue = value;
+      best = index;
+    }
+  });
+  return best >= 0 ? best : null;
+}
+
 export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
+  if (widget.data.length === 0) {
+    return (
+      <Panel title={widget.title} variant="medium">
+        <div className="specEmpty">
+          <span className="icon" aria-hidden="true">▤</span>
+          <span className="msg">No records available.</span>
+        </div>
+      </Panel>
+    );
+  }
+
   const axis = categoryAxis(widget.data, widget.x);
+  const highlightIndex = maxValueIndex(widget.data, widget.y);
   /**
    * A depth gradient built from ONE hue at two opacities, never a second
    * colour — so it stays inside docs/10 §1's "teal-family series" rule and
@@ -269,7 +323,7 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
     const labelChars = Math.floor((labelWidth - 14) / CHAR_PX);
 
     return (
-      <Panel title={widget.title}>
+      <Panel title={widget.title} variant="wide">
         <ResponsiveContainer width="100%" height={height}>
           <BarChart
             data={[...widget.data]}
@@ -303,7 +357,14 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
               maxBarSize={14}
               isAnimationActive={ANIMATE}
               activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
-            />
+            >
+              {/* The tallest bar reads as solid teal against the others'
+                  gradient — same hue, no fifth colour, just more of it. */}
+              {highlightIndex !== null &&
+                widget.data.map((_, index) => (
+                  <Cell key={index} fill={index === highlightIndex ? SERIES[0] : `url(#${gradId})`} />
+                ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </Panel>
@@ -311,7 +372,7 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
   }
 
   return (
-    <Panel title={widget.title}>
+    <Panel title={widget.title} variant="medium">
       <ResponsiveContainer width="100%" height={260}>
         <BarChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid stroke={GRID} vertical={false} />
@@ -339,17 +400,83 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
             maxBarSize={38}
             isAnimationActive={ANIMATE}
             activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
-          />
+          >
+            {highlightIndex !== null &&
+              widget.data.map((_, index) => (
+                <Cell key={index} fill={index === highlightIndex ? SERIES[0] : `url(#${gradId})`} />
+              ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </Panel>
   );
 }
 
+/** A custom dot renderer's props, per Recharts' convention (mirrors `TickProps` above). */
+interface LineDotProps {
+  readonly cx?: number;
+  readonly cy?: number;
+  readonly index?: number;
+}
+
+/**
+ * The latest point drawn larger and outlined, permanently — not only on
+ * hover. A trend line's most recent value is usually the one a reader came
+ * to check, so it stays visually singled out (§7 "highlight the latest data
+ * point"). `lastIndex` is closed over rather than read from props because
+ * Recharts does not otherwise tell a dot renderer how many points there are.
+ */
+function makeLineDot(lastIndex: number): (props: LineDotProps) => ReactElement {
+  return function LineDot({ cx = 0, cy = 0, index = -1 }: LineDotProps): ReactElement {
+    const isLatest = index === lastIndex;
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={isLatest ? 4.5 : 3}
+        fill={SERIES[0]}
+        stroke={isLatest ? '#fff' : 'none'}
+        strokeWidth={isLatest ? 2 : 0}
+      />
+    );
+  };
+}
+
 export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
   const gradId = useGradientId('area');
+
+  // Empty and single-point series read as a broken chart if forced through
+  // the same axes a real trend uses — an honest small state instead (§18/19).
+  if (widget.data.length === 0) {
+    return (
+      <Panel title={widget.title} variant="hero">
+        <div className="specEmpty">
+          <span className="icon" aria-hidden="true">📈</span>
+          <span className="msg">No records available for this period.</span>
+        </div>
+      </Panel>
+    );
+  }
+
+  if (widget.data.length === 1) {
+    const row = widget.data[0] as Record<string, unknown>;
+    const value = row[widget.y];
+    const label = row[widget.x];
+    return (
+      <Panel title={widget.title} variant="hero">
+        <div className="specSingle">
+          <span className="value">
+            {typeof value === 'number' ? full.format(value) : String(value ?? '—')}
+          </span>
+          {label !== undefined && label !== null && <span className="label">{String(label)}</span>}
+          <span className="note">Only one period is currently available.</span>
+        </div>
+      </Panel>
+    );
+  }
+
   return (
-    <Panel title={widget.title}>
+    <Panel title={widget.title} variant="hero">
       <ResponsiveContainer width="100%" height={260}>
         <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <defs>
@@ -391,7 +518,7 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
             dataKey={widget.y}
             stroke={SERIES[0]}
             strokeWidth={2.25}
-            dot={{ r: 3, fill: SERIES[0], strokeWidth: 0 }}
+            dot={makeLineDot(widget.data.length - 1)}
             activeDot={{ r: 5.5, fill: SERIES[0], stroke: '#fff', strokeWidth: 2 }}
             isAnimationActive={ANIMATE}
           />
@@ -401,119 +528,192 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
   );
 }
 
+/** A centre label longer than this collides with the ring at this radius. */
+function centerLabel(text: string, max = 15): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
-  /** Restated at the centre of the ring — see the Label content below. */
+  if (widget.data.length === 0) {
+    return (
+      <Panel title={widget.title} variant="side">
+        <div className="specEmpty">
+          <span className="icon" aria-hidden="true">◔</span>
+          <span className="msg">No records available.</span>
+        </div>
+      </Panel>
+    );
+  }
+
+  /** Restated at the centre of the ring — see `specDonutCenter` below. */
   const total = widget.data.reduce((sum, row) => {
     const value = row[widget.value_field];
     return sum + (typeof value === 'number' ? value : 0);
   }, 0);
 
+  /**
+   * When one slice genuinely dominates, naming it beats restating the total —
+   * "68% Online" is the observation a reader would otherwise have to compute
+   * from the legend by hand (§9). Derived purely from this widget's own data;
+   * below a clear majority the total is the more honest summary.
+   */
+  let dominant: { label: string; value: number } | null = null;
+  for (const row of widget.data) {
+    const value = row[widget.value_field];
+    if (typeof value === 'number' && (dominant === null || value > dominant.value)) {
+      dominant = { label: String(row[widget.label_field] ?? ''), value };
+    }
+  }
+  const dominantShare = dominant !== null && total > 0 ? dominant.value / total : 0;
+  const showDominant = widget.data.length > 1 && dominant !== null && dominantShare >= 0.5;
+
   return (
-    <Panel title={widget.title}>
-      <ResponsiveContainer width="100%" height={260}>
-        <PieChart>
-          <Pie
-            data={[...widget.data]}
-            dataKey={widget.value_field}
-            nameKey={widget.label_field}
-            innerRadius={54}
-            outerRadius={88}
-            paddingAngle={2}
-            isAnimationActive={ANIMATE}
-          >
-            {widget.data.map((row, index) => {
-              /* dataviz non-negotiable: a category past the validated,
-                 four-step palette is never a fifth generated hue — it folds
-                 into a single recessive "Other" fill instead. */
-              const inPalette = index < SERIES.length;
-              return (
-                <Cell
-                  key={String(row[widget.label_field] ?? index)}
-                  fill={inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
-                  fillOpacity={inPalette ? 1 : 0.55}
-                />
-              );
-            })}
-            {/* The KPI strip above already states this total; restating it
-                where the eye actually lands (the hole in the ring) saves the
-                reader from adding the legend up by hand. */}
-            <Label
-              position="center"
-              content={({ viewBox }) => {
-                if (viewBox === undefined || !('cx' in viewBox) || !('cy' in viewBox)) return null;
-                const { cx, cy } = viewBox;
-                if (cx === undefined || cy === undefined) return null;
+    <Panel title={widget.title} variant="side">
+      {/**
+       * The centre readout is a plain HTML overlay, not an SVG `<Label>` child
+       * of `<Pie>`. Recharts 3's Pie no longer mounts a child `Label` at all
+       * (confirmed against the rendered DOM — zero `<text>` nodes, silently) —
+       * an internal-architecture break from the v2 pattern this used to be,
+       * not a chart-spec contract change. `pointer-events: none` keeps the
+       * overlay from stealing hover off the ring underneath it.
+       */}
+      <div className="specDonutWrap">
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart>
+            <Pie
+              data={[...widget.data]}
+              dataKey={widget.value_field}
+              nameKey={widget.label_field}
+              innerRadius={58}
+              outerRadius={88}
+              paddingAngle={2}
+              isAnimationActive={ANIMATE}
+            >
+              {widget.data.map((row, index) => {
+                /* dataviz non-negotiable: a category past the validated,
+                   four-step palette is never a fifth generated hue — it folds
+                   into a single recessive "Other" fill instead. */
+                const inPalette = index < SERIES.length;
                 return (
-                  <g>
-                    <text x={cx} y={cy - 5} textAnchor="middle" fontSize={19} fontWeight={700} fill={INK}>
-                      {compact.format(total)}
-                    </text>
-                    <text x={cx} y={cy + 13} textAnchor="middle" fontSize={9.5} fill={MUTED} letterSpacing={0.8}>
-                      TOTAL
-                    </text>
-                  </g>
+                  <Cell
+                    key={String(row[widget.label_field] ?? index)}
+                    fill={inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
+                    fillOpacity={inPalette ? 1 : 0.55}
+                  />
                 );
-              }}
-            />
-          </Pie>
-          <Legend wrapperStyle={AXIS} />
-          <Tooltip content={<ChartTooltip />} />
-        </PieChart>
-      </ResponsiveContainer>
+              })}
+            </Pie>
+            <Tooltip content={<ChartTooltip />} />
+          </PieChart>
+        </ResponsiveContainer>
+        {/* The KPI strip above already states the total; restating it (or,
+            when one slice dominates, naming that slice) where the eye
+            actually lands saves the reader from adding the legend by hand. */}
+        <div className="specDonutCenter">
+          {showDominant && dominant !== null ? (
+            <>
+              <span className="value">{Math.round(dominantShare * 100)}%</span>
+              <span className="label">{centerLabel(dominant.label)}</span>
+            </>
+          ) : (
+            <>
+              <span className="value">{compact.format(total)}</span>
+              <span className="label">TOTAL</span>
+            </>
+          )}
+        </div>
+      </div>
+      {/* A plain HTML legend, not Recharts' — sharing the Pie's own drawing
+          area with a legend row pushed the ring's true centre away from the
+          container's geometric centre, which is what the HTML overlay above
+          centres against. Keeping the legend outside that area keeps both
+          simple. */}
+      <ul className="specDonutLegend">
+        {widget.data.map((row, index) => {
+          const inPalette = index < SERIES.length;
+          return (
+            <li key={String(row[widget.label_field] ?? index)}>
+              <span
+                className="dot"
+                style={{ background: inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER }}
+              />
+              {String(row[widget.label_field] ?? '')}
+            </li>
+          );
+        })}
+      </ul>
     </Panel>
   );
 }
 
 export function TablePanel({ widget }: { widget: TableWidget }): ReactElement {
   return (
-    <Panel title={widget.title}>
-      <div className="specTableWrap">
-        <table className="specTable">
-          <thead>
-            <tr>
-              {widget.columns.map((column) => (
-                <th key={column.field} style={{ textAlign: column.align ?? 'left' }}>
-                  {column.label}
-                  {/* docs/04 rail 6: a masked column says so. Hiding it would be
-                      a silently different table for a different reader. */}
-                  {column.masked === true && <span className="pill nodata ml-2">masked</span>}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {widget.rows.map((row, index) => (
-              <tr key={index}>
-                {widget.columns.map((column) => (
-                  <td key={column.field} style={{ textAlign: column.align ?? 'left' }}>
-                    {formatCell(row[column.field])}
-                  </td>
+    <Panel title={widget.title} variant="wide">
+      {widget.rows.length === 0 ? (
+        <div className="specEmpty">
+          <span className="icon" aria-hidden="true">▤</span>
+          <span className="msg">No rows to show.</span>
+        </div>
+      ) : (
+        <>
+          <div className="specTableWrap">
+            <table className="specTable">
+              <thead>
+                <tr>
+                  {widget.columns.map((column) => (
+                    <th key={column.field} style={{ textAlign: column.align ?? 'left' }}>
+                      {column.label}
+                      {/* docs/04 rail 6: a masked column says so. Hiding it would be
+                          a silently different table for a different reader. */}
+                      {column.masked === true && <span className="pill nodata ml-2">masked</span>}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {widget.rows.map((row, index) => (
+                  <tr key={index}>
+                    {widget.columns.map((column) => (
+                      <td key={column.field} style={{ textAlign: column.align ?? 'left' }}>
+                        {formatCell(row[column.field])}
+                      </td>
+                    ))}
+                  </tr>
                 ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {/* ADR-008: truncation is never silent. */}
-      {widget.truncated === true && (
-        <p className="specNote">
-          Showing the first rows only — this result hit the 5,000-row cap.
-        </p>
+              </tbody>
+            </table>
+          </div>
+          {/* ADR-008: truncation is never silent. */}
+          {widget.truncated === true && (
+            <p className="specNote">
+              Showing the first rows only — this result hit the 5,000-row cap.
+            </p>
+          )}
+        </>
       )}
     </Panel>
   );
 }
 
+/** Bento sizing (§5) — a widget kind's normal visual weight on the grid. */
+type PanelVariant = 'hero' | 'side' | 'medium' | 'wide';
+
 function Panel({
   title,
+  variant,
   children,
 }: {
   title?: string | undefined;
+  variant?: PanelVariant | undefined;
   children: ReactNode;
 }): ReactElement {
   return (
-    <section className="card specPanel">
-      {title !== undefined && <h3 className="specPanelTitle">{title}</h3>}
+    <section className={`card specPanel${variant !== undefined ? ` specPanel--${variant}` : ''}`}>
+      {title !== undefined && (
+        <div className="specPanelHead">
+          <h3 className="specPanelTitle">{title}</h3>
+        </div>
+      )}
       {children}
     </section>
   );
@@ -538,11 +738,15 @@ function toneColour(tone: KpiWidget['tone']): string {
   }
 }
 
-/** Dispatch on the discriminant. The union is closed, so this is exhaustive. */
-export function WidgetView({ widget }: { widget: Widget }): ReactElement {
+/**
+ * Dispatch on the discriminant. The union is closed, so this is exhaustive.
+ * `hero` only ever reaches the `kpi` branch — it names the headline metric in
+ * a KPI row (§22), which is meaningless for a chart or table widget.
+ */
+export function WidgetView({ widget, hero }: { widget: Widget; hero?: boolean | undefined }): ReactElement {
   switch (widget.type) {
     case 'kpi':
-      return <KpiTile widget={widget} />;
+      return <KpiTile widget={widget} hero={hero} />;
     case 'bar':
       return <BarPanel widget={widget} />;
     case 'line':

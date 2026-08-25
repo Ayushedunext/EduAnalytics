@@ -92,11 +92,21 @@ export function DashboardPage({
                 The filters are whatever the SERVER says it bound, not a fixed
                 "AY …" label. Staff records carry no academic year, so a hardcoded
                 year here would print a filter that report never applied. */}
-            <div className="page-sub">
-              {report.logic.scope.map((s) => s.school_name).join(' · ')}
-              {report.logic.filters.map((f) => ` · ${f.label} ${f.value}`).join('')} · data as of{' '}
-              {asOf(report.spec.meta.as_of ?? report.spec.meta.generated_at)}
-              {loading && ' · refreshing…'}
+            <div className="pageContext">
+              <span>{report.logic.scope.map((s) => s.school_name).join(' · ')}</span>
+              {report.logic.filters.map((f) => (
+                <span key={f.label}>
+                  <span className="dot">·</span> {f.label} {f.value}
+                </span>
+              ))}
+              <span className="dot">·</span>
+              <span>data as of {asOf(report.spec.meta.as_of ?? report.spec.meta.generated_at)}</span>
+              {loading && (
+                <>
+                  <span className="dot">·</span>
+                  <span>refreshing…</span>
+                </>
+              )}
             </div>
 
             <div className="affordances">
@@ -139,9 +149,10 @@ export function DashboardPage({
               >
                 ⬇ PDF
               </a>
+              <span className="spacer" />
               <button
                 type="button"
-                className={`chipbtn ${session.ai_status === 'active' ? '' : 'disabled'}`}
+                className={`chipbtn chipbtn--ai ${session.ai_status === 'active' ? '' : 'disabled'}`}
                 disabled={session.ai_status !== 'active'}
                 title={
                   session.ai_status === 'active'
@@ -156,7 +167,7 @@ export function DashboardPage({
                   onAskAI(`About ${report?.spec.title ?? 'this report'}: `);
                 }}
               >
-                🤖 Ask AI about this data
+                ✦ Ask AI about this data
               </button>
             </div>
 

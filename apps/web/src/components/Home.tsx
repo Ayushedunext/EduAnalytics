@@ -32,6 +32,7 @@
  * people to fix them.
  */
 
+import { KpiTile } from '@sap/chart-spec/react';
 import type { HomeResponse, SessionResponse, DashboardCard } from '../api/client';
 
 interface Props {
@@ -58,9 +59,16 @@ export function Home({ session, home, loading, onOpen, onAskAI }: Props): JSX.El
 
         {/* docs/10 §3: scope line under the title, and an "as of" label because
             docs/03 assumption 2 accepts replica lag only if it is stated. */}
-        <div className="page-sub">
-          Scope: {scopeNames} · data as of {asOf(home.spec.meta.as_of ?? home.spec.meta.generated_at)}
-          {loading && ' · refreshing…'}
+        <div className="pageContext mb-5">
+          <span>{scopeNames}</span>
+          <span className="dot">·</span>
+          <span>data as of {asOf(home.spec.meta.as_of ?? home.spec.meta.generated_at)}</span>
+          {loading && (
+            <>
+              <span className="dot">·</span>
+              <span>refreshing…</span>
+            </>
+          )}
         </div>
 
         {/* docs/02 §6: a school dropped from scope is surfaced, never silently
@@ -88,29 +96,34 @@ export function Home({ session, home, loading, onOpen, onAskAI }: Props): JSX.El
           }}
           role={aiActive ? 'button' : undefined}
         >
-          <div className="bot">🤖</div>
+          <div className="bot">✦</div>
           {/**
            * docs/10 §2: "admins get 'Set up now →', others 'ask your
            * administrator'". Two sentences for two people — telling a Teacher to
            * complete a setup they have no permission to perform sends them
            * looking for a screen that will refuse them.
            */}
-          <div className="ph">
-            {aiActive
-              ? 'Ask anything about your schools… e.g. “school-wise strength, gender-wise”'
-              : session.can_configure_ai
-                ? '🔒 AI reports are locked — connect your Anthropic key in Settings to unlock them (predefined dashboards work now)'
-                : '🔒 AI reports are locked — ask your administrator to set up the AI key (predefined dashboards work now)'}
+          <div className="min-w-0 flex-1">
+            <div className="text-[10.5px] font-bold tracking-wider text-[var(--color-primary)] uppercase mb-0.5">
+              Ask AI
+            </div>
+            <div className="ph">
+              {aiActive
+                ? 'Ask anything about your schools… e.g. “school-wise strength, gender-wise”'
+                : session.can_configure_ai
+                  ? '🔒 AI reports are locked — connect your Anthropic key in Settings to unlock them (predefined dashboards work now)'
+                  : '🔒 AI reports are locked — ask your administrator to set up the AI key (predefined dashboards work now)'}
+            </div>
           </div>
-          <div className="go">{aiActive ? 'Ask AI' : 'Locked'}</div>
+          <div className="go">{aiActive ? 'Ask AI →' : 'Locked'}</div>
         </div>
 
         <div className="kpis">
-          {home.spec.widgets.map((widget) => (
-            <div key={widget.id} className="card kpi">
-              <b style={{ color: toneColour(widget.tone) }}>{widget.value}</b>
-              <span>{widget.label}</span>
-            </div>
+          {home.spec.widgets.map((widget, index) => (
+            // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
+            // reads identically everywhere in the product. The lead metric
+            // (first in the server's own order) gets the headline treatment.
+            <KpiTile key={widget.id} widget={widget} hero={index === 0 && home.spec.widgets.length > 1} />
           ))}
 
           {/*
@@ -186,20 +199,6 @@ function Card({
       </div>
     </div>
   );
-}
-
-/** docs/10 §1: colour is never the only signal, so tone pairs with the label. */
-function toneColour(tone: string | undefined): string {
-  switch (tone) {
-    case 'warning':
-      return 'var(--color-amber)';
-    case 'negative':
-      return 'var(--color-red)';
-    case 'positive':
-      return 'var(--color-mint)';
-    default:
-      return 'var(--color-teal)';
-  }
 }
 
 function greeting(): string {

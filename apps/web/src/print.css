@@ -115,7 +115,16 @@ body {
   grid-template-columns: 1fr;
   gap: 10px;
 }
-.printPage .specPanel {
+/* The screen's bento spans (tokens.css `.specPanel--hero/side/medium/wide`)
+   exist to give panels different WIDTHS on a fluid viewport; paper has one
+   fixed 210mm column, so every span collapses back to it here — same reason
+   the two-column attempt was abandoned above. */
+.printPage .specPanel,
+.printPage .specPanel--hero,
+.printPage .specPanel--side,
+.printPage .specPanel--medium,
+.printPage .specPanel--wide {
+  grid-column: 1 / -1;
   padding: 12px 14px;
   /* Never split a chart across a page boundary — half a bar chart is not a
      smaller chart, it is an unreadable one. */
@@ -125,6 +134,10 @@ body {
 }
 .printPage .specPanelTitle {
   font-size: 12.5px;
+}
+.printPage .card,
+.printPage .dcard {
+  animation: none;
 }
 
 /* Tables print in full: the screen scrolls them inside the panel, paper cannot,

@@ -230,6 +230,45 @@ describe('a report is only sent the filters it declares', () => {
     const built = await build('staff-overview');
     expect(built.logic.filters).toEqual([{ label: 'As of', value: '2026-08-19' }]);
   });
+
+  it("sends Principal's Snapshot all four filters -- it reads five sources across three domains", async () => {
+    response = result({
+      reportId: 'principal-snapshot',
+      title: "Principal's Snapshot",
+      schools: [{ school_id: 'stmarksmb', queries: [query('fees', [{ payable: 1, paid: 1, balance: 0 }])] }],
+    });
+    await build('principal-snapshot');
+    expect(lastCall?.args['params']).toEqual({
+      academic_year: '2026-27',
+      as_of_date: '2026-08-19',
+      from_date: '2026-04-01',
+      to_date: '2027-03-31',
+    });
+  });
+
+  it('sends Transport Analytics no filters at all -- the table has no trustworthy date column', async () => {
+    response = result({
+      reportId: 'transport-analytics',
+      title: 'Transport Analytics',
+      schools: [{ school_id: 'stmarksmb', queries: [query('totals', [{ riders: 10, pickup_routes: 2, drop_routes: 2 }])] }],
+    });
+    await build('transport-analytics');
+    expect(lastCall?.args['params']).toEqual({});
+  });
+
+  it('sends Library & Textbooks the as-of date and a date window, never an academic year', async () => {
+    response = result({
+      reportId: 'library-textbooks',
+      title: 'Library & Textbooks',
+      schools: [{ school_id: 'stmarksmb', queries: [query('inventory', [{ titles: 5, total_copies: 5, available_copies: 5 }])] }],
+    });
+    await build('library-textbooks');
+    expect(lastCall?.args['params']).toEqual({
+      as_of_date: '2026-08-19',
+      from_date: '2026-04-01',
+      to_date: '2027-03-31',
+    });
+  });
 });
 
 /**
@@ -699,6 +738,110 @@ describe('Admissions Funnel', () => {
     const built = await build('admissions-funnel');
     expect(kpi(built.spec, 'kpi-conversion')?.value).toBe('40.0%');
     expect(built.logic.notes.join(' ')).toMatch(/reading of the data rather than a field in it/);
+  });
+});
+
+describe("Principal's Snapshot", () => {
+  it('renders the tiles a session can read and omits the rest, without failing', async () => {
+    // Only the fee query answers -- an accountant-shaped session, e.g. -- and
+    // the report must still be a real page, not an all-or-nothing failure.
+    response = result({
+      reportId: 'principal-snapshot',
+      title: "Principal's Snapshot",
+      schools: [
+        { school_id: 'stmarksmb', queries: [query('fees', [{ payable: 100000, paid: 80000, balance: 20000 }])] },
+      ],
+    });
+    const built = await build('principal-snapshot');
+    expect(kpi(built.spec, 'kpi-fees-collected')?.value).toBe('₹80,000');
+    expect(kpi(built.spec, 'kpi-students')).toBeUndefined();
+    expect(kpi(built.spec, 'kpi-staff')).toBeUndefined();
+  });
+
+  it('combines all five sources when every query answers', async () => {
+    response = result({
+      reportId: 'principal-snapshot',
+      title: "Principal's Snapshot",
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            query('by_class', [{ classname: 'V', seq: 5, students: 40 }]),
+            query('fees', [{ payable: 100000, paid: 80000, balance: 20000 }]),
+            query('staff', [{ on_roll: 25 }]),
+            query('admissions', [{ candidates: 50, admissions: 30 }]),
+            query('attendance', [{ marked_days: 100, present_days: 90 }]),
+          ],
+        },
+      ],
+    });
+    const built = await build('principal-snapshot');
+    expect(kpi(built.spec, 'kpi-students')?.value).toBe('40');
+    expect(kpi(built.spec, 'kpi-attendance')?.value).toBe('90.0%');
+    expect(kpi(built.spec, 'kpi-admissions')?.value).toBe('30');
+  });
+});
+
+describe('Transport Analytics', () => {
+  it('reports riders and both route counts, and orders classes by enrolment rather than by name', async () => {
+    response = result({
+      reportId: 'transport-analytics',
+      title: 'Transport Analytics',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            query('totals', [{ riders: 300, pickup_routes: 12, drop_routes: 11 }]),
+            query('by_class', [
+              { classname: 'X', students: 20 },
+              { classname: 'II', students: 15 },
+            ]),
+            query('class_order', [
+              { classname: 'X', seq: 11 },
+              { classname: 'II', seq: 3 },
+            ]),
+          ],
+        },
+      ],
+    });
+    const built = await build('transport-analytics');
+    expect(kpi(built.spec, 'kpi-riders')?.value).toBe('300');
+    expect(kpi(built.spec, 'kpi-drop-routes')?.value).toBe('11');
+    const barClass = built.spec.widgets.find((w) => w.id === 'bar-class');
+    expect(barClass?.type === 'bar' ? barClass.data.map((r) => r['classname']) : null).toEqual(['II', 'X']);
+  });
+
+  it('says on screen that it carries no date filter, and names an empty roster rather than leaving it blank', async () => {
+    response = result({
+      reportId: 'transport-analytics',
+      title: 'Transport Analytics',
+      schools: [{ school_id: 'stmarksmb', queries: [query('totals', [{ riders: 0, pickup_routes: 0, drop_routes: 0 }])] }],
+    });
+    const built = await build('transport-analytics');
+    expect(built.logic.notes.join(' ')).toMatch(/no date column that can be trusted/);
+    expect(built.logic.notes.join(' ')).toMatch(/No transport assignments are recorded/);
+  });
+});
+
+describe('Library & Textbooks', () => {
+  it('flags overdue copies and states the low-stock threshold', async () => {
+    response = result({
+      reportId: 'library-textbooks',
+      title: 'Library & Textbooks',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [
+            query('inventory', [{ titles: 500, total_copies: 900, available_copies: 300 }]),
+            query('overdue', [{ overdue: 14 }]),
+          ],
+        },
+      ],
+    });
+    const built = await build('library-textbooks');
+    expect(kpi(built.spec, 'kpi-overdue')?.value).toBe('14');
+    expect(kpi(built.spec, 'kpi-overdue')?.tone).toBe('warning');
+    expect(built.logic.notes.join(' ')).toMatch(/fewer than 3 copies/);
   });
 });
 

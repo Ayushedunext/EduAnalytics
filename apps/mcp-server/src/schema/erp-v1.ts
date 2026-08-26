@@ -37,10 +37,61 @@
  * is stamped with the CURRENT year rather than the row's, `statusid` means
  * different things in the two tables, and neither is unique on (subject, date).
  * Three more tables arrived in the same extract — `books_data_set`,
- * `book_issue_data_set`, `student_transport_data_set` — and are deliberately NOT
- * catalogued yet: Library and Transport are their own catalog entries in docs/06
- * §2 and have not been scoped, and an uncatalogued table is one the guard
- * refuses rather than one the model can quietly reach.
+ * `book_issue_data_set`, `student_transport_data_set` — and were deliberately
+ * NOT catalogued at the time: Library and Transport are their own catalog
+ * entries in docs/06 §2, and an uncatalogued table is one the guard refuses
+ * rather than one the model can quietly reach.
+ *
+ * TRANSPORT AND LIBRARY, added 2026-08-26, corrected the same day. The first
+ * cut of these three entries was written as an INFERENCE from this catalog's
+ * own naming conventions, with no sample row read — the "cannot usefully be
+ * stubbed" situation docs/11 §2 item 6 already describes for the per-school
+ * schema at large, at the scale of two tables rather than seven. That inference
+ * turned out wrong in specific, discoverable ways the moment the two dashboards
+ * were run against the local `ai_analysis` MySQL instance this dev environment
+ * actually has loaded (`db/platform/seed/stmarks.sql`'s `db_name`) — Transport
+ * Analytics failed outright and Library & Textbooks lost three of its five
+ * panels, which is what a wrong column name looks like at runtime rather than
+ * in a comment. The columns below are corrected against
+ * `information_schema.columns` read directly from that instance, the same
+ * verification every other table in this file already had. Three things this
+ * pass found, each a trap the same way the two attendance tables' were:
+ *
+ *   1. `student_transport_data_set` keys students by `studentprofileid`, not
+ *      `studentid` — the only table in this catalog that does. It also has no
+ *      `classseq` (join students_data_set on studentprofileid for the
+ *      ordinal, the same technique buildAttendance already uses) and no
+ *      `deactivation_date` — there is no column recording whether an
+ *      assignment is still current, so a query here reports every row the
+ *      table holds, not a "currently assigned" subset.
+ *   2. `books_data_set` is one row per PHYSICAL COPY (`bookid` does not
+ *      repeat — 1,693 rows, 1,693 distinct `bookid`, 1,460 distinct
+ *      `bookname`), not one row per title with a copies-held/copies-available
+ *      pair. There is no `totalcopies`, no `availablecopies`, no `isbn`, no
+ *      `category` and no `title` column — "in stock" is `statusname =
+ *      'Available'` on a copy's own row, counted per `bookname`.
+ *      `booktypename` is the nearest thing to a category and it is exactly as
+ *      messy as `stafftype` elsewhere in this file: "STORY" and "Story Books"
+ *      as two different values, plus test junk ("test", "add v3"). Report it
+ *      as written; do not attempt to canonicalise it.
+ *   3. `book_issue_data_set` carries the SAME stamped-current-year trap as
+ *      both attendance tables: every row's `academicyearname` reads the
+ *      current year regardless of `issuedate`, confirmed on rows from 2023 and
+ *      2024 all labelled `2026-27`. Filter on `issuedate`/`duedate` instead,
+ *      never on the year column, and its `id` disambiguates re-issues the same
+ *      role `id` plays on the attendance tables. It also mixes student and
+ *      staff borrowers — `employeeid`/`employeename` are populated wherever
+ *      `issuetype = 'Employee'`, and the sampled data is entirely that type —
+ *      so a report reading only `studentid` silently reports zero for every
+ *      transaction this extract actually has.
+ *
+ * Real data exists for exactly one org, and it is the same one Attendance
+ * found it in: `books_data_set`/`book_issue_data_set` hold rows only for
+ * `training_edubac` (1,693 and 185 respectively), none for the St Marks
+ * schools. `student_transport_data_set` holds zero rows anywhere, for any
+ * school — not an extract gap discovered here, a genuinely empty table. Both
+ * dashboards say all of this on screen, not only here
+ * (services/dashboards.ts).
  */
 
 import type { SchemaCatalog } from './catalog.js';
@@ -554,6 +605,157 @@ export const ERP_V1: SchemaCatalog = {
     ],
   },
   {
+    /**
+     * Verified 2026-08-26 against `information_schema.columns` on the local
+     * `ai_analysis` instance (see the file header note above). No rows exist
+     * for this table anywhere in the extract -- every query against it is
+     * correct SQL over zero data, not a stub.
+     */
+    name: 'student_transport_data_set',
+    domain: 'students',
+    description:
+      "One row per student's transport assignment. No academic-year date column and no `deactivation_date`, so a query here sees every assignment row the table holds, not a filtered current subset.",
+    columns: [
+      { name: 'id', type: 'bigint' },
+      { name: 'routeassignmentid', type: 'bigint', description: "The ERP's own assignment record id." },
+      {
+        name: 'studentprofileid',
+        type: 'bigint',
+        description: 'The join key to students_data_set for this table -- NOT studentid, which this table does not carry at all.',
+      },
+      { name: 'academicyearid', type: 'bigint' },
+      {
+        name: 'academicyearname',
+        type: 'varchar',
+        description: 'DO NOT FILTER ON THIS COLUMN. Carries the same stamped-current-year trap confirmed on both attendance tables and book_issue_data_set; this table has no per-row date to filter on instead, so a query here is simply unfiltered by time.',
+      },
+      { name: 'academicyearfromdate', type: 'varchar' },
+      { name: 'academicyeartodate', type: 'varchar' },
+      {
+        name: 'school_db',
+        type: 'varchar',
+        description: 'Tenant discriminator for this schema version. Injected by the MCP server as a bound parameter -- never write it into a query yourself.',
+      },
+      {
+        name: 'society_db',
+        type: 'varchar',
+        description: "The org (the ERP's 'society') this row belongs to.",
+      },
+      { name: 'studentname', type: 'varchar', pii: 'students' },
+      { name: 'enrollmentno', type: 'varchar', pii: 'students' },
+      { name: 'classname', type: 'varchar' },
+      {
+        name: 'sectionname',
+        type: 'varchar',
+        description: 'Carries no classseq -- join students_data_set on studentprofileid if the classes need ordering, the same technique student_attendance_data_set already requires.',
+      },
+      { name: 'pickuproutename', type: 'varchar' },
+      { name: 'droproutename', type: 'varchar', description: 'Can differ from pickuproutename -- a student is not guaranteed the same route both ways.' },
+      { name: 'pickupstopname', type: 'varchar' },
+      { name: 'dropstopname', type: 'varchar' },
+      { name: 'modeoftransport', type: 'varchar' },
+      { name: 'createdon', type: 'datetime' },
+    ],
+  },
+  {
+    /**
+     * Verified 2026-08-26 against `information_schema.columns` on the local
+     * `ai_analysis` instance (see the file header note above). Real data
+     * exists only for `training_edubac` (1,693 rows), none for the St Marks
+     * schools.
+     */
+    name: 'books_data_set',
+    domain: 'students',
+    description:
+      'One row per PHYSICAL COPY, not per title -- `bookid` never repeats. A title with several copies is several rows sharing a `bookname`. "In stock" is `statusname` on the copy\'s own row, not a stored count.',
+    columns: [
+      { name: 'id', type: 'bigint' },
+      { name: 'bookid', type: 'bigint', description: 'Unique per COPY (confirmed: as many distinct bookid as rows), not per title.' },
+      {
+        name: 'school_db',
+        type: 'varchar',
+        description: 'Tenant discriminator for this schema version. Injected by the MCP server as a bound parameter -- never write it into a query yourself.',
+      },
+      {
+        name: 'society_db',
+        type: 'varchar',
+        description: "The org (the ERP's 'society') this row belongs to.",
+      },
+      { name: 'bookname', type: 'varchar', description: 'The title. Group by this, not bookid, to count copies of the same book.' },
+      { name: 'accessionno', type: 'varchar', description: "The library's own per-copy accession number." },
+      { name: 'authorname', type: 'varchar' },
+      { name: 'publishername', type: 'varchar' },
+      {
+        name: 'booktypename',
+        type: 'varchar',
+        description: "Free text, and messy: 'STORY' and 'Story Books' both occur as separate values, alongside test junk ('test', 'add v3'). Report it as written -- do not canonicalise casing or merge values, the same rule stafftype (employees_data_set) already carries.",
+      },
+      {
+        name: 'statusname',
+        type: 'varchar',
+        description: "Observed values: 'Available', 'Issued'. No canonical list was supplied, so an unrecognised value should be shown as recorded rather than assumed to mean either.",
+      },
+      { name: 'yearofpublication', type: 'varchar' },
+      { name: 'createdon', type: 'datetime' },
+    ],
+  },
+  {
+    /**
+     * Verified 2026-08-26 against `information_schema.columns` on the local
+     * `ai_analysis` instance (see the file header note above). Real data
+     * exists only for `training_edubac` (185 rows), none for the St Marks
+     * schools.
+     */
+    name: 'book_issue_data_set',
+    domain: 'students',
+    description:
+      'One row per issue transaction, to a student OR a member of staff. `issuetype` names which; the sampled data is entirely staff transactions, so a report reading only the student columns would silently show zero activity.',
+    columns: [
+      { name: 'id', type: 'bigint', description: 'Unique per transaction row.' },
+      { name: 'issueid', type: 'bigint', description: "The ERP's own issue record id." },
+      { name: 'bookid', type: 'bigint' },
+      { name: 'academicyearid', type: 'bigint' },
+      {
+        name: 'academicyearname',
+        type: 'varchar',
+        description: 'DO NOT FILTER ON THIS COLUMN. Confirmed stamped with the CURRENT academic year on every row regardless of issuedate -- rows from 2023 and 2024 both read 2026-27. Filter on issuedate/duedate instead, the same trap and the same fix as both attendance tables.',
+      },
+      { name: 'academicyearfromdate', type: 'varchar' },
+      { name: 'academicyeartodate', type: 'varchar' },
+      {
+        name: 'issuetype',
+        type: 'varchar',
+        description: "Who the copy was issued to. Observed value in this extract: 'Employee' -- read this column rather than assuming studentid is populated.",
+      },
+      {
+        name: 'school_db',
+        type: 'varchar',
+        description: 'Tenant discriminator for this schema version. Injected by the MCP server as a bound parameter -- never write it into a query yourself.',
+      },
+      {
+        name: 'society_db',
+        type: 'varchar',
+        description: "The org (the ERP's 'society') this row belongs to.",
+      },
+      { name: 'bookname', type: 'varchar' },
+      { name: 'accessionno', type: 'varchar' },
+      { name: 'studentid', type: 'bigint', description: "0 (not NULL) on a staff issue -- test for issuetype, not for a non-zero id, to tell a student transaction from a staff one." },
+      { name: 'studentname', type: 'varchar', pii: 'students' },
+      { name: 'employeeid', type: 'bigint' },
+      { name: 'employeename', type: 'varchar', pii: 'staff' },
+      { name: 'classname', type: 'varchar' },
+      { name: 'sectionname', type: 'varchar' },
+      {
+        name: 'issuedate',
+        type: 'varchar',
+        description: 'YYYY-MM-DD as text, like attendancedate -- compares and sorts correctly as text.',
+      },
+      { name: 'duedate', type: 'varchar', description: 'YYYY-MM-DD as text.' },
+      { name: 'returndate', type: 'varchar', description: 'YYYY-MM-DD as text. NULL while the copy is still out.' },
+      { name: 'createdon', type: 'datetime' },
+    ],
+  },
+  {
     name: 'schools_data_set',
     domain: 'reference',
     description:
@@ -607,6 +809,12 @@ export const ERP_V1: SchemaCatalog = {
       on: ['employeeid'],
       note: 'Needed for designation, staff type and joining/leaving dates; the attendance table carries only the department name.',
     },
+    {
+      from: 'book_issue_data_set',
+      to: 'books_data_set',
+      on: ['bookid'],
+      note: 'Both are inferred, unverified tables (see file header). Needed only if a query wants a book column the issue table does not already denormalise, such as author or category.',
+    },
   ],
 
   /**
@@ -627,5 +835,6 @@ export const ERP_V1: SchemaCatalog = {
     'Neither attendance table is unique on (student, date) or (employee, date). De-duplicate first -- GROUP BY the subject and the date taking MAX(id), then join back on id -- or a count of days will be inflated.',
     'Order classes by classseq, never by classname, which sorts as text (X before IX).',
     'A student or employee is current when deactivation_date IS NULL.',
+    'student_transport_data_set, books_data_set and book_issue_data_set are UNVERIFIED: their columns are inferred from this catalog\'s conventions, not read from a sample of the real table. Treat results from them as provisional and say so when asked about transport or library data.',
   ],
 };

@@ -359,20 +359,35 @@ const DASHBOARDS: readonly DashboardCard[] = [
   {
     id: 'transport-analytics',
     title: 'Transport Analytics',
-    blurb: 'Route ridership & capacity utilisation',
+    blurb: 'Route ridership by route, stop and class',
     icon: '🚌',
     group: 'school',
-    status: 'blocked',
-    reason: 'No transport data exists in the ERP extract',
+    /**
+     * `available` since 2026-08-26, on an UNVERIFIED schema
+     * (mcp-server/src/schema/erp-v1.ts) — the table's existence was known, its
+     * columns were not, and the dashboard's own on-screen notes say so
+     * (services/dashboards.ts). This card's job is to say the report is
+     * reachable, not to vouch for the numbers; that caveat belongs on the
+     * dashboard itself, where it is.
+     */
+    status: 'available',
   },
   {
     id: 'library-textbooks',
     title: 'Library & Textbooks',
-    blurb: 'Issues, overdues, low-stock alerts',
+    blurb: 'Issues by month, low-stock alerts, overdues',
     icon: '📚',
     group: 'school',
-    status: 'blocked',
-    reason: 'No library data exists in the ERP extract',
+    // Same caveat as Transport Analytics above: available on an unverified schema.
+    status: 'available',
+  },
+  {
+    id: 'principal-snapshot',
+    title: "Principal's Snapshot",
+    blurb: 'Enrollment, fees, staff, admissions and attendance in one page',
+    icon: '🏫',
+    group: 'school',
+    status: 'available',
   },
 ];
 

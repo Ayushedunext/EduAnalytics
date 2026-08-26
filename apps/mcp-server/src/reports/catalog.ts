@@ -723,6 +723,239 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
   ],
 };
 
+/**
+ * Principal's Snapshot -- docs/06 §2 ("default single-school landing"), taken
+ * up 2026-08-26 as one of the remaining predefined dashboards.
+ *
+ * -- Why this is genuinely cross-domain, and what that costs -----------------
+ * Every other report in this file reads one domain's tables. This one reads
+ * three -- students_data_set (students), fee_compile_data_set (fees) and
+ * employees_data_set (staff) -- because a principal's one-page snapshot is
+ * exactly the report a single-domain catalog cannot produce. The SQL guard
+ * already enforces access per TABLE, not per report (sql/guard.ts reads
+ * `table.domain`, never a report-level field), so a session with only
+ * `fees.read` is refused the staff and enrolment queries here and served the
+ * fee one -- correct without this file doing anything extra. `domain:
+ * 'students'` below is informational only (it feeds the "Source" chip's
+ * grouping and nothing else -- confirmed by grep before this was written), and
+ * reports-catalog.test.ts's permission-gating test was generalised alongside
+ * this report to check each query against the domains its OWN tables need
+ * rather than assume one domain speaks for the whole report.
+ *
+ * -- What it is, and what it deliberately is not -----------------------------
+ * The same five numbers Home's KPI strip already shows (services/home.ts),
+ * rebuilt as a first-class `report_definitions` entry: one with a Logic panel,
+ * a PDF, a place in My Reports and clone-to-edit -- everything Home's ad hoc
+ * `run_multi` metrics do not get. It is not a replacement for Home, and it is
+ * not a re-derivation of any other dashboard's full breakdown -- follow the
+ * "Clone & customize" or "Ask AI about this data" link on this dashboard, or
+ * open Enrollment/Fee Collection/Staff Overview/Admissions/Attendance
+ * directly, for the detail underneath any one of these five numbers.
+ */
+const PRINCIPAL_SNAPSHOT: PredefinedReport = {
+  id: 'principal-snapshot',
+  title: "Principal's Snapshot",
+  schema_version: 'erp-v1',
+  source:
+    'students_data_set · fee_compile_data_set · employees_data_set · students_admission_data_set · student_attendance_data_set',
+  domain: 'students',
+  params: [ACADEMIC_YEAR, AS_OF_DATE, FROM_DATE, TO_DATE],
+  queries: [
+    {
+      key: 'by_class',
+      description: 'Students on roll by class (also gives the roll total)',
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, COUNT(*) AS students ' +
+        'FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        'GROUP BY classname ORDER BY seq',
+    },
+    {
+      key: 'fees',
+      description: 'Fee demand, realisation and balance for the year',
+      sql:
+        'SELECT ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS paid, ROUND(SUM(balance_amount)) AS balance ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      key: 'staff',
+      description: 'Staff on roll as of the date',
+      sql:
+        'SELECT SUM(CASE WHEN (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'AND (joining_date IS NULL OR joining_date <= :as_of_date) THEN 1 ELSE 0 END) AS on_roll ' +
+        'FROM employees_data_set',
+    },
+    {
+      key: 'admissions',
+      description: 'Candidates and admissions so far this year',
+      sql:
+        'SELECT COUNT(*) AS candidates, ' +
+        "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
+        'FROM students_admission_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      /**
+       * The same de-duplication Attendance Analytics uses (STUDENT_DAYS below),
+       * inlined rather than shared across two reports of different shape -- see
+       * that constant's own comment for why one row per student-day must be
+       * taken before anything is counted.
+       */
+      key: 'attendance',
+      description: 'Attendance rate over the window',
+      sql:
+        "SELECT COUNT(*) AS marked_days, SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days " +
+        'FROM (SELECT MAX(id) AS id FROM student_attendance_data_set ' +
+        'WHERE attendancedate BETWEEN :from_date AND :to_date ' +
+        'GROUP BY studentid, attendancedate) k ' +
+        'JOIN student_attendance_data_set a ON a.id = k.id',
+    },
+  ],
+};
+
+/**
+ * Transport Analytics -- docs/06 §2, taken up 2026-08-26, corrected the same
+ * day against schema/erp-v1.ts's verified `student_transport_data_set` entry.
+ *
+ * No parameters, and that is a property of the table rather than an
+ * oversight: it carries no trustworthy date (its `academicyearname` carries
+ * the same stamped-current-year trap the attendance tables and
+ * book_issue_data_set do, and there is no other date column), so a query here
+ * reads whatever rows the table holds, unfiltered by time. Class ordering
+ * needs its own query (`class_order`) rather than a `classseq` column,
+ * because this table has none -- the same technique
+ * ATTENDANCE_ANALYTICS.class_order already uses, joined on `studentprofileid`
+ * rather than `studentid` since that is the only key this table carries.
+ * "Capacity utilisation" from the catalog blurb is still not attempted: no
+ * seating-capacity column exists, verified or otherwise.
+ */
+const TRANSPORT_ANALYTICS: PredefinedReport = {
+  id: 'transport-analytics',
+  title: 'Transport Analytics',
+  schema_version: 'erp-v1',
+  source: 'student_transport_data_set',
+  domain: 'students',
+  params: [],
+  queries: [
+    {
+      key: 'totals',
+      description: 'Riders, and distinct pickup/drop routes in use',
+      sql:
+        'SELECT COUNT(*) AS riders, COUNT(DISTINCT pickuproutename) AS pickup_routes, ' +
+        'COUNT(DISTINCT droproutename) AS drop_routes FROM student_transport_data_set',
+    },
+    {
+      key: 'by_pickup_route',
+      description: 'Riders by pickup route',
+      sql:
+        'SELECT pickuproutename, COUNT(*) AS students FROM student_transport_data_set ' +
+        'GROUP BY pickuproutename ORDER BY students DESC',
+    },
+    {
+      key: 'by_mode',
+      description: 'Riders by mode of transport',
+      sql:
+        'SELECT modeoftransport, COUNT(*) AS students FROM student_transport_data_set ' +
+        'GROUP BY modeoftransport ORDER BY students DESC',
+    },
+    {
+      key: 'by_class',
+      description: 'Riders by class',
+      sql:
+        'SELECT classname, COUNT(*) AS students FROM student_transport_data_set ' +
+        'GROUP BY classname ORDER BY students DESC',
+    },
+    {
+      key: 'class_order',
+      description: 'Class ordinals, read from enrolment because this table has none',
+      sql: 'SELECT classname, MIN(classseq) AS seq FROM students_data_set GROUP BY classname ORDER BY seq',
+    },
+  ],
+};
+
+/**
+ * Library & Textbooks -- docs/06 §2, taken up 2026-08-26, corrected the same
+ * day against schema/erp-v1.ts's verified `books_data_set` and
+ * `book_issue_data_set` entries.
+ *
+ * No academic year here either: `books_data_set` has no year concept at all
+ * (it is a copy's current status, not a per-year record), and
+ * `book_issue_data_set`'s `academicyearname` carries the same
+ * stamped-current-year trap as both attendance tables (confirmed: rows from
+ * 2023 and 2024 all read `2026-27`) -- so `issues_by_month` filters on
+ * `issuedate` directly, the same fix Attendance Analytics already applies.
+ * `AS_OF_DATE` still gates "overdue", which is a real date comparison and
+ * unaffected by either trap.
+ *
+ * "Titles" and "copies" are two different numbers because the table is one
+ * row per COPY (`books_data_set`'s own header note): `bookname` is the title,
+ * `bookid` the copy, and "in stock" reads `statusname = 'Available'` on that
+ * copy's row rather than a stored count. "Low-stock alerts" from the catalog
+ * blurb is read as fewer than 3 copies available of a title with at least
+ * one copy on record -- a threshold this report chooses, not one the ERP
+ * supplied, stated on screen for the same reason the Fee Defaulters aging
+ * bands are (services/dashboards.ts). `by_issue_type` publishes the raw
+ * student-vs-staff split the same way Attendance publishes its raw
+ * `by_status` and Admissions its raw `candidate_statusid` -- so a reader can
+ * check "is this mostly staff activity?" rather than have it assumed away.
+ */
+const LIBRARY_TEXTBOOKS: PredefinedReport = {
+  id: 'library-textbooks',
+  title: 'Library & Textbooks',
+  schema_version: 'erp-v1',
+  source: 'books_data_set · book_issue_data_set',
+  domain: 'students',
+  params: [AS_OF_DATE, FROM_DATE, TO_DATE],
+  queries: [
+    {
+      key: 'inventory',
+      description: 'Titles held, copies held and copies currently available',
+      sql:
+        'SELECT COUNT(DISTINCT bookname) AS titles, COUNT(*) AS total_copies, ' +
+        "SUM(CASE WHEN statusname = 'Available' THEN 1 ELSE 0 END) AS available_copies " +
+        'FROM books_data_set',
+    },
+    {
+      key: 'by_category',
+      description: 'Copies held and available by the ERP\'s own book-type label',
+      sql:
+        'SELECT booktypename, COUNT(*) AS total_copies, ' +
+        "SUM(CASE WHEN statusname = 'Available' THEN 1 ELSE 0 END) AS available_copies " +
+        'FROM books_data_set GROUP BY booktypename ORDER BY total_copies DESC',
+    },
+    {
+      key: 'low_stock',
+      description: 'Titles with fewer than 3 copies available',
+      sql:
+        'SELECT bookname, booktypename, COUNT(*) AS total_copies, ' +
+        "SUM(CASE WHEN statusname = 'Available' THEN 1 ELSE 0 END) AS available_copies " +
+        'FROM books_data_set GROUP BY bookname, booktypename ' +
+        "HAVING SUM(CASE WHEN statusname = 'Available' THEN 1 ELSE 0 END) < 3 " +
+        'ORDER BY available_copies ASC, total_copies DESC LIMIT 50',
+    },
+    {
+      key: 'issues_by_month',
+      description: 'Issues by month, over the selected window',
+      sql:
+        'SELECT LEFT(issuedate, 7) AS ym, COUNT(*) AS issues FROM book_issue_data_set ' +
+        'WHERE issuedate BETWEEN :from_date AND :to_date ' +
+        'GROUP BY LEFT(issuedate, 7) ORDER BY ym',
+    },
+    {
+      key: 'overdue',
+      description: 'Copies not yet returned past their due date',
+      sql:
+        'SELECT COUNT(*) AS overdue FROM book_issue_data_set ' +
+        'WHERE returndate IS NULL AND duedate < :as_of_date',
+    },
+    {
+      key: 'by_issue_type',
+      description: 'Issues by who they were issued to (student vs. staff)',
+      sql: 'SELECT issuetype, COUNT(*) AS issues FROM book_issue_data_set GROUP BY issuetype ORDER BY issues DESC',
+    },
+  ],
+};
+
 const REPORTS: readonly PredefinedReport[] = [
   ENROLLMENT_OVERVIEW,
   FEE_COLLECTION,
@@ -730,6 +963,9 @@ const REPORTS: readonly PredefinedReport[] = [
   STAFF_OVERVIEW,
   ADMISSIONS_FUNNEL,
   ATTENDANCE_ANALYTICS,
+  PRINCIPAL_SNAPSHOT,
+  TRANSPORT_ANALYTICS,
+  LIBRARY_TEXTBOOKS,
 ];
 
 const BY_ID = new Map(REPORTS.map((report) => [report.id, report]));

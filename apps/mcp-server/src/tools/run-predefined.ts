@@ -59,6 +59,16 @@ export const runPredefinedInput = {
     .record(z.union([z.string(), z.number()]))
     .optional()
     .describe("Filter values the report declares, e.g. { academic_year: '2026-27' }."),
+  /**
+   * Per-widget clone (docs/06 §3): run only these named queries from the
+   * report's catalog entry instead of every query a full dashboard needs.
+   * Still no SQL from the caller — a key names one of the report's own
+   * pre-vetted queries, nothing else.
+   */
+  query_keys: z
+    .array(z.string().min(1))
+    .optional()
+    .describe('Limit execution to these named queries from the report (a single-widget clone).'),
 } satisfies z.ZodRawShape;
 
 interface QueryOutput {
@@ -80,6 +90,7 @@ export async function runPredefined(
     report_id: string;
     school_ids: string[];
     params?: Record<string, string | number> | undefined;
+    query_keys?: string[] | undefined;
   },
 ): Promise<ReturnType<typeof ok>> {
   const schoolIds = await requireInScope(context, args.school_ids, TOOL);
@@ -136,8 +147,22 @@ export async function runPredefined(
     }
   }
 
+  const queryKeys = args.query_keys;
+  if (queryKeys !== undefined) {
+    const known = new Set(report.queries.map((q) => q.key));
+    for (const key of queryKeys) {
+      if (!known.has(key)) {
+        throw new PlatformError({
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: `This report has no query called "${key}".`,
+          details: { query_key: key },
+        });
+      }
+    }
+  }
+
   const perSchool = await Promise.all(
-    schoolIds.map(async (schoolId) => runForSchool(context, report.id, schoolId, bound)),
+    schoolIds.map(async (schoolId) => runForSchool(context, report.id, schoolId, bound, queryKeys)),
   );
 
   return ok({
@@ -156,6 +181,7 @@ async function runForSchool(
   reportId: string,
   schoolId: string,
   bound: Record<string, string | number | null>,
+  queryKeys: string[] | undefined,
 ): Promise<{
   school_id: string;
   status: 'ok' | 'failed';
@@ -201,6 +227,16 @@ async function runForSchool(
   }
 
   /**
+   * A per-widget clone (docs/06 §3) asks for one query instead of the whole
+   * report — filtered here, once, rather than in every caller of
+   * `run_predefined`, so a single-widget clone pays for one query's cost, not
+   * the full dashboard's. `runPredefined` above already proved every key in
+   * `queryKeys` names a real query, so an empty result here is unreachable.
+   */
+  const selectedQueries =
+    queryKeys === undefined ? report.queries : report.queries.filter((q) => queryKeys.includes(q.key));
+
+  /**
    * A report's queries run concurrently, bounded by the school's pool size.
    *
    * Sequentially they cost the SUM of their times, which on the fee tables (no
@@ -210,16 +246,16 @@ async function runForSchool(
    * take a share of the replica that its neighbours need. Faster, within the
    * same blast radius.
    */
-  const queries: QueryOutput[] = new Array<QueryOutput>(report.queries.length);
+  const queries: QueryOutput[] = new Array<QueryOutput>(selectedQueries.length);
   let next = 0;
   const workers = Array.from(
-    { length: Math.min(config.POOL_CONNECTION_LIMIT, report.queries.length) },
+    { length: Math.min(config.POOL_CONNECTION_LIMIT, selectedQueries.length) },
     async () => {
       for (;;) {
         const index = next;
         next += 1;
-        if (index >= report.queries.length) return;
-        queries[index] = await runQuery(report.queries[index]!);
+        if (index >= selectedQueries.length) return;
+        queries[index] = await runQuery(selectedQueries[index]!);
       }
     },
   );
@@ -227,11 +263,43 @@ async function runForSchool(
 
   return { school_id: schoolId, status: 'ok', queries };
 
-  async function runQuery(query: { key: string; description: string; sql: string }): Promise<QueryOutput> {
+  async function runQuery(query: {
+    key: string;
+    description: string;
+    sql: string;
+    variants?: Readonly<Record<string, string>>;
+  }): Promise<QueryOutput> {
     if (catalog === undefined) throw new Error('unreachable: catalog checked above');
+
+    /**
+     * `bucket` is a SELECTOR among the query's own pre-vetted statements
+     * (reports/catalog.ts), never SQL text from the caller: the guard below
+     * never sees the value, only whichever fixed statement was chosen for it.
+     * A query with no `variants` (everything but a bucketed clone's own
+     * query) ignores `bucket` entirely.
+     */
+    const bucket = bound['bucket'];
+    let sqlToRun = query.sql;
+    if (typeof bucket === 'string' && query.variants !== undefined) {
+      const variant = query.variants[bucket];
+      if (variant === undefined) {
+        return {
+          key: query.key,
+          description: query.description,
+          sql: query.sql,
+          status: 'failed',
+          error: {
+            code: ERROR_CODES.VALIDATION_FAILED,
+            message: `"${bucket}" is not a time grouping this widget supports.`,
+          },
+        };
+      }
+      sqlToRun = variant;
+    }
+
     try {
       const prepared = prepareSelect({
-        sql: query.sql,
+        sql: sqlToRun,
         catalog,
         tenantKey: target.tenant.tenant_key,
         perms: context.call.perms,
@@ -254,10 +322,10 @@ async function runForSchool(
       return {
         key: query.key,
         description: query.description,
-        // The DEFINITION's SQL, which is what a reader is being asked to trust
-        // (ADR-019). The executed form adds the tenant filter and the cap, and
-        // that goes to the audit trail (docs/08 §7).
-        sql: query.sql,
+        // The DEFINITION's SQL that actually ran, which is what a reader is
+        // being asked to trust (ADR-019) — the bucket variant when one was
+        // selected, never the default text a different statement replaced.
+        sql: sqlToRun,
         status: 'ok',
         columns: outcome.columns,
         rows: outcome.rows,
@@ -268,7 +336,7 @@ async function runForSchool(
       return {
         key: query.key,
         description: query.description,
-        sql: query.sql,
+        sql: sqlToRun,
         status: 'failed',
         error: wireOf(err),
       };

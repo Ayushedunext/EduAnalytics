@@ -284,14 +284,16 @@ function maxValueIndex(rows: readonly Record<string, unknown>[], field: string):
 export function BarPanel({
   widget,
   compact,
+  actions,
 }: {
   widget: BarWidget;
   /** Card-sized: fixed short height, axes dropped, chosen by shape alone (Home preview cards). */
   compact?: boolean | undefined;
+  actions?: ReactNode | undefined;
 }): ReactElement {
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="medium" compact={compact}>
+      <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">▤</span>
           <span className="msg">No records available.</span>
@@ -331,7 +333,7 @@ export function BarPanel({
     const labelChars = Math.floor((labelWidth - 14) / CHAR_PX);
 
     return (
-      <Panel title={widget.title} variant="wide" compact={compact}>
+      <Panel title={widget.title} variant="wide" compact={compact} actions={actions}>
         <ResponsiveContainer width="100%" height={height}>
           <BarChart
             data={[...widget.data]}
@@ -386,7 +388,7 @@ export function BarPanel({
   }
 
   return (
-    <Panel title={widget.title} variant="medium" compact={compact}>
+    <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
       <ResponsiveContainer width="100%" height={compact === true ? 190 : 260}>
         <BarChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           {compact !== true && <CartesianGrid stroke={GRID} vertical={false} />}
@@ -460,10 +462,12 @@ function makeLineDot(lastIndex: number): (props: LineDotProps) => ReactElement {
 export function LinePanel({
   widget,
   compact,
+  actions,
 }: {
   widget: LineWidget;
   /** Card-sized: fixed short height, axes dropped (Home preview cards). */
   compact?: boolean | undefined;
+  actions?: ReactNode | undefined;
 }): ReactElement {
   const gradId = useGradientId('area');
 
@@ -471,7 +475,7 @@ export function LinePanel({
   // the same axes a real trend uses — an honest small state instead (§18/19).
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="hero" compact={compact}>
+      <Panel title={widget.title} variant="hero" compact={compact} actions={actions}>
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">📈</span>
           <span className="msg">No records available for this period.</span>
@@ -485,7 +489,7 @@ export function LinePanel({
     const value = row[widget.y];
     const label = row[widget.x];
     return (
-      <Panel title={widget.title} variant="hero" compact={compact}>
+      <Panel title={widget.title} variant="hero" compact={compact} actions={actions}>
         <div className="specSingle">
           <span className="value">
             {typeof value === 'number' ? full.format(value) : String(value ?? '—')}
@@ -498,7 +502,7 @@ export function LinePanel({
   }
 
   return (
-    <Panel title={widget.title} variant="hero" compact={compact}>
+    <Panel title={widget.title} variant="hero" compact={compact} actions={actions}>
       <ResponsiveContainer width="100%" height={compact === true ? 190 : 260}>
         <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <defs>
@@ -559,14 +563,16 @@ function centerLabel(text: string, max = 15): string {
 export function DonutPanel({
   widget,
   compact,
+  actions,
 }: {
   widget: DonutWidget;
   /** Card-sized: smaller ring, no legend list (Home preview cards). */
   compact?: boolean | undefined;
+  actions?: ReactNode | undefined;
 }): ReactElement {
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="side" compact={compact}>
+      <Panel title={widget.title} variant="side" compact={compact} actions={actions}>
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">◔</span>
           <span className="msg">No records available.</span>
@@ -598,7 +604,7 @@ export function DonutPanel({
   const showDominant = widget.data.length > 1 && dominant !== null && dominantShare >= 0.5;
 
   return (
-    <Panel title={widget.title} variant="side" compact={compact}>
+    <Panel title={widget.title} variant="side" compact={compact} actions={actions}>
       {/**
        * The centre readout is a plain HTML overlay, not an SVG `<Label>` child
        * of `<Pie>`. Recharts 3's Pie no longer mounts a child `Label` at all
@@ -679,9 +685,15 @@ export function DonutPanel({
   );
 }
 
-export function TablePanel({ widget }: { widget: TableWidget }): ReactElement {
+export function TablePanel({
+  widget,
+  actions,
+}: {
+  widget: TableWidget;
+  actions?: ReactNode | undefined;
+}): ReactElement {
   return (
-    <Panel title={widget.title} variant="wide">
+    <Panel title={widget.title} variant="wide" actions={actions}>
       {widget.rows.length === 0 ? (
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">▤</span>
@@ -735,6 +747,7 @@ function Panel({
   title,
   variant,
   compact,
+  actions,
   children,
 }: {
   title?: string | undefined;
@@ -747,14 +760,25 @@ function Panel({
    * (same renderer produces what prints).
    */
   compact?: boolean | undefined;
+  /**
+   * Platform chrome the caller renders beside the title — e.g. a per-chart
+   * "⧉ Clone" button (docs/06 §3, per-widget customization). This is NOT
+   * part of the chart-spec contract (ADR-015 still governs the widget's
+   * DATA): the caller decides whether and what to render here from its own
+   * page state, never from anything inside `spec`. Dropped in `compact` and
+   * PDF rendering — neither owns page chrome (PDF renders no interactive
+   * controls at all).
+   */
+  actions?: ReactNode | undefined;
   children: ReactNode;
 }): ReactElement {
   if (compact === true) return <div className="specPanelCompact">{children}</div>;
   return (
     <section className={`card specPanel${variant !== undefined ? ` specPanel--${variant}` : ''}`}>
-      {title !== undefined && (
+      {(title !== undefined || actions !== undefined) && (
         <div className="specPanelHead">
-          <h3 className="specPanelTitle">{title}</h3>
+          {title !== undefined && <h3 className="specPanelTitle">{title}</h3>}
+          {actions !== undefined && <div className="specPanelActions">{actions}</div>}
         </div>
       )}
       {children}
@@ -793,22 +817,25 @@ export function WidgetView({
   widget,
   hero,
   compact,
+  actions,
 }: {
   widget: Widget;
   hero?: boolean | undefined;
   compact?: boolean | undefined;
+  /** Platform chrome beside the panel title — see `Panel`'s doc comment. Never offered to a KPI tile, which has no panel head to hold it. */
+  actions?: ReactNode | undefined;
 }): ReactElement {
   switch (widget.type) {
     case 'kpi':
       return <KpiTile widget={widget} hero={hero} />;
     case 'bar':
-      return <BarPanel widget={widget} compact={compact} />;
+      return <BarPanel widget={widget} compact={compact} actions={actions} />;
     case 'line':
-      return <LinePanel widget={widget} compact={compact} />;
+      return <LinePanel widget={widget} compact={compact} actions={actions} />;
     case 'donut':
-      return <DonutPanel widget={widget} compact={compact} />;
+      return <DonutPanel widget={widget} compact={compact} actions={actions} />;
     case 'table':
-      return <TablePanel widget={widget} />;
+      return <TablePanel widget={widget} actions={actions} />;
   }
 }
 

@@ -136,7 +136,33 @@ const {
   saveAiReport,
   updateReportVisual,
   setReportVisibility,
+  getRefineContext,
+  applyRefinement,
 } = await import('../src/services/custom-reports.js');
+
+/** A `run_predefined` result carrying only the `by_month` query — what a real server returns once `query_keys: ['by_month']` narrows it (mcp-server/src/tools/run-predefined.ts). */
+function feeCollectionByMonthResult(schoolIds: string[]) {
+  return {
+    report_id: 'fee-collection',
+    title: 'Fee Collection',
+    source: 'fee_collection_data_set · fee_compile_data_set',
+    params: {},
+    as_of: '2026-08-25T00:00:00.000Z',
+    schools: schoolIds.map((school_id) => ({
+      school_id,
+      status: 'ok',
+      queries: [
+        {
+          key: 'by_month',
+          description: 'Receipts by month, from the collection ledger',
+          sql: 'SELECT fee_month, MIN(MONTH(feedate)) AS mo, ROUND(SUM(paidamount)) AS collected FROM fee_collection_data_set WHERE academicyearname = :academic_year GROUP BY fee_month ORDER BY mo',
+          status: 'ok',
+          rows: [{ fee_month: 'Apr-26', mo: 4, collected: 120000 }],
+        },
+      ],
+    })),
+  };
+}
 
 function enrollmentPredefinedResult(schoolIds: string[]) {
   return {
@@ -361,5 +387,228 @@ describe('AUDIT_REPORT C17 — saved AI reports re-run without the model', () =>
     expect(toolCalls.length).toBeGreaterThan(callsBeforeRerun);
     expect(lastToolCall()?.tool).toBe('run_query');
     expect(rerun.spec.widgets).toHaveLength(1);
+  });
+});
+
+describe('per-widget clone (docs/06 §3)', () => {
+  it('clones one chart, asking run_predefined for only that widget’s query', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by month (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+    });
+
+    expect(cloned.spec.widgets).toHaveLength(1);
+    expect(cloned.spec.widgets[0]).toMatchObject({ id: 'line-month', title: 'Receipts by month' });
+    expect(lastToolCall()?.args['query_keys']).toEqual(['by_month']);
+  });
+
+  it('applies a bucket override to both the MCP params and the widget title', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by week (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+      bucket: 'week',
+    });
+
+    expect(cloned.spec.widgets[0]).toMatchObject({ title: 'Receipts by week' });
+    expect(lastToolCall()?.args).toMatchObject({ query_keys: ['by_month'] });
+    expect((lastToolCall()?.args['params'] as Record<string, unknown>)['bucket']).toBe('week');
+  });
+
+  it('rejects cloning a widget id the report does not have', async () => {
+    await expect(
+      cloneReport({
+        session: DIRECTOR,
+        correlationId: 'corr-1',
+        baseReportId: 'fee-collection',
+        name: 'Bogus widget',
+        schoolIds: ['stmarksmb'],
+        academicYear: '2026-27',
+        asOfDate: '2026-08-25',
+        widgetScope: 'not-a-real-widget',
+      }),
+    ).rejects.toThrow(PlatformError);
+  });
+
+  it('rejects a bucket the named widget does not offer', async () => {
+    await expect(
+      cloneReport({
+        session: DIRECTOR,
+        correlationId: 'corr-1',
+        baseReportId: 'fee-collection',
+        name: 'Bad bucket',
+        schoolIds: ['stmarksmb'],
+        academicYear: '2026-27',
+        asOfDate: '2026-08-25',
+        // bar-class has no bucket options at all (WIDGET_BUCKET_OPTIONS in dashboards.ts).
+        widgetScope: 'bar-class',
+        bucket: 'week',
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.VALIDATION_FAILED });
+  });
+
+  it('stays scoped to the same widget after an academic-year edit', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by month (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+      bucket: 'quarter',
+    });
+
+    const edited = await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-2',
+      id: cloned.id,
+      academicYear: '2027-28',
+      asOfDate: '2026-08-25',
+    });
+
+    // Still one widget, not the whole dashboard back — an AY-only edit must
+    // not silently widen a widget clone into a full-report clone.
+    expect(edited.spec.widgets).toHaveLength(1);
+    expect(edited.spec.widgets[0]).toMatchObject({ id: 'line-month', title: 'Receipts by quarter' });
+    expect(lastToolCall()?.args).toMatchObject({ query_keys: ['by_month'] });
+    expect((lastToolCall()?.args['params'] as Record<string, unknown>)).toMatchObject({
+      academic_year: '2027-28',
+      bucket: 'quarter',
+    });
+  });
+});
+
+describe('✎ Refine with AI (docs/06 §1, ADR-033’s explicitly-deferred action)', () => {
+  it('getRefineContext refuses anyone but the owner', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by month (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+    });
+
+    await expect(
+      getRefineContext({
+        session: NON_OWNER,
+        correlationId: 'corr-2',
+        id: cloned.id,
+        requestedSchoolIds: ['stmarksmb'],
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.REPORT_DEFINITION_FORBIDDEN });
+  });
+
+  it('getRefineContext hands back the report’s current SQL and widgets, freshly run', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by month (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+    });
+
+    const ctx = await getRefineContext({
+      session: DIRECTOR,
+      correlationId: 'corr-2',
+      id: cloned.id,
+      requestedSchoolIds: ['stmarksmb'],
+    });
+
+    expect(ctx.reportName).toBe('Receipts by month (copy)');
+    expect(ctx.widgets).toHaveLength(1);
+    expect(ctx.widgets[0]).toMatchObject({ id: 'line-month' });
+    expect(ctx.queries.some((q) => q.key === 'by_month')).toBe(true);
+  });
+
+  it('applyRefinement materializes a template-mode clone into raw_sql, never touching run_predefined again', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by month (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+    });
+    expect(cloned.mode).toBe('template');
+
+    mcpResponse = { columns: ['paymenttype', 'collected'], rows: [{ paymenttype: 'Cash', collected: 5000 }], truncated: false };
+    const applied = await applyRefinement({
+      session: DIRECTOR,
+      correlationId: 'corr-2',
+      id: cloned.id,
+      queries: [{ key: 'q1', sql: "SELECT paymenttype, SUM(paidamount) AS collected FROM fee_collection_data_set WHERE paymenttype = 'Cash' GROUP BY paymenttype" }],
+      draft: {
+        spec_version: 1,
+        title: 'Cash receipts',
+        widgets: [{ id: 'donut-cash', type: 'donut', label_field: 'paymenttype', value_field: 'collected', query_ref: 'q1' }],
+      },
+    });
+
+    expect(applied.mode).toBe('raw_sql');
+    expect(applied.current_version).toBe(2);
+    expect(applied.spec.widgets).toHaveLength(1);
+    expect(applied.spec.widgets[0]).toMatchObject({ id: 'donut-cash' });
+    expect(lastToolCall()?.tool).toBe('run_query');
+
+    // Re-viewing now goes through run_query, never back through run_predefined —
+    // the transition to raw_sql mode is permanent, matching every other
+    // AI-saved report's re-run semantics (AUDIT_REPORT C17).
+    const callsBefore = toolCalls.length;
+    await viewReport({ session: DIRECTOR, correlationId: 'corr-3', id: cloned.id, requestedSchoolIds: ['stmarksmb'] });
+    expect(toolCalls.length).toBeGreaterThan(callsBefore);
+    expect(lastToolCall()?.tool).toBe('run_query');
+  });
+
+  it('applyRefinement refuses anyone but the owner', async () => {
+    mcpResponse = feeCollectionByMonthResult(['stmarksmb']);
+    const cloned = await cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-1',
+      baseReportId: 'fee-collection',
+      name: 'Receipts by month (copy)',
+      schoolIds: ['stmarksmb'],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      widgetScope: 'line-month',
+    });
+
+    await expect(
+      applyRefinement({
+        session: NON_OWNER,
+        correlationId: 'corr-2',
+        id: cloned.id,
+        queries: [{ key: 'q1', sql: 'SELECT 1' }],
+        draft: { spec_version: 1, title: 'x', widgets: [{ id: 'w1', type: 'kpi', label: 'x', value: '1' }] },
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.REPORT_DEFINITION_FORBIDDEN });
   });
 });

@@ -81,6 +81,8 @@ export interface AiQueryEvent extends AuditBase {
   readonly input_tokens: number;
   readonly output_tokens: number;
   readonly cache_read_tokens?: number;
+  /** Present when this turn was seeded from an existing report ("Refine with AI", docs/06 §1) rather than a fresh Ask AI question. */
+  readonly report_id?: string;
 }
 
 /** A rejected scope request. Records what was asked (docs/08 §3: "logged"). */
@@ -104,7 +106,7 @@ export interface ReportDefinitionChangedEvent extends AuditBase {
   readonly kind: 'report_definition.changed';
   readonly report_id: string;
   readonly school_ids: readonly string[];
-  readonly action: 'cloned' | 'saved_from_ai' | 'updated_visual' | 'updated_sql' | 'rolled_back' | 'deleted';
+  readonly action: 'cloned' | 'saved_from_ai' | 'updated_visual' | 'updated_sql' | 'refined_with_ai' | 'rolled_back' | 'deleted';
   readonly base_report_id?: string;
   readonly version: number;
 }

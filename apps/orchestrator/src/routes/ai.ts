@@ -21,7 +21,8 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
 import { readAiStatus } from '../services/ai-config.js';
-import { runAskAi, type AskAiEvent } from '../services/ai-chat.js';
+import { runAskAi, type AskAiEvent, type RefineSeedContext } from '../services/ai-chat.js';
+import { getRefineContext } from '../services/custom-reports.js';
 
 export const aiRouter = Router();
 
@@ -60,6 +61,28 @@ aiRouter.post('/api/ai/ask', (req: Request, res: Response, next: NextFunction): 
 
     const schoolIds = await resolveRequestedSchools(req);
 
+    /**
+     * "✎ Refine with AI" (docs/06 §1) — an optional `report_id` seeds this
+     * turn with an existing report's current definition instead of starting
+     * blank. `getRefineContext` is owner-gated on its own (404s a report
+     * this session cannot see, 403s one it does not own), so a tampered
+     * `report_id` fails the same way any other cross-tenant report access
+     * attempt does, before a single token is spent.
+     */
+    const reportId = typeof body['report_id'] === 'string' && body['report_id'] !== '' ? body['report_id'] : undefined;
+    const refining: { seedContext: RefineSeedContext; refiningReportId: string } | undefined =
+      reportId === undefined
+        ? undefined
+        : await getRefineContext({
+            session,
+            correlationId: req.correlationId,
+            id: reportId,
+            requestedSchoolIds: schoolIds,
+          }).then((ctx) => ({
+            seedContext: { reportName: ctx.reportName, queries: ctx.queries, widgets: ctx.widgets },
+            refiningReportId: reportId,
+          }));
+
     res.writeHead(200, {
       'content-type': 'application/x-ndjson',
       'cache-control': 'no-store',
@@ -76,6 +99,7 @@ aiRouter.post('/api/ai/ask', (req: Request, res: Response, next: NextFunction): 
         question,
         correlationId: req.correlationId,
         onEvent: send,
+        ...(refining ?? {}),
       });
     } catch (err) {
       /**

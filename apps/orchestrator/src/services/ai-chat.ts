@@ -76,14 +76,32 @@ export type AskAiEvent =
   | { type: 'result'; spec: ChartSpec; queries: readonly AskAiQuery[]; draft: ChartSpecDraft }
   | { type: 'error'; code: string; message: string };
 
+/**
+ * Seeds a turn with an EXISTING report's current definition — "✎ Refine with
+ * AI" (docs/06 §1/§3, ADR-033's explicitly-deferred action, built here).
+ * Text only, folded into the system prompt: the model still plans fresh
+ * tool calls and still never receives row data (ADR-030 is unchanged by
+ * this — refining is not a different privacy regime, just a different
+ * starting point for the same planning loop).
+ */
+export interface RefineSeedContext {
+  readonly reportName: string;
+  readonly queries: readonly { key: string; sql: string }[];
+  /** The widget(s) currently shown, so the model knows the current chart type/fields without being handed row data. */
+  readonly widgets: readonly Widget[];
+}
+
 export async function runAskAi(args: {
   session: SessionClaims;
   schoolIds: readonly string[];
   question: string;
   correlationId: string;
   onEvent: (event: AskAiEvent) => void;
+  seedContext?: RefineSeedContext;
+  /** The report being refined, purely for the audit trail — never re-derived from `seedContext` alone since that carries no id. */
+  refiningReportId?: string;
 }): Promise<void> {
-  const { session, schoolIds, question, correlationId, onEvent } = args;
+  const { session, schoolIds, question, correlationId, onEvent, seedContext, refiningReportId } = args;
 
   onEvent({ type: 'status', step: 'Confirming scope' });
   const scope = await schoolNames(schoolIds);
@@ -114,7 +132,7 @@ export async function runAskAi(args: {
 
   const provider = PROVIDERS[keyInfo.provider];
   const client = provider.createClient({ apiKey: keyInfo.apiKey, model: keyInfo.model });
-  const systemPrompt = buildSystemPrompt(catalog, scope);
+  const systemPrompt = buildSystemPrompt(catalog, scope, seedContext);
 
   const tools: ProviderTool[] = buildToolDefinitions(schoolIds).map((t) => ({
     name: t.name,
@@ -227,6 +245,7 @@ export async function runAskAi(args: {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cache_read_tokens: cacheReadTokens,
+    ...(refiningReportId === undefined ? {} : { report_id: refiningReportId }),
   });
 
   onEvent({ type: 'result', spec, queries, draft });
@@ -265,12 +284,29 @@ function statusFor(toolCalls: readonly ProviderToolCall[]): string {
   return 'Running query';
 }
 
-function buildSystemPrompt(catalog: SchemaCatalogLite, scope: readonly { school_id: string; school_name: string }[]): string {
+/** Exported for ai-chat-hydrate.test.ts's coverage of the Refine seed text. */
+export function buildSystemPrompt(
+  catalog: SchemaCatalogLite,
+  scope: readonly { school_id: string; school_name: string }[],
+  seedContext?: RefineSeedContext,
+): string {
   return [
     "You are the Ask AI planner for a school analytics platform. Answer the user's question by planning read-only SQL against the schools in scope, then call emit_report exactly once to end the turn.",
     '',
     `Schools in scope: ${scope.map((s) => `${s.school_id} (${s.school_name})`).join(', ')}.`,
     '',
+    ...(seedContext === undefined
+      ? []
+      : [
+          `You are REFINING an existing report the user has open, called "${seedContext.reportName}". Its current chart(s):`,
+          JSON.stringify(seedContext.widgets, null, 2),
+          '',
+          'Its current SQL:',
+          seedContext.queries.map((q) => `-- ${q.key}\n${q.sql}`).join('\n\n'),
+          '',
+          "If the user is asking a QUESTION about this chart (e.g. \"why is X higher than Y\"), answer it in the report's narrative and you may re-emit essentially the same chart (same fields, same grouping) with fresh numbers — do not invent a different chart shape just because you were asked something. If the user is asking for a CHANGE (a different chart type, a different filter, a different grouping, a different time range), produce an updated report reflecting that change. Unless the user explicitly asks to add more charts, keep the answer to the SAME NUMBER of widgets as shown above — refining one chart should not turn it into a multi-chart dashboard.",
+          '',
+        ]),
     'Rules:',
     '- Call get_dimensions for a school before filtering on a text value (class names, fee heads, categories, …) you have not seen verified for that school — never guess a label.',
     '- Use run_query for one school, run_multi for several (at most 25) with the same statement.',

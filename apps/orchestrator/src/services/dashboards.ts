@@ -208,6 +208,41 @@ export function resolveReportParams(
   return { params, filterChips };
 }
 
+/**
+ * Per-widget clone (docs/06 §3, "clone & customize" scoped to one chart
+ * rather than a whole dashboard) — which named `run_predefined` query key
+ * feeds a given widget id. Keyed by report id so a widget clone is a table
+ * lookup, not a new branch, the same reasoning `REPORT_FILTERS` already
+ * follows. Populated for Fee Collection first (the reference
+ * implementation); the remaining dashboards extend this table as they get
+ * the same treatment (docs/11 tracks the rollout).
+ *
+ * A widget id absent from its report's map cannot be cloned on its own —
+ * `services/custom-reports.ts` refuses the request rather than guessing.
+ */
+export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<string, string>>>> = {
+  'fee-collection': {
+    'line-month': 'by_month',
+    'bar-class': 'by_class',
+    'donut-mode': 'by_mode',
+    'table-component': 'by_component',
+  },
+};
+
+/**
+ * Which of a report's widgets accept a `bucket` override, and which values —
+ * a widget's own SQL declares its bucket variants (mcp-server/src/reports/
+ * catalog.ts); this table only says which widgets HAVE one, for the clone
+ * form to offer. `'month'` is always the default and is never listed as an
+ * override choice — cloning without picking a bucket reproduces the
+ * original grouping.
+ */
+export const WIDGET_BUCKET_OPTIONS: Partial<Record<DashboardId, Readonly<Record<string, readonly string[]>>>> = {
+  'fee-collection': {
+    'line-month': ['week', 'month', 'quarter', 'year'],
+  },
+};
+
 /** Everything a builder is allowed to know about the request it is answering. */
 export interface BuildContext {
   readonly year: string;

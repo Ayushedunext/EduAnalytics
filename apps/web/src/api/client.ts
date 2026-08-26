@@ -312,6 +312,10 @@ export function cloneReport(body: {
   academic_year: string;
   as_of?: string;
   school_ids: readonly string[];
+  /** Per-widget clone (docs/06 §3): clone just this one chart. */
+  widget_id?: string;
+  /** Time-grouping override — only meaningful together with `widget_id`. */
+  bucket?: 'week' | 'month' | 'quarter' | 'year';
 }): Promise<CustomReportResponse> {
   const query = new URLSearchParams();
   if (body.school_ids.length > 0) query.set('school_ids', body.school_ids.join(','));
@@ -322,6 +326,8 @@ export function cloneReport(body: {
       name: body.name,
       academic_year: body.academic_year,
       ...(body.as_of === undefined ? {} : { as_of: body.as_of }),
+      ...(body.widget_id === undefined ? {} : { widget_id: body.widget_id }),
+      ...(body.bucket === undefined ? {} : { bucket: body.bucket }),
     }),
   });
 }
@@ -360,6 +366,17 @@ export function updateReportSql(
   body: { queries: { key: string; sql: string }[]; draft: AskAiDraft },
 ): Promise<CustomReportResponse> {
   return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/sql`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+/** "Apply" in the Ask AI side panel — persists an AI-proposed answer as this report's next version (docs/06 §1's "✎ Refine with AI"). */
+export function applyRefinement(
+  id: string,
+  body: { queries: { key: string; sql: string }[]; draft: AskAiDraft },
+): Promise<CustomReportResponse> {
+  return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/refine`, {
     method: 'PUT',
     body: JSON.stringify(body),
   });
@@ -587,6 +604,8 @@ export async function askAI(
   question: string,
   schoolIds: readonly string[],
   onEvent: (event: AskAiEvent) => void,
+  /** "✎ Refine with AI" (docs/06 §1): seeds this turn from an existing report's current definition instead of a blank question. */
+  reportId?: string,
 ): Promise<void> {
   const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
   const headers = new Headers({ 'content-type': 'application/json' });
@@ -597,7 +616,7 @@ export async function askAI(
     method: 'POST',
     headers,
     credentials: 'include',
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, ...(reportId === undefined ? {} : { report_id: reportId }) }),
   });
 
   if (!res.ok) {

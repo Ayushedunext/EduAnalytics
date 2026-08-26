@@ -23,6 +23,7 @@ import { renderReportPdf } from '../services/pdf.js';
 import { orgName, schoolNames } from '../db/registry.js';
 import { auditSink } from '../db/audit.js';
 import {
+  applyRefinement,
   cloneReport,
   deleteReport,
   listMyReports,
@@ -65,6 +66,10 @@ const cloneBodySchema = z.object({
   name: z.string().min(1).max(255),
   academic_year: z.string().min(1),
   as_of: z.string().min(1).optional(),
+  /** Per-widget clone (docs/06 §3): clone just this one chart. */
+  widget_id: z.string().min(1).optional(),
+  /** Time-grouping override — only meaningful together with `widget_id`. */
+  bucket: z.enum(['week', 'month', 'quarter', 'year']).optional(),
 });
 
 customReportsRouter.post('/api/reports/clone', (req: Request, res: Response, next: NextFunction): void => {
@@ -82,6 +87,8 @@ customReportsRouter.post('/api/reports/clone', (req: Request, res: Response, nex
       schoolIds,
       academicYear: parsed.data.academic_year,
       asOfDate: parsed.data.as_of ?? new Date().toISOString().slice(0, 10),
+      ...(parsed.data.widget_id === undefined ? {} : { widgetScope: parsed.data.widget_id }),
+      ...(parsed.data.bucket === undefined ? {} : { bucket: parsed.data.bucket }),
     });
     res.status(201).json(view);
   })().catch(next);
@@ -171,6 +178,37 @@ customReportsRouter.put('/api/reports/:id/sql', (req: Request, res: Response, ne
     if (!parsed.success) badRequest('At least one query and a chart draft are required.', req.correlationId);
 
     const view = await updateReportSql({
+      session,
+      correlationId: req.correlationId,
+      id,
+      queries: parsed.data.queries,
+      draft: parsed.data.draft,
+    });
+    res.json(view);
+  })().catch(next);
+});
+
+const refineBodySchema = z.object({
+  queries: z.array(z.object({ key: z.string().min(1), sql: z.string().min(1) })).min(1),
+  draft: chartSpecDraftSchema,
+});
+
+/**
+ * "Apply" in the Ask AI side panel (docs/06 §1's "✎ Refine with AI") — the
+ * SQL tab stays hand-edit-only for `raw_sql` reports (`PUT .../sql` above,
+ * unchanged); this endpoint is the AI-authored path, and it alone may
+ * materialize a predefined clone (`mode: 'template'`) into literal SQL
+ * (`services/custom-reports.ts`'s `applyRefinement`).
+ */
+customReportsRouter.put('/api/reports/:id/refine', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const session = sessionOf(req);
+    const id = req.params['id'];
+    if (typeof id !== 'string' || id === '') badRequest('A report id is required.', req.correlationId);
+    const parsed = refineBodySchema.safeParse(req.body);
+    if (!parsed.success) badRequest('At least one query and a chart draft are required.', req.correlationId);
+
+    const view = await applyRefinement({
       session,
       correlationId: req.correlationId,
       id,

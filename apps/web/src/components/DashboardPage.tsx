@@ -20,6 +20,7 @@
 
 import { useEffect, useState } from 'react';
 import { ChartSpecView } from '@sap/chart-spec/react';
+import type { Widget } from '@sap/chart-spec';
 import {
   cloneReport,
   getReport,
@@ -29,6 +30,8 @@ import {
   type SessionResponse,
 } from '../api/client';
 import { LogicPanel } from './LogicPanel';
+import { WidgetCloneButton } from './WidgetCloneButton';
+import { CLONEABLE_WIDGETS, WIDGET_BUCKET_OPTIONS } from '../reportWidgetClone';
 
 interface Props {
   session: SessionResponse;
@@ -213,7 +216,22 @@ export function DashboardPage({
 
             {/* The spec goes in unvalidated on purpose: the renderer validates
                 it against the schema before drawing (ADR-015, §10). */}
-            <ChartSpecView spec={report.spec} />
+            <ChartSpecView
+              spec={report.spec}
+              renderWidgetActions={(widget: Widget) =>
+                academicYear === null || !CLONEABLE_WIDGETS[reportId]?.has(widget.id) ? undefined : (
+                  <WidgetCloneButton
+                    baseReportId={reportId}
+                    widgetId={widget.id}
+                    widgetTitle={widget.title ?? report.spec.title}
+                    academicYear={academicYear}
+                    schoolIds={schoolIds}
+                    bucketOptions={WIDGET_BUCKET_OPTIONS[reportId]?.[widget.id]}
+                    onCloned={onCloned}
+                  />
+                )
+              }
+            />
 
             {showLogic && <LogicPanel report={report} />}
           </>

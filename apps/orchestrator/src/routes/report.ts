@@ -34,7 +34,7 @@ export const reportRouter = Router();
  * because a malformed filter would silently match no rows and render an empty
  * dashboard that looks like a school with no data (§10).
  */
-const ACADEMIC_YEAR = /^\d{4}-\d{2}$/;
+export const ACADEMIC_YEAR = /^\d{4}-\d{2}$/;
 
 /**
  * The as-of date: what "overdue" and "on roll" are measured against.
@@ -48,15 +48,15 @@ const ACADEMIC_YEAR = /^\d{4}-\d{2}$/;
  * not a date, and MySQL would compare against it happily enough to return
  * something that looks like an answer.
  */
-const AS_OF_DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const AS_OF_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function isRealDate(value: string): boolean {
+export function isRealDate(value: string): boolean {
   const parsed = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
 }
 
 /** Today, as the reports mean it: a calendar date, not an instant. */
-function today(): string {
+export function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 

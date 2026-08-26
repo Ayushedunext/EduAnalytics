@@ -229,6 +229,39 @@ export function getHome(schoolIds: readonly string[]): Promise<HomeResponse> {
   return request<HomeResponse>(`/api/home${query}`);
 }
 
+/**
+ * One dashboard's lead widget, for the Home overview's preview cards.
+ * `status: 'blocked'` covers both "no permission" and "no data for this
+ * period" -- either way there is nothing to show, and `reason` says why.
+ */
+export interface HomePreview {
+  id: string;
+  title: string;
+  icon: string;
+  /** Unknown on purpose -- WidgetSpecView validates it before it is drawn (§10). */
+  widget: unknown;
+  status: 'ok' | 'blocked';
+  reason?: string;
+}
+
+export interface HomePreviewsResponse {
+  previews: HomePreview[];
+}
+
+/**
+ * Fetched separately from `/api/home` and only once the academic year it needs
+ * is known (services/home.ts explains why): Home's KPI strip renders from
+ * `getHome` immediately, and these cards fill in as this resolves.
+ */
+export function getHomePreviews(
+  schoolIds: readonly string[],
+  academicYear: string,
+): Promise<HomePreviewsResponse> {
+  const query = new URLSearchParams({ academic_year: academicYear });
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  return request<HomePreviewsResponse>(`/api/home/previews?${query.toString()}`);
+}
+
 // -- Custom reports (ADR-018) -------------------------------------------------
 
 export interface CustomReportSummary {

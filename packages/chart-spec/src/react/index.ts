@@ -7,4 +7,12 @@
  */
 
 export { ChartSpecView, type ChartSpecViewProps } from './ChartSpecView.js';
-export { WidgetView, KpiTile, BarPanel, LinePanel, DonutPanel, TablePanel } from './widgets.js';
+export {
+  WidgetView,
+  WidgetSpecView,
+  KpiTile,
+  BarPanel,
+  LinePanel,
+  DonutPanel,
+  TablePanel,
+} from './widgets.js';

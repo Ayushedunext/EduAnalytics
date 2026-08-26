@@ -19,7 +19,9 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ApiFailure,
   getHome,
+  getHomePreviews,
   getSession,
+  type HomePreview,
   type HomeResponse,
   type SessionResponse,
 } from './api/client';
@@ -44,6 +46,14 @@ export function App(): JSX.Element {
   const [home, setHome] = useState<HomeResponse | null>(null);
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
+  /**
+   * Home's dashboard-preview cards. Fetched as a second, slower call once
+   * `home.academic_year` is known (services/home.ts, buildHomePreviews) so the
+   * KPI strip above never waits on it -- `null` means "not loaded yet",
+   * distinct from `[]` which means the call resolved with nothing to preview.
+   */
+  const [previews, setPreviews] = useState<HomePreview[] | null>(null);
+  const [previewsLoading, setPreviewsLoading] = useState(false);
   /**
    * Navigation is a single piece of state, not a router.
    *
@@ -91,6 +101,9 @@ export function App(): JSX.Element {
     if (schoolIds.length === 0) return;
     setHomeLoading(true);
     setHomeError(null);
+    // A fresh school selection invalidates the previous previews immediately
+    // rather than leaving last scope's cards on screen while new ones load.
+    setPreviews(null);
     getHome(schoolIds)
       .then((data) => { setHome(data); })
       .catch((err: unknown) => {
@@ -107,6 +120,32 @@ export function App(): JSX.Element {
     if (state.kind !== 'ready') return;
     loadHome(selected);
   }, [state.kind, selected, loadHome]);
+
+  /**
+   * Fires once the KPI strip's fetch has told us the academic year -- the
+   * previews endpoint needs it (services/home.ts) and this way it is never
+   * re-derived a second time client-side. A session that can read neither
+   * students nor fees gets `academic_year: null` (home.ts); there is nothing
+   * to preview then, so this is skipped rather than sent with a made-up year.
+   */
+  useEffect(() => {
+    if (home === null || home.academic_year === null || selected.length === 0) return;
+    let cancelled = false;
+    setPreviewsLoading(true);
+    getHomePreviews(selected, home.academic_year)
+      .then((data) => {
+        if (cancelled) return;
+        setPreviews(data.previews);
+      })
+      .catch(() => {
+        // Previews are a bonus on top of the KPI strip, not a page-blocking
+        // fetch -- a failure here leaves the section empty rather than
+        // raising a second banner beside `homeError`.
+        if (!cancelled) setPreviews([]);
+      })
+      .finally(() => { if (!cancelled) setPreviewsLoading(false); });
+    return () => { cancelled = true; };
+  }, [home, selected]);
 
   if (state.kind === 'loading') {
     /** docs/10 §1.4: skeletons and status, never a bare spinner. */
@@ -262,6 +301,8 @@ export function App(): JSX.Element {
             session={state.session}
             home={home}
             loading={homeLoading}
+            previews={previews}
+            previewsLoading={previewsLoading}
             onOpen={(id) => { setRoute({ kind: 'report', id }); }}
             onAskAI={() => { setRoute({ kind: 'ask' }); }}
           />

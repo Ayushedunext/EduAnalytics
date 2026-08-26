@@ -29,6 +29,8 @@ import { Home } from './components/Home';
 import { DashboardPage } from './components/DashboardPage';
 import { Settings } from './components/Settings';
 import { AskAI } from './components/AskAI';
+import { MyReports } from './components/MyReports';
+import { ReportEditor } from './components/ReportEditor';
 
 type State =
   | { kind: 'loading' }
@@ -57,6 +59,8 @@ export function App(): JSX.Element {
     | { kind: 'report'; id: string }
     | { kind: 'settings' }
     | { kind: 'ask'; seedQuestion?: string }
+    | { kind: 'my-reports' }
+    | { kind: 'report-edit'; id: string }
   >({ kind: 'home' });
 
   useEffect(() => {
@@ -158,7 +162,13 @@ export function App(): JSX.Element {
         role={titleCase(state.session.user.role)}
         dashboards={home?.dashboards ?? []}
         aiStatus={state.session.ai_status}
-        active={route.kind === 'report' ? route.id : route.kind}
+        active={
+          route.kind === 'report'
+            ? route.id
+            : route.kind === 'report-edit'
+              ? 'my-reports'
+              : route.kind
+        }
         onNavigate={(id) => {
           setRoute(
             id === 'home'
@@ -167,7 +177,9 @@ export function App(): JSX.Element {
                 ? { kind: 'settings' }
                 : id === 'ask'
                   ? { kind: 'ask' }
-                  : { kind: 'report', id },
+                  : id === 'my-reports'
+                    ? { kind: 'my-reports' }
+                    : { kind: 'report', id },
           );
         }}
       />
@@ -184,7 +196,9 @@ export function App(): JSX.Element {
                 ? 'Settings'
                 : route.kind === 'ask'
                   ? 'Ask AI'
-                  : titleOf(route.id)
+                  : route.kind === 'my-reports' || route.kind === 'report-edit'
+                    ? 'My Reports'
+                    : titleOf(route.id)
           }
         />
 
@@ -214,6 +228,7 @@ export function App(): JSX.Element {
             session={state.session}
             schoolIds={selected}
             onBack={() => { setRoute({ kind: 'home' }); }}
+            onSaved={(id) => { setRoute({ kind: 'report-edit', id }); }}
             {...(route.seedQuestion === undefined ? {} : { seedQuestion: route.seedQuestion })}
           />
         ) : route.kind === 'report' ? (
@@ -224,6 +239,17 @@ export function App(): JSX.Element {
             academicYear={home?.academic_year ?? null}
             onBack={() => { setRoute({ kind: 'home' }); }}
             onAskAI={(seedQuestion) => { setRoute({ kind: 'ask', seedQuestion }); }}
+            onCloned={(id) => { setRoute({ kind: 'report-edit', id }); }}
+          />
+        ) : route.kind === 'my-reports' ? (
+          <MyReports onOpen={(id) => { setRoute({ kind: 'report-edit', id }); }} />
+        ) : route.kind === 'report-edit' ? (
+          <ReportEditor
+            session={state.session}
+            id={route.id}
+            schoolIds={selected}
+            onBack={() => { setRoute({ kind: 'my-reports' }); }}
+            onDeleted={() => { setRoute({ kind: 'my-reports' }); }}
           />
         ) : home === null ? (
           <div className="flex-1 flex items-start justify-center pt-24">

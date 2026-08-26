@@ -22,6 +22,7 @@ import { launchRouter } from './routes/launch.js';
 import { sessionRouter } from './routes/session.js';
 import { homeRouter } from './routes/home.js';
 import { reportRouter } from './routes/report.js';
+import { customReportsRouter } from './routes/custom-reports.js';
 import { settingsRouter } from './routes/settings.js';
 import { aiRouter } from './routes/ai.js';
 import { closePdfRenderer } from './services/pdf.js';
@@ -50,8 +51,11 @@ app.use((req, res, next) => {
      * caller, never caught before because prior testing of it went through
      * curl/server-side calls rather than the actual SPA. Found and fixed while
      * verifying ADR-031's provider picker live.
+     *
+     * DELETE is required for `DELETE /api/reports/:id` (custom reports, ADR-018)
+     * — added ahead of the same preflight gap biting that endpoint too.
      */
-    res.setHeader('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
+    res.setHeader('access-control-allow-methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('vary', 'origin');
   }
   if (req.method === 'OPTIONS') {
@@ -86,6 +90,7 @@ app.use('/api', requireSession);
 app.use(sessionRouter);
 app.use(homeRouter);
 app.use(reportRouter);
+app.use(customReportsRouter);
 app.use(settingsRouter);
 app.use(aiRouter);
 

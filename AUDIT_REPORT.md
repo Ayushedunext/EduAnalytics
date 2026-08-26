@@ -48,6 +48,19 @@
 > | **ADR-030** — Ask-AI chart-specs are hydrated server-side; the model never receives or emits row data | Phase-3-blocking question 14 | C15 |
 >
 > **Files changed:** docs/DECISIONS.md · docs/05 · docs/08 · docs/11 · this file.
+>
+> ---
+>
+> ## Resolution log — 2026-08-26
+>
+> Two Phase-3-blocking questions decided ahead of building custom reports (clone-to-edit, ADR-018): both answered by the TL, implemented in `services/custom-reports.ts`, and proven by `apps/orchestrator/test/custom-reports.test.ts`.
+>
+> | New ADR | Carries | Closes |
+> |---|---|---|
+> | **ADR-032** — `report_definitions.school_scope` intersected with the viewer's token scope at execution | Question 18 | A8 |
+> | **ADR-033** — Saved AI reports re-run the persisted statement, never the model | Question 19 | C17 |
+>
+> **Files changed:** docs/DECISIONS.md · docs/06 · this file. **Also shipped this session, not itself an audit item:** custom reports (clone-to-edit, My Reports, versioning/rollback, visibility promotion). Drill-down remains deferred to Phase 2 (Rollup Store) by product decision, not by an open question in this file.
 
 ---
 
@@ -113,7 +126,7 @@
 - **Recommended action:** either state the degraded budget honestly for the interim period, or make the ETL dim extension a hard precondition of drill GA (docs/11 Phase 4). Prefer the latter — docs/09 §3 targets are declared binding.
 
 **A8 — `report_definitions.school_scope` vs "scope comes only from the token"** *(new in Rev 2)*
-- **Status:** `OPEN` · **Severity:** Medium (tenant-isolation adjacent)
+- **Status:** `RESOLVED` 2026-08-26 by **ADR-032** — effective scope at execution is the stored `school_scope` INTERSECTED with the viewer's own token scope, never the stored scope alone; the Logic panel shows the effective scope, never the author's. Implemented in `services/custom-reports.ts`'s `effectiveScope()`, proven by `test/custom-reports.test.ts`. docs/06 §1 updated. · **Severity:** Medium (tenant-isolation adjacent)
 - **Document:** docs/06 §1 vs docs/00 glossary, ADR-007, docs/08 §3, CODING_GUIDELINES §8.
 - **Issue:** the report-definition schema persists a `school_scope` column per report. Everywhere else, scope is defined as *token-derived and immutable within a session* (docs/00 glossary), *injected server-side and displayed read-only* (CODING_GUIDELINES §8, ADR-019), and *not widenable* (docs/06 §3). What a stored `school_scope` means at execution time is never stated. The case is not hypothetical: ADR-018 supports `trust` visibility, so a Director's 12-school report will be opened by a Principal whose token carries one school.
 - **Open sub-questions:** is the stored value intersected with token scope, or is a mismatch an error? Is it a *default selection* for the picker rather than a scope at all? Does a shared report re-run under the *viewer's* scope (correct per ADR-007) while displaying the *author's* scope in its logic panel (confusing, and a possible information leak — the school names of a trust the viewer cannot see)?
@@ -261,7 +274,7 @@
 - **Recommended action:** size the ETL in docs/09 (rows/interval, concurrency cap, batch window, off-peak skew), and add a replica-saturation criterion to the GA gate alongside the primary-delta measurement.
 
 **C17 — "Re-run" semantics for saved AI reports are undefined (billing + gating consequence)** *(new in Rev 2)*
-- **Status:** `OPEN` · **Severity:** Medium
+- **Status:** `RESOLVED` 2026-08-26 by **ADR-033** — recommendation (a) adopted: Re-run always re-executes the persisted statement deterministically, never re-invokes the model; "✎ Refine with AI" is named as the distinct, separately-gated action and is explicitly NOT built in this slice. Implemented in `services/custom-reports.ts`'s `runRawSqlMode`, proven by `test/custom-reports.test.ts` (asserts the re-run path never imports the AI chat loop). docs/06 §1 and docs/10 §2 updated. · **Severity:** Medium
 - **Document:** docs/10 §2 (My Reports: "AI snapshots (AI badge, Re-run/PDF)") vs ADR-018, ADR-016, ADR-017.
 - **Issue:** ADR-018 saves AI artifacts into `report_definitions` with their spec **and** `sql_text`, and docs/11's Phase 3 exit criterion is "clones re-run with fresh data". It is never stated whether Re-run (a) re-executes the persisted `sql_text` through the deterministic path — free, no tokens, and crucially **still working when `ai_status` is not active** — or (b) re-invokes the model — billable, and locked the moment the org's key fails.
 - **Why it matters:** the answer determines whether a school that loses its Anthropic key also loses every report it built with AI. ADR-016's promise that "the product is fully functional with AI locked" and ADR-017's "dashboards unaffected" both imply (a), but neither says so, and docs/10's separate "AI snapshot" badge and Re-run affordance imply the opposite. This is a customer-visible BYOK-value question sitting in a documentation gap.
@@ -370,8 +383,8 @@
 15. **RBAC matrix**, including how admin capability is carried given `role` is a scalar — a Principal who is also the org admin cannot hold both today — and whether org-admin and school-admin are distinct. Recommend `perms[]` values for consistency with ADR-002. *(A3 revised, C1 — Rev 1 Q5)*
 16. **Teacher class-scoping.** Will the ERP token carry `class_ids`, or is class-level scoping dropped from v1? Blocks docs/08 §4.5 *and* drill leaf role-gating. *(C2 — Rev 1 Q6)*
 17. **BYOK granularity.** Org-level confirmed, or per-school keys inside a trust? Middle option available: keep one org key, add per-school **budgets** on the metering that already exists. *(B2 — Rev 1 Q2)*
-18. **`report_definitions.school_scope` semantics** — intersect with token scope at execution, or reject on mismatch? And does a trust-shared report's logic panel show the author's scope or the viewer's effective scope? *(A8 — new)*
-19. **Saved AI report "Re-run"** — re-executes persisted SQL (free, survives key loss) or re-invokes the model (billable, locks with the key)? Determines whether losing an Anthropic key costs a school every report it built with AI. *(C17 — new)*
+18. ~~**`report_definitions.school_scope` semantics.**~~ **RESOLVED 2026-08-26 — ADR-032.** Intersect with the viewer's token scope at execution; the logic panel shows the effective (viewer's) scope, never the author's. *(A8 — new)*
+19. ~~**Saved AI report "Re-run".**~~ **RESOLVED 2026-08-26 — ADR-033.** Always re-executes the persisted SQL; re-invoking the model is a separate, not-yet-built "✎ Refine with AI" action. *(C17 — new)*
 
 ### Blocking Phase 4
 

@@ -65,11 +65,22 @@ export interface RunQueryResult {
   readonly masked_columns: readonly string[];
 }
 
-/** A result cached by its model-chosen `query_key`, for hydration later. */
+/**
+ * A result cached by its model-chosen `query_key`, for hydration later.
+ *
+ * `sql` is the literal statement that was actually run (`run_query`/`run_multi`
+ * accept no placeholders — see their docstrings — so this is already
+ * caller-final text, never a template). Carried here, alongside the rows,
+ * because services/custom-reports.ts's "Save as report" needs exactly this
+ * statement to persist and re-run later (AUDIT_REPORT C17): the model never
+ * sees it, but the orchestrator already has it the moment the tool call is
+ * made, and Invariant 6 requires it to be showable regardless.
+ */
 export interface CachedResult {
   readonly columns: readonly string[];
   readonly rows: readonly Record<string, unknown>[];
   readonly truncated: boolean;
+  readonly sql: string;
 }
 
 /** What the model sees back for a `run_query`/`run_multi` call — never rows. */
@@ -94,8 +105,17 @@ function isPiiColumnName(catalog: SchemaCatalogLite, column: string): boolean {
   return catalog.tables.some((t) => t.columns.some((c) => c.name.toLowerCase() === wanted && c.pii !== undefined));
 }
 
-/** Exported for ai-tools-redact.test.ts — the enforcement point ADR-030 relies on. */
-export function redact(queryKey: string, result: CachedResult, catalog: SchemaCatalogLite): RedactedSummary {
+/**
+ * Exported for ai-tools-redact.test.ts — the enforcement point ADR-030 relies
+ * on. Takes only the fields it reads, not the full `CachedResult` — `sql`
+ * plays no part in what gets redacted, and requiring it here would be a
+ * caller obligation this function has no use for.
+ */
+export function redact(
+  queryKey: string,
+  result: Pick<CachedResult, 'columns' | 'rows' | 'truncated'>,
+  catalog: SchemaCatalogLite,
+): RedactedSummary {
   const summary: RedactedSummary = {
     query_ref: queryKey,
     row_count: result.rows.length,
@@ -191,8 +211,9 @@ export async function executeTool(
       const outcome = await withMcp(ctx.session, ctx.correlationId, [schoolId], (mcp) =>
         mcp.call<RunQueryResult>('run_query', { school_id: schoolId, sql }),
       );
-      ctx.resultCache.set(queryKey, outcome);
-      return redact(queryKey, outcome, ctx.catalog);
+      const cached: CachedResult = { ...outcome, sql };
+      ctx.resultCache.set(queryKey, cached);
+      return redact(queryKey, cached, ctx.catalog);
     }
 
     case 'run_multi': {
@@ -205,8 +226,9 @@ export async function executeTool(
       const outcome = await withMcp(ctx.session, ctx.correlationId, schoolIds, (mcp) =>
         mcp.call<RunMultiResult>('run_multi', { school_ids: schoolIds, sql }),
       );
-      ctx.resultCache.set(queryKey, outcome);
-      return redact(queryKey, outcome, ctx.catalog);
+      const cached: CachedResult = { ...outcome, sql };
+      ctx.resultCache.set(queryKey, cached);
+      return redact(queryKey, cached, ctx.catalog);
     }
 
     default:

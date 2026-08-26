@@ -22,8 +22,8 @@
  * whole one to a reader who does not know what was meant to be there.
  */
 
-import type { ReactElement } from 'react';
-import { chartSpecSchema, type ChartSpec } from '../spec.js';
+import type { ReactElement, ReactNode } from 'react';
+import { chartSpecSchema, type ChartSpec, type Widget } from '../spec.js';
 import { WidgetView } from './widgets.js';
 
 export interface ChartSpecViewProps {
@@ -31,9 +31,17 @@ export interface ChartSpecViewProps {
   readonly spec: unknown;
   /** Rendered above the widgets; the caller owns page chrome. */
   readonly header?: ReactElement;
+  /**
+   * Per-widget page chrome — e.g. a "⧉ Clone" button on one chart (docs/06
+   * §3, per-widget customization) — never part of the spec itself (ADR-015).
+   * Called once per non-KPI widget; returning `undefined` renders nothing
+   * for that widget. Omitted entirely by the PDF route, which renders no
+   * interactive controls.
+   */
+  readonly renderWidgetActions?: (widget: Widget) => ReactNode;
 }
 
-export function ChartSpecView({ spec, header }: ChartSpecViewProps): ReactElement {
+export function ChartSpecView({ spec, header, renderWidgetActions }: ChartSpecViewProps): ReactElement {
   const parsed = chartSpecSchema.safeParse(spec);
 
   if (!parsed.success) {
@@ -70,7 +78,7 @@ export function ChartSpecView({ spec, header }: ChartSpecViewProps): ReactElemen
 
       <div className="specPanels">
         {panels.map((widget) => (
-          <WidgetView key={widget.id} widget={widget} />
+          <WidgetView key={widget.id} widget={widget} actions={renderWidgetActions?.(widget)} />
         ))}
       </div>
     </div>

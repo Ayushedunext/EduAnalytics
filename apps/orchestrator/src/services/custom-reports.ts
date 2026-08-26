@@ -51,6 +51,8 @@ import { auditSink } from '../db/audit.js';
 import {
   BUILDERS,
   Merged,
+  WIDGET_BUCKET_OPTIONS,
+  WIDGET_QUERY_KEYS,
   isDashboardId,
   resolveReportParams,
   type DashboardId,
@@ -81,6 +83,16 @@ const templateDefSchema = z
     params: z.record(z.union([z.string(), z.number()])),
     /** Presentation-only: swapping a bar for a line (or back) draws the same rows differently. Never a SQL change. */
     chart_overrides: z.record(z.enum(['bar', 'line'])).optional(),
+    /**
+     * Per-widget clone (docs/06 §3): when set, this definition is a clone of
+     * ONE widget from `base_report_id`, not the whole dashboard — the widget
+     * id, validated at write time against `WIDGET_QUERY_KEYS` (dashboards.js)
+     * so a stored definition can never name a widget the base report does
+     * not have.
+     */
+    widget_scope: z.string().min(1).optional(),
+    /** Time-grouping override for `widget_scope`'s query (see catalog.ts's `variants`). Meaningless without `widget_scope`, validated together. */
+    bucket: z.enum(['week', 'month', 'quarter', 'year']).optional(),
   })
   .strict();
 
@@ -238,6 +250,22 @@ async function runTemplateMode(args: {
   const baseReportId: DashboardId = baseId;
   const scope = await schoolNames(args.effectiveSchoolIds);
 
+  /**
+   * Per-widget clone (docs/06 §3): a `widget_scope` def asks `run_predefined`
+   * for only the one query that widget needs (`query_keys`), never the
+   * whole report's queries — cheaper, and it also means `BUILDERS` below
+   * naturally produces exactly that one widget, since every OTHER widget's
+   * `merged.sumBy` call reads a query key that was never fetched.
+   */
+  const queryKey = args.def.widget_scope === undefined ? undefined : WIDGET_QUERY_KEYS[baseReportId]?.[args.def.widget_scope];
+  if (args.def.widget_scope !== undefined && queryKey === undefined) {
+    throw new PlatformError({
+      code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+      message: 'This chart can no longer be cloned on its own.',
+      correlationId: args.correlationId,
+    });
+  }
+
   const result = await withMcp(
     args.session,
     args.correlationId,
@@ -247,6 +275,7 @@ async function runTemplateMode(args: {
         report_id: baseReportId,
         school_ids: [...args.effectiveSchoolIds],
         params: args.def.params,
+        ...(queryKey === undefined ? {} : { query_keys: [queryKey] }),
       }),
   );
 
@@ -256,7 +285,10 @@ async function runTemplateMode(args: {
     typeof args.def.params['as_of_date'] === 'string' ? args.def.params['as_of_date'] : new Date().toISOString().slice(0, 10);
   const built = BUILDERS[baseReportId](merged, { year: academicYear, asOf: asOfDate, scope });
 
-  if (built.widgets.length === 0) {
+  const scopedWidgets =
+    args.def.widget_scope === undefined ? built.widgets : built.widgets.filter((w) => w.id === args.def.widget_scope);
+
+  if (scopedWidgets.length === 0) {
     throw new PlatformError({
       code: merged.allDenied() ? ERROR_CODES.PERMISSION_DENIED : ERROR_CODES.TENANT_UNAVAILABLE,
       message: merged.allDenied()
@@ -266,7 +298,9 @@ async function runTemplateMode(args: {
     });
   }
 
-  const widgets: Widget[] = built.widgets.map((w) => applyChartOverride(w, args.def.chart_overrides));
+  const widgets: Widget[] = scopedWidgets
+    .map((w) => applyChartOverride(w, args.def.chart_overrides))
+    .map((w) => (args.def.bucket === undefined ? w : retitleForBucket(w, args.def.bucket)));
 
   const spec: ChartSpec = {
     spec_version: 1,
@@ -294,7 +328,9 @@ async function runTemplateMode(args: {
       queries: definitions,
       notes: [
         ...built.notes,
-        `This is your own customised copy of "${result.title}". Edits here never change the original.`,
+        args.def.widget_scope === undefined
+          ? `This is your own customised copy of "${result.title}". Edits here never change the original.`
+          : `This is your own copy of one chart from "${result.title}". Edits here never change the original dashboard or its other charts.`,
         'Scope is injected from your launch token, intersected with this report’s saved scope. It is shown read-only here and cannot be widened from this screen.',
       ],
     },
@@ -319,6 +355,19 @@ function applyChartOverride(widget: Widget, overrides: Record<string, 'bar' | 'l
     ...(widget.drill_context === undefined ? {} : { drill_context: widget.drill_context }),
   };
   return target === 'bar' ? { ...shared, type: 'bar' } : { ...shared, type: 'line' };
+}
+
+/**
+ * "Receipts by month" -> "Receipts by week" for a bucketed single-widget
+ * clone. Every bucketable widget's base title says "by month" (the only
+ * grouping a predefined dashboard ever shows), so replacing that word is
+ * exhaustive for the widgets `WIDGET_BUCKET_OPTIONS` actually lists — a
+ * widget without "month" in its title is not offered a bucket in the first
+ * place (services/custom-reports.ts's `cloneReport`).
+ */
+function retitleForBucket(widget: Widget, bucket: 'week' | 'month' | 'quarter' | 'year'): Widget {
+  if (widget.title === undefined || bucket === 'month') return widget;
+  return { ...widget, title: widget.title.replace(/\bmonth\b/i, bucket) };
 }
 
 // -- Execution: raw_sql mode -------------------------------------------------
@@ -400,6 +449,10 @@ export async function cloneReport(args: {
   schoolIds: readonly string[];
   academicYear: string;
   asOfDate: string;
+  /** Per-widget clone (docs/06 §3): clone just this one widget id, not the whole dashboard. */
+  widgetScope?: string;
+  /** Time-grouping override — only valid together with `widgetScope`, and only for a widget that declares options. */
+  bucket?: 'week' | 'month' | 'quarter' | 'year';
 }): Promise<CustomReportView> {
   if (!isDashboardId(args.baseReportId)) {
     throw new PlatformError({
@@ -408,11 +461,35 @@ export async function cloneReport(args: {
       correlationId: args.correlationId,
     });
   }
+  if (args.widgetScope !== undefined && WIDGET_QUERY_KEYS[args.baseReportId]?.[args.widgetScope] === undefined) {
+    throw new PlatformError({
+      code: ERROR_CODES.REPORT_NOT_FOUND,
+      message: 'That chart cannot be cloned on its own.',
+      correlationId: args.correlationId,
+    });
+  }
+  if (
+    args.bucket !== undefined &&
+    (args.widgetScope === undefined ||
+      !(WIDGET_BUCKET_OPTIONS[args.baseReportId]?.[args.widgetScope] ?? []).includes(args.bucket))
+  ) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'This chart does not support that time grouping.',
+      correlationId: args.correlationId,
+    });
+  }
   const { params } = resolveReportParams(args.baseReportId, {
     academicYear: args.academicYear,
     asOfDate: args.asOfDate,
   });
-  const def: TemplateDef = { mode: 'template', base_report_id: args.baseReportId, params };
+  const def: TemplateDef = {
+    mode: 'template',
+    base_report_id: args.baseReportId,
+    params: { ...params, ...(args.bucket === undefined ? {} : { bucket: args.bucket }) },
+    ...(args.widgetScope === undefined ? {} : { widget_scope: args.widgetScope }),
+    ...(args.bucket === undefined ? {} : { bucket: args.bucket }),
+  };
 
   // Runs it once so the save fails loudly if the filter values do not work,
   // rather than persisting a clone nobody can open (§10: fail loud).
@@ -626,11 +703,20 @@ export async function updateReportVisual(args: {
     academicYear: args.academicYear,
     asOfDate: args.asOfDate,
   });
+  /**
+   * A widget-scoped clone (docs/06 §3) stays widget-scoped across an academic
+   * -year/as-of edit — this endpoint only ever changes filter VALUES, never
+   * what the clone is a clone OF. `bucket` rides back into `params` the same
+   * way `cloneReport` puts it there, since `resolveReportParams` only knows
+   * about the filters every report declares, not this widget-only one.
+   */
   const next: TemplateDef = {
     mode: 'template',
     base_report_id: existingBaseId,
-    params,
+    params: { ...params, ...(existing.bucket === undefined ? {} : { bucket: existing.bucket }) },
     ...(args.chartOverrides === undefined ? {} : { chart_overrides: args.chartOverrides }),
+    ...(existing.widget_scope === undefined ? {} : { widget_scope: existing.widget_scope }),
+    ...(existing.bucket === undefined ? {} : { bucket: existing.bucket }),
   };
 
   const run = await runTemplateMode({
@@ -707,6 +793,112 @@ export async function updateReportSql(args: {
     report_id: row.id,
     school_ids: row.school_scope,
     action: 'updated_sql',
+    version: updated.current_version,
+  });
+
+  return {
+    id: updated.id,
+    name: updated.name,
+    source_kind: updated.source_kind,
+    base_report_id: updated.base_report_id,
+    shared_flag: updated.shared_flag,
+    mode: next.mode,
+    current_version: updated.current_version,
+    is_owner: true,
+    can_promote: args.session.role === 'ADMIN',
+    spec: run.spec,
+    logic: run.logic,
+    degraded: [],
+    degraded_schools: [],
+  };
+}
+
+// -- ✎ Refine with AI (docs/06 §1, ADR-033's explicitly-deferred action) -----
+
+export interface RefineContext {
+  readonly reportName: string;
+  readonly schoolIds: readonly string[];
+  readonly queries: readonly { key: string; sql: string }[];
+  readonly widgets: readonly Widget[];
+}
+
+/**
+ * What `routes/ai.ts` seeds a Refine turn with — the report's CURRENT
+ * answer, freshly re-run (never a stale cached copy handed to the model as
+ * fact). Owner-only: only the owner can later `applyRefinement`, and
+ * spending the org's AI budget refining a report you cannot save changes
+ * to would be a confusing dead end, not a real capability.
+ */
+export async function getRefineContext(args: {
+  session: SessionClaims;
+  correlationId: string;
+  id: string;
+  requestedSchoolIds: readonly string[];
+}): Promise<RefineContext> {
+  const row = await getRowOrThrow(args.id, args.correlationId);
+  assertOwner(row, args.session, args.correlationId);
+  const view = await viewReport({
+    session: args.session,
+    correlationId: args.correlationId,
+    id: args.id,
+    requestedSchoolIds: args.requestedSchoolIds,
+  });
+  return {
+    reportName: view.name,
+    schoolIds: view.spec.meta.scope.map((s) => s.school_id),
+    queries: view.logic.queries.map((q) => ({ key: q.key, sql: q.sql })),
+    widgets: view.spec.widgets,
+  };
+}
+
+/**
+ * Persists an AI-proposed answer as the report's next version — "Apply" in
+ * the Ask AI side panel. Unlike `updateReportSql`, this accepts a report
+ * currently in EITHER mode: an AI-proposed answer is always literal SQL
+ * (`run_query`/`run_multi` accept no placeholders at all), so applying one
+ * IS the "materialize a predefined clone into literal SQL" step docs/06 §1
+ * named as unbuilt — built here, scoped tightly to a statement the guard
+ * already validated when the model ran it during the turn that produced it.
+ * `updateReportSql`'s own mode restriction is untouched: hand-typing SQL
+ * into the SQL tab still cannot do this, on purpose (docs/06 §1's MVP-scope
+ * note) — only an AI-authored statement can cross that line, through this
+ * function alone.
+ */
+export async function applyRefinement(args: {
+  session: SessionClaims;
+  correlationId: string;
+  id: string;
+  queries: readonly { key: string; sql: string }[];
+  draft: ChartSpecDraft;
+}): Promise<CustomReportView> {
+  const row = await getRowOrThrow(args.id, args.correlationId);
+  assertOwner(row, args.session, args.correlationId);
+
+  const next: RawSqlDef = { mode: 'raw_sql', queries: [...args.queries], draft: args.draft };
+  const run = await runRawSqlMode({
+    session: args.session,
+    correlationId: args.correlationId,
+    reportName: row.name,
+    def: next,
+    effectiveSchoolIds: row.school_scope,
+  });
+
+  const updated = await saveNewVersion({
+    id: row.id,
+    defJson: next,
+    sqlText: run.sqlText,
+    editedBy: args.session.sub,
+  });
+
+  await auditSink.write({
+    kind: 'report_definition.changed',
+    at: new Date().toISOString(),
+    actor_sub: args.session.sub,
+    org_id: args.session.org_id,
+    correlation_id: args.correlationId,
+    report_id: row.id,
+    school_ids: row.school_scope,
+    action: 'refined_with_ai',
     version: updated.current_version,
   });
 

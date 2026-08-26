@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { PlatformError, ERROR_CODES } from '@sap/shared';
 import './env-defaults.js';
 
-const { hydrate, hydrateWidget } = await import('../src/services/ai-chat.js');
+const { hydrate, hydrateWidget, buildSystemPrompt } = await import('../src/services/ai-chat.js');
 
 const SCOPE = [{ school_id: 'stmarksmb', school_name: 'St Marks MB' }];
 
@@ -109,5 +109,30 @@ describe('hydrate', () => {
     // The cache is what the ORCHESTRATOR built while executing tool calls —
     // an empty one here stands in for "this query_ref was never actually run".
     expect(() => hydrate(draft, new Map(), SCOPE, 'corr-1')).toThrow(PlatformError);
+  });
+});
+
+describe('buildSystemPrompt — ✎ Refine with AI seeding (docs/06 §1)', () => {
+  const CATALOG = { tables: [] };
+
+  it('carries no refine seeding when no report is being refined (a fresh Ask AI question)', () => {
+    const prompt = buildSystemPrompt(CATALOG, SCOPE);
+    expect(prompt).not.toContain('REFINING');
+  });
+
+  it('folds the report’s current SQL and widgets into the prompt when refining', () => {
+    const prompt = buildSystemPrompt(CATALOG, SCOPE, {
+      reportName: 'Payment modes (copy)',
+      queries: [{ key: 'by_mode', sql: 'SELECT paymenttype, SUM(paidamount) AS collected FROM fee_collection_data_set GROUP BY paymenttype' }],
+      widgets: [{ id: 'donut-mode', type: 'donut', label_field: 'paymenttype', value_field: 'collected', data: [] }],
+    });
+    expect(prompt).toContain('REFINING');
+    expect(prompt).toContain('Payment modes (copy)');
+    expect(prompt).toContain('paymenttype, SUM(paidamount)');
+    expect(prompt).toContain('donut-mode');
+    // The instruction that keeps a Q&A-only question from silently exploding
+    // into a multi-chart answer — the one behavioural rule this seeding exists
+    // to give the model, worth asserting on directly rather than by proxy.
+    expect(prompt).toContain('SAME NUMBER of widgets');
   });
 });

@@ -15,7 +15,9 @@ The MCP server is the **only path to school data** in the entire platform. Every
 | `run_query(school_id, sql)` | Single-school SELECT. AST-validated, row-capped (5,000), time-capped (10 s). | replica |
 | `run_multi(school_ids[], sql, merge)` | Parallel fan-out of one SELECT across replicas; rows tagged with school_id; merged/aggregated. ≤25 schools; partial-failure annotated. | replicas |
 | `run_rollup(metric, school_ids[], dims, range)` | Cross-school aggregates from the Rollup Store; ms-fast. | rollup store |
-| `run_predefined(report_id, school_ids[], params)` | Vetted parameterized SQL for the predefined catalog. | rollup/replica per report def |
+| `run_predefined(report_id, school_ids[], params, query_keys?)` | Vetted parameterized SQL for the predefined catalog. `query_keys` limits execution to a subset of the report's own named queries — a per-widget clone (docs/06 §3) asking for one chart's data, never the whole dashboard's. | rollup/replica per report def |
+
+**2026-08-26 — per-widget clone (`query_keys`, `bucket`).** `query_keys` names queries the report already declares; an unknown key is refused, never silently ignored. A report may also declare a `bucket` filter value (e.g. Fee Collection) that is **not** bound into any statement — it SELECTS among a query's pre-vetted `variants` (mcp-server/src/reports/catalog.ts), each a complete, hand-written, guard-checked statement keyed by a small enum. This is still `run_predefined`'s core property unchanged: the caller supplies a report id, filter values and now which of the report's own queries to run — never SQL, and never a fragment of one.
 
 ## 3. Safety rails (each independent; all always on)
 

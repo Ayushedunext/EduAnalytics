@@ -60,6 +60,15 @@ export interface ReportQuery {
   readonly key: string;
   readonly description: string;
   readonly sql: string;
+  /**
+   * Pre-vetted alternate statements for the SAME widget, keyed by a small
+   * enum (e.g. time-bucket unit) — never a caller-composed statement.
+   * `run_predefined` selects among these by validated key; it still never
+   * accepts SQL text from a caller (see run-predefined.ts's `bucket`
+   * handling). Column shape must match `sql` exactly, since the orchestrator
+   * builder that reads the result does not know which variant ran.
+   */
+  readonly variants?: Readonly<Record<string, string>>;
 }
 
 export interface PredefinedReport {
@@ -104,6 +113,23 @@ const AS_OF_DATE: ReportParam = {
   required: true,
   description:
     "The date the report is computed as of, YYYY-MM-DD. Aging bands and headcounts are measured against this date, not against today.",
+};
+
+/**
+ * Time-bucket selector for a single time-series widget's clone (docs/06 §3,
+ * per-widget customization). Optional and report-wide in `params` shape, but
+ * only meaningful to whichever query declares `variants` for it — a query
+ * with no `variants` simply ignores it. This is a SELECTOR among a small,
+ * catalog-authored set of statements, never a value spliced into SQL: the
+ * guard (sql/guard.ts) never sees this name at all, because the orchestrator
+ * picks the whole statement before anything reaches `prepareSelect`
+ * (run-predefined.ts).
+ */
+const BUCKET: ReportParam = {
+  name: 'bucket',
+  type: 'string',
+  required: false,
+  description: 'Time grouping for a time-series widget: week | month | quarter | year.',
 };
 
 /**
@@ -172,7 +198,7 @@ const FEE_COLLECTION: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'fee_collection_data_set · fee_compile_data_set',
   domain: 'fees',
-  params: [ACADEMIC_YEAR],
+  params: [ACADEMIC_YEAR, BUCKET],
   queries: [
     /**
      * There is deliberately no separate `totals` query. It would be a second
@@ -187,6 +213,29 @@ const FEE_COLLECTION: PredefinedReport = {
         'SELECT fee_month, MIN(MONTH(feedate)) AS mo, ROUND(SUM(paidamount)) AS collected ' +
         'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
         'GROUP BY fee_month ORDER BY mo',
+      /**
+       * Per-widget clone (docs/06 §3): "Receipts by month" cloned on its own
+       * may re-group by week/quarter/year instead. `fee_month` has no raw
+       * week/quarter/year counterpart on the table, so these read `feedate`
+       * (a real per-row date, unlike the stamped-current-year columns
+       * elsewhere in this catalog) directly. Column names match the default
+       * exactly (`fee_month` as the label, `mo` as the sort key) so the
+       * orchestrator's widget builder needs no bucket-specific branch.
+       */
+      variants: {
+        week:
+          "SELECT DATE_FORMAT(feedate, '%x-W%v') AS fee_month, MIN(YEARWEEK(feedate, 3)) AS mo, ROUND(SUM(paidamount)) AS collected " +
+          'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+          "GROUP BY DATE_FORMAT(feedate, '%x-W%v') ORDER BY mo",
+        quarter:
+          "SELECT CONCAT('Q', QUARTER(feedate)) AS fee_month, MIN(QUARTER(feedate)) AS mo, ROUND(SUM(paidamount)) AS collected " +
+          'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+          'GROUP BY QUARTER(feedate) ORDER BY mo',
+        year:
+          'SELECT YEAR(feedate) AS fee_month, MIN(YEAR(feedate)) AS mo, ROUND(SUM(paidamount)) AS collected ' +
+          'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+          'GROUP BY YEAR(feedate) ORDER BY mo',
+      },
     },
     {
       key: 'by_class',

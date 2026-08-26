@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from 'react';
 import { ChartSpecView } from '@sap/chart-spec/react';
+import type { Widget } from '@sap/chart-spec';
 import {
   ApiFailure,
   customReportPdfUrl,
@@ -34,6 +35,7 @@ import {
   type SessionResponse,
 } from '../api/client';
 import { LogicPanel } from './LogicPanel';
+import { AskAiPanel } from './AskAiPanel';
 
 interface Props {
   session: SessionResponse;
@@ -48,6 +50,7 @@ export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Prop
   const [error, setError] = useState<string | null>(null);
   const [showLogic, setShowLogic] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [askAiWidget, setAskAiWidget] = useState<{ id: string; title: string } | null>(null);
   const [showVersions, setShowVersions] = useState(false);
 
   const load = (): void => {
@@ -60,6 +63,7 @@ export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Prop
   };
 
   useEffect(load, [id, schoolIds]);
+  useEffect(() => { setAskAiWidget(null); }, [id]);
 
   if (error !== null && report === null) {
     return (
@@ -160,9 +164,42 @@ export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Prop
           </div>
         )}
 
-        <ChartSpecView spec={report.spec} />
+        <ChartSpecView
+          spec={report.spec}
+          {...(report.is_owner
+            ? {
+                renderWidgetActions: (widget: Widget) => (
+                  <button
+                    type="button"
+                    className={`askAiWidgetBtn ${session.ai_status === 'active' ? '' : 'disabled'}`}
+                    disabled={session.ai_status !== 'active'}
+                    title={
+                      session.ai_status === 'active'
+                        ? `Ask AI about "${widget.title ?? report.name}"`
+                        : 'Complete AI setup in Settings to ask about this chart'
+                    }
+                    onClick={() => {
+                      setAskAiWidget({ id: widget.id, title: widget.title ?? report.name });
+                    }}
+                  >
+                    ✦ Ask AI
+                  </button>
+                ),
+              }
+            : {})}
+        />
 
         {showLogic && <LogicPanel report={report} />}
+
+        {askAiWidget !== null && (
+          <AskAiPanel
+            reportId={report.id}
+            widgetTitle={askAiWidget.title}
+            schoolIds={schoolIds}
+            onApplied={(updated) => { setReport(updated); }}
+            onClose={() => { setAskAiWidget(null); }}
+          />
+        )}
 
         {showVersions && (
           <VersionHistory

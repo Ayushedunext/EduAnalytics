@@ -39,6 +39,21 @@ const everyQuery = reports.flatMap((report) =>
   report.queries.map((query) => [`${report.id} · ${query.key}`, report, query] as const),
 );
 
+/**
+ * Every (report, bucket variant) pair — docs/06 §3's per-widget clone. A
+ * variant is hand-written SQL exactly like `query.sql` (reports/catalog.ts),
+ * so it gets the same "does the shipped SQL survive the guard?" coverage;
+ * `run_predefined` selects one of these to RUN, never to display alongside
+ * the default, so nothing else in this file would otherwise exercise it.
+ */
+const everyVariant = reports.flatMap((report) =>
+  report.queries.flatMap((query) =>
+    Object.entries(query.variants ?? {}).map(
+      ([bucket, sql]) => [`${report.id} · ${query.key} · ${bucket}`, report, sql] as const,
+    ),
+  ),
+);
+
 function bind(report: (typeof reports)[number]): Record<string, string> {
   return Object.fromEntries(report.params.map((p) => [p.name, VALUES[p.name] ?? 'x']));
 }
@@ -80,6 +95,69 @@ describe('every shipped statement survives the guard', () => {
   });
 });
 
+describe('every bucket variant survives the guard, same as its default statement', () => {
+  it.each(everyVariant)('%s prepares', (_label, report, sql) => {
+    expect(() => prepare(report, sql)).not.toThrow();
+  });
+
+  it.each(everyVariant)('%s carries the tenant filter, bound', (_label, report, sql) => {
+    const prepared = prepare(report, sql);
+    expect(prepared.params[TENANT_PARAM]).toBe('stmarksmb');
+  });
+
+  it.each(everyVariant)('%s reads only tables in the schema catalog', (_label, report, sql) => {
+    const prepared = prepare(report, sql);
+    expect(prepared.tables.length).toBeGreaterThan(0);
+    for (const table of prepared.tables) {
+      expect(ERP_V1.tables.some((t) => t.name === table)).toBe(true);
+    }
+  });
+
+  /**
+   * The whole point of picking a variant instead of parameterising the
+   * statement (reports/catalog.ts's comment on `ReportQuery.variants`) is
+   * that the orchestrator's widget-building code never learns which one ran
+   * — `merged.sumBy('by_month', 'fee_month', ..., 'mo')` reads the same two
+   * column names regardless of bucket. A variant with a different shape
+   * would silently break that reuse.
+   */
+  it('every bucket variant of a query returns the same column names as its default', () => {
+    for (const report of reports) {
+      for (const query of report.queries) {
+        if (query.variants === undefined) continue;
+        const defaultColumns = columnAliases(query.sql);
+        for (const [bucket, sql] of Object.entries(query.variants)) {
+          expect(columnAliases(sql), `${report.id} · ${query.key} · ${bucket}`).toEqual(defaultColumns);
+        }
+      }
+    }
+  });
+});
+
+/**
+ * Column aliases in declaration order, e.g. 'SELECT a AS x, b AS y' -> ['x',
+ * 'y']. Splits on top-level commas only (parenthesis-depth aware), since a
+ * bucket variant's column list nests them — `DATE_FORMAT(feedate, '...')`
+ * has a comma that is not a column separator.
+ */
+function columnAliases(sql: string): string[] {
+  const select = sql.slice(sql.indexOf('SELECT') + 'SELECT'.length, sql.indexOf(' FROM '));
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < select.length; i += 1) {
+    const ch = select[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (ch === ',' && depth === 0) {
+      parts.push(select.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(select.slice(start));
+  return parts.map((part) => part.trim().split(/\s+AS\s+/i)[1] ?? part.trim());
+}
+
 describe('a report may only use filters it declares', () => {
   it.each(everyQuery)('%s binds no undeclared parameter', (_label, report, query) => {
     const prepared = prepare(report, query.sql);
@@ -99,12 +177,23 @@ describe('a report may only use filters it declares', () => {
         }
       }
       /**
+       * `bucket` (docs/06 §3 per-widget clone) is a SELECTOR among a query's
+       * pre-vetted `variants` (reports/catalog.ts) — run-predefined.ts picks
+       * a whole alternate statement with it and never binds it as `:bucket`,
+       * so it can never appear in `prepare(...).params` even when genuinely
+       * consumed. Excepted narrowly, only for a report where some query
+       * actually declares `variants`: a report with none has no legitimate
+       * reason to declare `bucket` either, and would still be caught below.
+       */
+      const hasVariants = report.queries.some((q) => q.variants !== undefined);
+      const expectedNames = report.params.map((p) => p.name).filter((name) => !(name === 'bucket' && hasVariants));
+      /**
        * A declared-but-unused filter is a pill on screen that narrows nothing —
        * the user believes the report is filtered and it is not. `prepareSelect`
        * binds only the parameters a statement actually uses, so an unused
        * declaration is invisible at runtime and must be caught here.
        */
-      expect([...used].sort()).toEqual(report.params.map((p) => p.name).sort());
+      expect([...used].sort()).toEqual(expectedNames.sort());
     }
   });
 

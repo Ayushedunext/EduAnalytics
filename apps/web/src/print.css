@@ -135,8 +135,7 @@ body {
 .printPage .specPanelTitle {
   font-size: 12.5px;
 }
-.printPage .card,
-.printPage .dcard {
+.printPage .card {
   animation: none;
 }
 

@@ -44,6 +44,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { widgetSchema } from '../spec.js';
 import type {
   BarWidget,
   DonutWidget,
@@ -78,11 +79,11 @@ const INK = '#032e36';
 const tick = { fill: MUTED, fontSize: 11 };
 
 /** Numbers are read as quantities, so they are grouped Indian-style. */
-const compact = new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 });
+const compactNum = new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 });
 const full = new Intl.NumberFormat('en-IN');
 
 function axisNumber(value: number): string {
-  return compact.format(value);
+  return compactNum.format(value);
 }
 
 /**
@@ -280,10 +281,17 @@ function maxValueIndex(rows: readonly Record<string, unknown>[], field: string):
   return best >= 0 ? best : null;
 }
 
-export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
+export function BarPanel({
+  widget,
+  compact,
+}: {
+  widget: BarWidget;
+  /** Card-sized: fixed short height, axes dropped, chosen by shape alone (Home preview cards). */
+  compact?: boolean | undefined;
+}): ReactElement {
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="medium">
+      <Panel title={widget.title} variant="medium" compact={compact}>
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">▤</span>
           <span className="msg">No records available.</span>
@@ -309,7 +317,7 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
      * 26px a row keeps a 12px bar plus air, and the 560px ceiling stops a
      * pathological category list from producing a page-long chart.
      */
-    const height = clamp(44 + axis.count * 26, 180, 560);
+    const height = compact === true ? 190 : clamp(44 + axis.count * 26, 180, 560);
     /**
      * The axis takes the width its labels need, up to a ceiling that leaves the
      * bars the larger half of the panel. `- 14` is the tick line and its gap.
@@ -323,7 +331,7 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
     const labelChars = Math.floor((labelWidth - 14) / CHAR_PX);
 
     return (
-      <Panel title={widget.title} variant="wide">
+      <Panel title={widget.title} variant="wide" compact={compact}>
         <ResponsiveContainer width="100%" height={height}>
           <BarChart
             data={[...widget.data]}
@@ -332,17 +340,23 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
           >
             {/* Grid lines run along the value axis only — the category axis has
                 no scale to read against. */}
-            <CartesianGrid stroke={GRID} horizontal={false} />
+            {compact !== true && <CartesianGrid stroke={GRID} horizontal={false} />}
             <defs>
               <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
                 <stop offset="0%" stopColor={SERIES[0]} stopOpacity={0.62} />
                 <stop offset="100%" stopColor={SERIES[0]} stopOpacity={1} />
               </linearGradient>
             </defs>
-            <XAxis type="number" tick={tick} tickFormatter={axisNumber} height={28} />
+            {/* At card size the exact category names and axis scale are a click
+                away on the real dashboard; the shape of the bars is the thing a
+                glance needs, so both axes are dropped rather than shrunk to
+                illegibility (§8's "one chart language" still applies — same
+                gradient, same highlight, same tooltip, just no axis chrome). */}
+            <XAxis type="number" hide={compact === true} tick={tick} tickFormatter={axisNumber} height={28} />
             <YAxis
               type="category"
               dataKey={widget.x}
+              hide={compact === true}
               tick={<CategoryTick maxChars={labelChars} />}
               interval={0}
               width={labelWidth}
@@ -372,10 +386,10 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
   }
 
   return (
-    <Panel title={widget.title} variant="medium">
-      <ResponsiveContainer width="100%" height={260}>
+    <Panel title={widget.title} variant="medium" compact={compact}>
+      <ResponsiveContainer width="100%" height={compact === true ? 190 : 260}>
         <BarChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
-          <CartesianGrid stroke={GRID} vertical={false} />
+          {compact !== true && <CartesianGrid stroke={GRID} vertical={false} />}
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={SERIES[0]} stopOpacity={1} />
@@ -384,6 +398,7 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
           </defs>
           <XAxis
             dataKey={widget.x}
+            hide={compact === true}
             tick={tick}
             interval={0}
             angle={-35}
@@ -391,7 +406,7 @@ export function BarPanel({ widget }: { widget: BarWidget }): ReactElement {
             tickMargin={4}
             height={clamp(axis.longest * 4.8 + 26, 40, 76)}
           />
-          <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
+          <YAxis hide={compact === true} tick={tick} tickFormatter={axisNumber} width={54} />
           <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
           <Bar
             dataKey={widget.y}
@@ -442,14 +457,21 @@ function makeLineDot(lastIndex: number): (props: LineDotProps) => ReactElement {
   };
 }
 
-export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
+export function LinePanel({
+  widget,
+  compact,
+}: {
+  widget: LineWidget;
+  /** Card-sized: fixed short height, axes dropped (Home preview cards). */
+  compact?: boolean | undefined;
+}): ReactElement {
   const gradId = useGradientId('area');
 
   // Empty and single-point series read as a broken chart if forced through
   // the same axes a real trend uses — an honest small state instead (§18/19).
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="hero">
+      <Panel title={widget.title} variant="hero" compact={compact}>
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">📈</span>
           <span className="msg">No records available for this period.</span>
@@ -463,7 +485,7 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
     const value = row[widget.y];
     const label = row[widget.x];
     return (
-      <Panel title={widget.title} variant="hero">
+      <Panel title={widget.title} variant="hero" compact={compact}>
         <div className="specSingle">
           <span className="value">
             {typeof value === 'number' ? full.format(value) : String(value ?? '—')}
@@ -476,8 +498,8 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
   }
 
   return (
-    <Panel title={widget.title} variant="hero">
-      <ResponsiveContainer width="100%" height={260}>
+    <Panel title={widget.title} variant="hero" compact={compact}>
+      <ResponsiveContainer width="100%" height={compact === true ? 190 : 260}>
         <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <defs>
             {/* A static fade to transparent — fixed SVG stops, not a timed
@@ -488,11 +510,12 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
               <stop offset="100%" stopColor={SERIES[0]} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke={GRID} vertical={false} />
+          {compact !== true && <CartesianGrid stroke={GRID} vertical={false} />}
           {/* A line's x is a sequence — months, terms — so it stays horizontal
               and only sizes its band to the labels it actually has. */}
           <XAxis
             dataKey={widget.x}
+            hide={compact === true}
             tick={tick}
             interval={0}
             angle={-35}
@@ -500,7 +523,7 @@ export function LinePanel({ widget }: { widget: LineWidget }): ReactElement {
             tickMargin={4}
             height={clamp(categoryAxis(widget.data, widget.x).longest * 4.8 + 26, 40, 76)}
           />
-          <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
+          <YAxis hide={compact === true} tick={tick} tickFormatter={axisNumber} width={54} />
           <Tooltip
             content={<ChartTooltip />}
             cursor={{ stroke: SERIES[0], strokeWidth: 1, strokeDasharray: '3 3' }}
@@ -533,10 +556,17 @@ function centerLabel(text: string, max = 15): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
+export function DonutPanel({
+  widget,
+  compact,
+}: {
+  widget: DonutWidget;
+  /** Card-sized: smaller ring, no legend list (Home preview cards). */
+  compact?: boolean | undefined;
+}): ReactElement {
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="side">
+      <Panel title={widget.title} variant="side" compact={compact}>
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">◔</span>
           <span className="msg">No records available.</span>
@@ -568,7 +598,7 @@ export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
   const showDominant = widget.data.length > 1 && dominant !== null && dominantShare >= 0.5;
 
   return (
-    <Panel title={widget.title} variant="side">
+    <Panel title={widget.title} variant="side" compact={compact}>
       {/**
        * The centre readout is a plain HTML overlay, not an SVG `<Label>` child
        * of `<Pie>`. Recharts 3's Pie no longer mounts a child `Label` at all
@@ -578,14 +608,14 @@ export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
        * overlay from stealing hover off the ring underneath it.
        */}
       <div className="specDonutWrap">
-        <ResponsiveContainer width="100%" height={220}>
+        <ResponsiveContainer width="100%" height={compact === true ? 190 : 220}>
           <PieChart>
             <Pie
               data={[...widget.data]}
               dataKey={widget.value_field}
               nameKey={widget.label_field}
-              innerRadius={58}
-              outerRadius={88}
+              innerRadius={compact === true ? 54 : 58}
+              outerRadius={compact === true ? 84 : 88}
               paddingAngle={2}
               isAnimationActive={ANIMATE}
             >
@@ -609,16 +639,16 @@ export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
         {/* The KPI strip above already states the total; restating it (or,
             when one slice dominates, naming that slice) where the eye
             actually lands saves the reader from adding the legend by hand. */}
-        <div className="specDonutCenter">
+        <div className={compact === true ? 'specDonutCenter specDonutCenter--compact' : 'specDonutCenter'}>
           {showDominant && dominant !== null ? (
             <>
               <span className="value">{Math.round(dominantShare * 100)}%</span>
-              <span className="label">{centerLabel(dominant.label)}</span>
+              {compact !== true && <span className="label">{centerLabel(dominant.label)}</span>}
             </>
           ) : (
             <>
-              <span className="value">{compact.format(total)}</span>
-              <span className="label">TOTAL</span>
+              <span className="value">{compactNum.format(total)}</span>
+              {compact !== true && <span className="label">TOTAL</span>}
             </>
           )}
         </div>
@@ -627,21 +657,24 @@ export function DonutPanel({ widget }: { widget: DonutWidget }): ReactElement {
           area with a legend row pushed the ring's true centre away from the
           container's geometric centre, which is what the HTML overlay above
           centres against. Keeping the legend outside that area keeps both
-          simple. */}
-      <ul className="specDonutLegend">
-        {widget.data.map((row, index) => {
-          const inPalette = index < SERIES.length;
-          return (
-            <li key={String(row[widget.label_field] ?? index)}>
-              <span
-                className="dot"
-                style={{ background: inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER }}
-              />
-              {String(row[widget.label_field] ?? '')}
-            </li>
-          );
-        })}
-      </ul>
+          simple. Dropped entirely at card size: the ring's colour split is the
+          glance, and the full legend is a click away on the real dashboard. */}
+      {compact !== true && (
+        <ul className="specDonutLegend">
+          {widget.data.map((row, index) => {
+            const inPalette = index < SERIES.length;
+            return (
+              <li key={String(row[widget.label_field] ?? index)}>
+                <span
+                  className="dot"
+                  style={{ background: inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER }}
+                />
+                {String(row[widget.label_field] ?? '')}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Panel>
   );
 }
@@ -701,12 +734,22 @@ type PanelVariant = 'hero' | 'side' | 'medium' | 'wide';
 function Panel({
   title,
   variant,
+  compact,
   children,
 }: {
   title?: string | undefined;
   variant?: PanelVariant | undefined;
+  /**
+   * A caller that already owns the card chrome and the title -- Home's preview
+   * cards (services/home.ts `buildHomePreviews`) -- gets the chart with neither
+   * repeated. Never used by the dashboard screen or the PDF: both still get the
+   * full `.card specPanel` exactly as before, which is what keeps ADR-021 true
+   * (same renderer produces what prints).
+   */
+  compact?: boolean | undefined;
   children: ReactNode;
 }): ReactElement {
+  if (compact === true) return <div className="specPanelCompact">{children}</div>;
   return (
     <section className={`card specPanel${variant !== undefined ? ` specPanel--${variant}` : ''}`}>
       {title !== undefined && (
@@ -741,19 +784,54 @@ function toneColour(tone: KpiWidget['tone']): string {
 /**
  * Dispatch on the discriminant. The union is closed, so this is exhaustive.
  * `hero` only ever reaches the `kpi` branch — it names the headline metric in
- * a KPI row (§22), which is meaningless for a chart or table widget.
+ * a KPI row (§22), which is meaningless for a chart or table widget. `compact`
+ * only ever reaches a chart branch (bar/line/donut) — it means "card-sized,
+ * chrome dropped" (Home preview cards), which a KPI tile or a table does not
+ * have a smaller form of.
  */
-export function WidgetView({ widget, hero }: { widget: Widget; hero?: boolean | undefined }): ReactElement {
+export function WidgetView({
+  widget,
+  hero,
+  compact,
+}: {
+  widget: Widget;
+  hero?: boolean | undefined;
+  compact?: boolean | undefined;
+}): ReactElement {
   switch (widget.type) {
     case 'kpi':
       return <KpiTile widget={widget} hero={hero} />;
     case 'bar':
-      return <BarPanel widget={widget} />;
+      return <BarPanel widget={widget} compact={compact} />;
     case 'line':
-      return <LinePanel widget={widget} />;
+      return <LinePanel widget={widget} compact={compact} />;
     case 'donut':
-      return <DonutPanel widget={widget} />;
+      return <DonutPanel widget={widget} compact={compact} />;
     case 'table':
       return <TablePanel widget={widget} />;
   }
+}
+
+/**
+ * Validate-then-render for exactly ONE untrusted widget, the same contract
+ * `ChartSpecView` applies to a whole spec (CODING_GUIDELINES §10) — for a
+ * caller that has a single widget rather than a full report, e.g. Home's
+ * per-dashboard preview cards. Never skip straight to `WidgetView` with an
+ * unvalidated widget; that would make this the one rendering path in the
+ * product whose safety depends on the honesty of whoever built the object.
+ */
+export function WidgetSpecView({
+  widget,
+  hero,
+  compact,
+}: {
+  widget: unknown;
+  hero?: boolean | undefined;
+  compact?: boolean | undefined;
+}): ReactElement {
+  const parsed = widgetSchema.safeParse(widget);
+  if (!parsed.success) {
+    return <div className="notice">This could not be displayed because its definition is not valid.</div>;
+  }
+  return <WidgetView widget={parsed.data} hero={hero} compact={compact} />;
 }

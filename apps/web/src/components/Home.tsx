@@ -1,5 +1,8 @@
 /**
- * Home (docs/10 §2), laid out to match the UX prototype (docs/11, Artifacts).
+ * Home (docs/10 §2). The greeting, ask-bar and KPI strip follow the UX
+ * prototype (docs/11, Artifacts); the dashboard section below them does not —
+ * see "One nav, one overview, not two navs" below for why docs/10 §2 was
+ * amended to move away from the prototype's two link-tile galleries.
  *
  * -- Every number here is real -----------------------------------------------
  * The KPI row renders a hydrated chart-spec built by the orchestrator from live
@@ -30,28 +33,56 @@
  * and no screen code changed. The server decides which is which; this component
  * only renders the verdict. They look different because they need different
  * people to fix them.
+ *
+ * -- One nav, one overview, not two navs -------------------------------------
+ * The sidebar is the menu (every dashboard, Ask AI, Settings — Sidebar.tsx). It
+ * used to be duplicated here as a second set of link-only tiles, which meant
+ * this screen and the sidebar were two menus disagreeing about nothing, just
+ * saying the same thing twice. Home's own job is to be the ONE screen that
+ * shows something FROM each dashboard rather than a way to each dashboard —
+ * `available` dashboards get a live preview card (their own lead widget,
+ * services/home.ts `buildHomePreviews`, same cache entry the dashboard itself
+ * uses); `coming`/`blocked` ones, which have nothing to preview, collapse into
+ * a slim strip, because the sidebar is already the place to discover those.
  */
 
-import { KpiTile } from '@sap/chart-spec/react';
-import type { HomeResponse, SessionResponse, DashboardCard } from '../api/client';
+import { KpiTile, WidgetSpecView } from '@sap/chart-spec/react';
+import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
 
 interface Props {
   session: SessionResponse;
   home: HomeResponse;
   loading: boolean;
+  /** `null` until the previews fetch resolves (services/home.ts, a second, slower call). */
+  previews: HomePreview[] | null;
+  previewsLoading: boolean;
   onOpen: (reportId: string) => void;
   onAskAI: () => void;
 }
 
-export function Home({ session, home, loading, onOpen, onAskAI }: Props): JSX.Element {
+export function Home({
+  session,
+  home,
+  loading,
+  previews,
+  previewsLoading,
+  onOpen,
+  onAskAI,
+}: Props): JSX.Element {
   const aiActive = session.ai_status === 'active';
   const scopeNames = home.spec.meta.scope.map((s) => s.school_name).join(' · ');
-  const director = home.dashboards.filter((c) => c.group === 'director');
-  const school = home.dashboards.filter((c) => c.group === 'school');
+  const previewable = home.dashboards.filter((c) => c.status === 'available');
+  const more = home.dashboards.filter((c) => c.status !== 'available');
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1180px]">
+      {/* Wider than every other screen's 1180px content column (Settings.tsx,
+          AskAI.tsx, DashboardPage.tsx, ReportEditor.tsx all share it) -- a
+          deliberate exception, not a drift. Those are single-report reading
+          widths; Home is the one screen that is ITSELF a grid of cards, and a
+          grid has nothing to gain from stopping short of the window on a wide
+          monitor the way a filter-pills-and-table page does. */}
+      <div className="px-7 py-6 max-w-[1900px]">
         <h1 className="page-title">
           {greeting()}, {session.user.role === 'DIRECTOR' ? 'Director ' : ''}
           {surname(session.user.name)}
@@ -144,19 +175,26 @@ export function Home({ session, home, loading, onOpen, onAskAI }: Props): JSX.El
           ))}
         </div>
 
-        <div className="sect">Director dashboards</div>
-        <div className="gallery">
-          {director.map((card) => (
-            <Card key={card.id} card={card} tier="dir" onOpen={onOpen} />
+        <div className="sect">
+          Your dashboards
+          {previewsLoading && previews === null && (
+            <span className="text-[11px] font-normal normal-case tracking-normal text-[var(--color-muted)]">
+              loading previews…
+            </span>
+          )}
+        </div>
+        <div className="pgallery">
+          {previewable.map((card) => (
+            <PreviewCard
+              key={card.id}
+              card={card}
+              preview={previews?.find((p) => p.id === card.id)}
+              onOpen={onOpen}
+            />
           ))}
         </div>
 
-        <div className="sect">School dashboards</div>
-        <div className="gallery">
-          {school.map((card) => (
-            <Card key={card.id} card={card} tier="school" onOpen={onOpen} />
-          ))}
-        </div>
+        <MoreDashboards cards={more} />
 
         <p className="text-[11.5px] text-[var(--color-muted)] mt-7 leading-relaxed">
           Scope comes from the launch token the ERP signed. It cannot be widened from this browser,
@@ -167,37 +205,67 @@ export function Home({ session, home, loading, onOpen, onAskAI }: Props): JSX.El
   );
 }
 
-function Card({
+/**
+ * A dashboard's own lead CHART, live -- the same bar/line/donut
+ * `buildDashboard` would draw first on the full report (services/home.ts,
+ * `buildHomePreviews`), rendered here at card size (`compact`, widgets.tsx).
+ * Home's KPI strip above already carries the numbers, so the preview's job is
+ * to be the thing the strip can't be: a shape. Clicking anywhere on the card
+ * opens that report, same as the old link-tile did.
+ */
+function PreviewCard({
   card,
-  tier,
+  preview,
   onOpen,
 }: {
   card: DashboardCard;
-  tier: 'dir' | 'school';
+  preview: HomePreview | undefined;
   onOpen: (reportId: string) => void;
 }): JSX.Element {
-  const enabled = card.status === 'available';
   return (
-    <div
-      className={`card dcard ${enabled ? 'enabled' : 'disabled'}`}
-      title={card.reason ?? card.blurb}
-      onClick={() => {
-        if (enabled) onOpen(card.id);
-      }}
-    >
-      <div className={`ic ${tier === 'dir' ? 'dir' : ''}`}>{card.icon}</div>
-      <div className="min-w-0">
-        <b>
-          {card.title}
-          {card.status === 'coming' && <span className="pill soon ml-2">soon</span>}
-          {card.status === 'blocked' && <span className="pill nodata ml-2">no data</span>}
-        </b>
-        <span className="blurb">{card.blurb}</span>
-        {/* The reason is on the card, not only in a tooltip: "why can't I open
-            this?" should not require hovering. */}
-        {!enabled && card.reason !== undefined && <span className="why">{card.reason}</span>}
+    <div className="card pcard" onClick={() => { onOpen(card.id); }} role="button" tabIndex={0}>
+      <div className="pcardHead">
+        <span className="pcardIc">{card.icon}</span>
+        <b>{card.title}</b>
+        <span className="pcardGo" aria-hidden="true">→</span>
+      </div>
+      <div className="pcardBody">
+        {preview === undefined ? (
+          <div className="skeleton skeletonPreview" />
+        ) : preview.status === 'ok' && preview.widget !== null ? (
+          <WidgetSpecView widget={preview.widget} compact />
+        ) : (
+          <span className="pcardMuted">{preview.reason ?? card.blurb}</span>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Everything with nothing to preview -- `coming` (not built yet) and
+ * `blocked` (no data in the ERP extract) alike. One slim row rather than full
+ * tiles: the sidebar already lists each of these by name with the same
+ * status and reason (Sidebar.tsx), so this strip is a reminder they exist,
+ * not the place to learn about them for the first time.
+ */
+function MoreDashboards({ cards }: { cards: readonly DashboardCard[] }): JSX.Element | null {
+  if (cards.length === 0) return null;
+  return (
+    <>
+      <div className="sect">More dashboards</div>
+      <div className="moreStrip">
+        {cards.map((card) => (
+          <span key={card.id} className="moreChip" title={card.reason ?? card.blurb}>
+            <span aria-hidden="true">{card.icon}</span>
+            {card.title}
+            <span className={`pill ${card.status === 'blocked' ? 'nodata' : 'soon'}`}>
+              {card.status === 'blocked' ? 'no data' : 'soon'}
+            </span>
+          </span>
+        ))}
+      </div>
+    </>
   );
 }
 

@@ -41,6 +41,7 @@ import { withMcp, type RunMultiResult } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
 import { cacheGet, cacheKey, cacheSet } from '../cache/result-cache.js';
 import { config } from '../config.js';
+import { buildDashboard, isDashboardId, type DashboardId } from './dashboards.js';
 
 /**
  * Vetted SQL. Read-only, catalog tables only, no placeholders, no tenant filter
@@ -125,6 +126,114 @@ export interface HomeSummary {
   readonly dashboards: readonly DashboardCard[];
   /** Schools that failed within a fan-out. Annotated, never swallowed (ADR-011). */
   readonly degraded_schools: readonly { school_id: string; message: string }[];
+}
+
+/**
+ * One dashboard's lead CHART, for the Home overview.
+ *
+ * `widget` is the FIRST chart-typed widget (bar/line/donut) of that
+ * dashboard's own spec, never a KPI and never a table — Home's own KPI strip
+ * above already carries the numbers, so a second row of number-only tiles
+ * would say nothing a preview card needs to. Every builder in
+ * services/dashboards.ts pushes its headline chart before its secondary ones
+ * (services/dashboards.ts, e.g. `bar-department` before `bar-stafftype`), so
+ * taking the first chart widget in the spec's own order is the same
+ * "never re-pick by inspecting values" rule the KPI strip already follows —
+ * just applied one type over. Falls back to the lead KPI only for a dashboard
+ * whose only widgets ARE KPIs for this school selection (e.g. Admissions with
+ * no chartable breakdown yet); `null` only when the dashboard has no widgets
+ * at all, which `buildDashboard` itself already treats as a failure below.
+ * `status: 'blocked'` covers both "no permission" and "no data": either way
+ * there is nothing to preview, and the reason travels so the card can say why
+ * rather than rendering empty.
+ */
+export interface HomePreview {
+  readonly id: DashboardId;
+  readonly title: string;
+  readonly icon: string;
+  readonly widget: Widget | null;
+  readonly status: 'ok' | 'blocked';
+  readonly reason?: string;
+}
+
+export interface HomePreviews {
+  readonly previews: readonly HomePreview[];
+}
+
+/**
+ * Live previews for the Home overview — one lead widget per dashboard this
+ * session can actually open.
+ *
+ * Deliberately a SEPARATE call from `buildHomeSummary`, not folded into it: the
+ * KPI strip above answers from 4 lightweight aggregate queries, and Home is the
+ * one screen every user loads on every visit (docs/09 §3's dashboard-cold
+ * budget is 0.5-2s). Fetching six dashboards' worth of predefined queries in
+ * that same request would make the FIRST paint of Home pay for all of them.
+ * Splitting the call lets the KPI strip render immediately and the preview
+ * cards fill in as this resolves, with a skeleton in between (docs/10 §1,
+ * "feels instant").
+ *
+ * No new SQL, no new cache: each dashboard is fetched through the exact same
+ * `buildDashboard` the standalone report page uses, so it is the same vetted
+ * statement, the same permission check, and the same Redis cache entry
+ * (services/dashboards.ts) — a school's Fee Collection preview and its Fee
+ * Collection dashboard are never two different numbers for the same period,
+ * and after the first load of either, the other is a cache hit.
+ */
+export async function buildHomePreviews(args: {
+  session: SessionClaims;
+  schoolIds: readonly string[];
+  academicYear: string;
+  asOfDate: string;
+  correlationId: string;
+}): Promise<HomePreviews> {
+  const eligible = DASHBOARDS.filter(
+    (card): card is DashboardCard & { id: DashboardId } =>
+      card.status === 'available' && isDashboardId(card.id),
+  );
+
+  const previews = await Promise.all(
+    eligible.map(async (card): Promise<HomePreview> => {
+      try {
+        const result = await buildDashboard({
+          session: args.session,
+          schoolIds: args.schoolIds,
+          reportId: card.id,
+          academicYear: args.academicYear,
+          asOfDate: args.asOfDate,
+          correlationId: args.correlationId,
+        });
+        const chart = result.spec.widgets.find(
+          (w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut',
+        );
+        return {
+          id: card.id,
+          title: card.title,
+          icon: card.icon,
+          widget: chart ?? result.spec.widgets[0] ?? null,
+          status: 'ok',
+        };
+      } catch (err) {
+        /**
+         * One dashboard's failure (no permission, no data, a degraded school)
+         * must not blank the other five — same partial-failure reasoning as the
+         * fan-outs above (ADR-011), one level up: here the "fan-out" is across
+         * dashboards rather than schools.
+         */
+        return {
+          id: card.id,
+          title: card.title,
+          icon: card.icon,
+          widget: null,
+          status: 'blocked',
+          reason:
+            err instanceof PlatformError ? err.message : 'This dashboard could not be loaded.',
+        };
+      }
+    }),
+  );
+
+  return { previews };
 }
 
 /**

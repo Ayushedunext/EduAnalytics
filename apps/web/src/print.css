@@ -83,9 +83,14 @@ body {
 }
 
 /* The KPI row and panels come from tokens.css; only the paper geometry differs:
-   two columns rather than a fluid grid, because a page has a fixed width and
-   `auto-fit` on 340px would drop to one column and waste half the sheet. */
+   a fixed 4-column grid rather than the screen's flex-wrap, because a page has
+   a fixed, known width where a flex row's grow/shrink has no page edge to
+   respond to -- an even grid is the better fit once the container can't
+   change size. `display: grid` is re-declared here because the base `.kpis`
+   rule (tokens.css) is flex on screen; `.kpi--hero`'s `grid-column: span 2`
+   still applies once this makes `.kpis` a grid again. */
 .printPage .kpis {
+  display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin-bottom: 12px;

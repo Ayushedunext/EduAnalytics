@@ -287,9 +287,23 @@ body {
 
 /* ---------- KPI / metric tiles ---------- */
 
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+/**
+ * Flexbox, not grid -- deliberately. `auto-fit`/`minmax` grid tracks are sized
+ * from the CONTAINER's width alone, so a report with, say, 6 KPIs on a screen
+ * wide enough for 4 columns gets a second row of only 2 tiles at their
+ * min-content width, with the other 4 columns' worth of grid left dangling
+ * empty rather than given to the tiles that exist. Flex-wrap's `flex-grow`
+ * distributes whatever width a row actually has among the items actually IN
+ * it, so a two-tile last row fills the row instead of leaving most of it
+ * blank. (print.css re-declares `display: grid` for `.printPage .kpis`, where
+ * a fixed page width makes the grid's own even columns the better fit --
+ * this rule and `.kpi--hero` below carry both a flex and a grid value for
+ * exactly that reason, each ignored by whichever layout mode is not active.)
+ */
+.kpis { display: flex; flex-wrap: wrap; gap: 16px; }
 
 .kpi {
+  flex: 1 1 210px;
   padding: 17px 19px 15px;
   position: relative;
   display: flex;
@@ -334,10 +348,10 @@ body {
 
 /* The headline metric in a KPI row (§22) — the first tile in the server's own
    widget order, never chosen by guessing which number "looks important". */
-.kpi--hero { grid-column: span 2; }
+.kpi--hero { flex: 2 1 436px; grid-column: span 2; }
 .kpi--hero .kpiValue { font-size: 36px; }
 .kpi--hero .kpiLabel { font-size: 12.5px; }
-@media (max-width: 560px) { .kpi--hero { grid-column: span 1; } }
+@media (max-width: 560px) { .kpi--hero { flex: 1 1 210px; grid-column: span 1; } }
 
 .pill {
   display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;

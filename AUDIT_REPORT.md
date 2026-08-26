@@ -64,6 +64,19 @@
 
 ---
 
+## Resolution log — 2026-08-26 (second entry) — three more predefined dashboards
+
+No open finding in this file blocked this work; recorded here for the same reason the custom-reports entry above is, and because it creates one new tracked item.
+
+Principal's Snapshot, Transport Analytics and Library & Textbooks were built (docs/11 §1), taking the catalog to 9 of 15. Two things worth a permanent record:
+
+1. **Principal's Snapshot is the first predefined report whose queries span more than one domain** (students, fees, staff). The SQL guard already enforced access per table rather than per report (`sql/guard.ts` reads `table.domain`, never a report-level field), so this was always safe to build — but `reports-catalog.test.ts`'s domain-permission invariant test had asserted only against the report's own single declared `domain` field, which would have silently under-tested any query needing a domain other than the first one filed. The test was generalised to derive required domains from the tables a query actually touches, which is both more correct and a strictly larger check for every existing single-domain report too.
+2. **A new, narrower owed input, `docs/11` §2 item 9 — closed the same day.** `student_transport_data_set`, `books_data_set` and `book_issue_data_set` were named in the 2026-08-21 extract but never sampled, and the first cut of both dashboards was built against a column list inferred from this catalog's own conventions rather than one read from a real table. Running them against this dev environment's own local `ai_analysis` MySQL instance surfaced the wrong guesses immediately (Transport Analytics failed outright; Library & Textbooks lost three of its five panels), and `information_schema.columns` read directly off that instance supplied the real shape — this turned out to be reachable data, not an ERP-team ask. Both reports were corrected same-day: `student_transport_data_set` keys on `studentprofileid` with no `classseq`/`deactivation_date`; `books_data_set` is one row per physical copy, not per title; `book_issue_data_set` shares the attendance tables' stamped-current-year trap and mixes student/staff borrowers. docs/06 §2 and docs/11 §1/§2 record the detail.
+
+**Files changed:** docs/06 · docs/11 · `apps/mcp-server/src/schema/erp-v1.ts` · `apps/mcp-server/src/reports/catalog.ts` · `apps/mcp-server/test/reports-catalog.test.ts` · `apps/orchestrator/src/services/dashboards.ts` · `apps/orchestrator/src/services/home.ts` · `apps/orchestrator/test/dashboards.test.ts` · this file.
+
+---
+
 ## Section A — Contradictions
 
 **A1 — Agent runtime's data path: "MCP-style layer" vs "MCP tools only"**

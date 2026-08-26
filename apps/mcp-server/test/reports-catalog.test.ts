@@ -22,7 +22,7 @@ import { PlatformError } from '@sap/shared';
 import { predefinedReports, predefinedReportIds } from '../src/reports/catalog.js';
 import { prepareSelect, TENANT_PARAM } from '../src/sql/guard.js';
 import { ERP_V1 } from '../src/schema/erp-v1.js';
-import { DOMAIN_PERM } from '../src/schema/catalog.js';
+import { DOMAIN_PERM, type DataDomain } from '../src/schema/catalog.js';
 
 const ALL_PERMS = ['students.read', 'fees.read', 'staff.read'];
 
@@ -140,22 +140,40 @@ describe('the catalog is internally consistent', () => {
 
 /**
  * docs/08 §4.5: a session holding only `fees.read` may read the fee tables and
- * nothing else. That is enforced in the guard, per table, per statement — so it
- * holds for predefined reports without the catalog doing anything, and this
- * proves it rather than assuming it.
+ * nothing else. That is enforced in the guard, per TABLE, per statement
+ * (sql/guard.ts reads `table.domain`, never a report-level field) — so it holds
+ * for predefined reports without the catalog doing anything, and this proves
+ * it rather than assuming it.
+ *
+ * Derived from the TABLES a query actually touches, not from `report.domain`.
+ * A report's declared `domain` is one label for a whole report (used only for
+ * the Source chip's grouping — confirmed by grep, nothing else reads it), and
+ * every report was single-domain until Principal's Snapshot, whose queries
+ * span students/fees/staff. Asserting against `report.domain` alone would have
+ * only checked the FIRST domain a report happens to be filed under and missed
+ * the other two entirely for a query that needs them — the gap this file
+ * exists to catch.
  */
 describe('domain permissions still gate a predefined report', () => {
-  it.each(everyQuery)('%s is refused to a session without its domain', (_label, report, query) => {
-    const required = DOMAIN_PERM[report.domain];
-    if (required === null) return; // reference data is governed by scope alone
-    const perms = ALL_PERMS.filter((p) => p !== required);
-    let code = 'NO_ERROR';
-    try {
-      prepare(report, query.sql, perms);
-    } catch (err) {
-      code = err instanceof PlatformError ? err.code : 'NOT_A_PLATFORM_ERROR';
+  it.each(everyQuery)('%s is refused a session missing any domain its own tables need', (_label, report, query) => {
+    const prepared = prepare(report, query.sql); // ALL_PERMS, just to discover the tables touched
+    const domainsNeeded = new Set(
+      prepared.tables
+        .map((name) => ERP_V1.tables.find((t) => t.name === name)?.domain)
+        .filter((d): d is DataDomain => d !== undefined),
+    );
+    for (const domain of domainsNeeded) {
+      const required = DOMAIN_PERM[domain];
+      if (required === null) continue; // reference data is governed by scope alone
+      const perms = ALL_PERMS.filter((p) => p !== required);
+      let code = 'NO_ERROR';
+      try {
+        prepare(report, query.sql, perms);
+      } catch (err) {
+        code = err instanceof PlatformError ? err.code : 'NOT_A_PLATFORM_ERROR';
+      }
+      expect(code).toBe('PERMISSION_DENIED');
     }
-    expect(code).toBe('PERMISSION_DENIED');
   });
 });
 

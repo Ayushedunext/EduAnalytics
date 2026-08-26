@@ -83,6 +83,9 @@ export const DASHBOARD_IDS = [
   'staff-overview',
   'admissions-funnel',
   'attendance-analytics',
+  'principal-snapshot',
+  'transport-analytics',
+  'library-textbooks',
 ] as const;
 export type DashboardId = (typeof DASHBOARD_IDS)[number];
 
@@ -120,6 +123,25 @@ const REPORT_FILTERS: Record<
    * cannot be filtered on (mcp-server/src/reports/catalog.ts, FROM_DATE).
    */
   'attendance-analytics': { academicYear: true, asOf: false, dateWindow: true },
+  /** Reads students, fees, staff, admissions AND attendance -- all four filters. */
+  'principal-snapshot': { academicYear: true, asOf: true, dateWindow: true },
+  /**
+   * No filters at all -- corrected 2026-08-26 once the real schema showed why:
+   * `student_transport_data_set` has no trustworthy date column (its
+   * `academicyearname` carries the same stamped-current-year trap as the
+   * attendance tables, and there is nothing else to filter on instead), so a
+   * query here reads whatever the table holds, unfiltered by time.
+   */
+  'transport-analytics': { academicYear: false, asOf: false, dateWindow: false },
+  /**
+   * As-of date plus a date WINDOW, not an academic year -- corrected
+   * 2026-08-26 for the same reason as Attendance: `book_issue_data_set`'s
+   * `academicyearname` is stamped with the current year regardless of
+   * `issuedate` (confirmed on 2023/2024 rows all reading `2026-27`), so
+   * `issues_by_month` filters on `issuedate` directly via the same
+   * `from_date`/`to_date` window Attendance already binds.
+   */
+  'library-textbooks': { academicYear: false, asOf: true, dateWindow: true },
 };
 
 /**
@@ -368,6 +390,9 @@ export const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) =
   'staff-overview': buildStaffOverview,
   'admissions-funnel': buildAdmissionsFunnel,
   'attendance-analytics': buildAttendance,
+  'principal-snapshot': buildPrincipalSnapshot,
+  'transport-analytics': buildTransportAnalytics,
+  'library-textbooks': buildLibraryTextbooks,
 };
 
 function buildEnrollment(merged: Merged, { year }: BuildContext): DashboardBuild {
@@ -1323,6 +1348,348 @@ function buildAttendance(merged: Merged, { year }: BuildContext): DashboardBuild
   };
 }
 
+/**
+ * Principal's Snapshot -- the same five numbers Home's KPI strip shows
+ * (services/home.ts), rebuilt as a first-class report so it carries a Logic
+ * panel, a PDF and a place in My Reports. See reports/catalog.ts's
+ * PRINCIPAL_SNAPSHOT header for why this is the one dashboard in this file
+ * whose queries span three domains, and why that is safe.
+ *
+ * Every KPI here is independently optional -- unlike the single-source
+ * dashboards above, a session missing one domain's permission (an accountant
+ * with only `fees.read`) still gets a real page: the fee tile renders, the
+ * enrolment/staff/admissions/attendance tiles are simply absent rather than
+ * blocking the whole report, because each is read from ITS OWN result set
+ * (docs/06 §3's "a panel that worked still renders", one level up from
+ * queries to KPIs).
+ */
+function buildPrincipalSnapshot(merged: Merged, { year, asOf }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const byClass = merged.sumBy('by_class', 'classname', ['students'], 'seq');
+  const fees = merged.sumAll('fees', ['payable', 'paid', 'balance']);
+  const staff = merged.sumAll('staff', ['on_roll']);
+  const admissions = merged.sumAll('admissions', ['candidates', 'admissions']);
+  const attendance = merged.sumAll('attendance', ['marked_days', 'present_days']);
+
+  if (byClass.length > 0) {
+    const total = byClass.reduce((sum, row) => sum + num(row['students']), 0);
+    widgets.push({
+      id: 'kpi-students',
+      type: 'kpi',
+      label: `Students on roll · ${year}`,
+      value: count(total),
+      tone: 'neutral',
+    });
+  }
+
+  if (fees !== null) {
+    const paid = num(fees['paid']);
+    const balance = num(fees['balance']);
+    widgets.push(
+      { id: 'kpi-fees-collected', type: 'kpi', label: `Fees collected · ${year}`, value: rupees(paid), tone: 'positive' },
+      {
+        id: 'kpi-fees-outstanding',
+        type: 'kpi',
+        label: 'Fees outstanding',
+        value: rupees(balance),
+        tone: balance > 0 ? 'warning' : 'neutral',
+      },
+    );
+  }
+
+  if (staff !== null) {
+    widgets.push({
+      id: 'kpi-staff',
+      type: 'kpi',
+      label: `Staff on roll as of ${asOf}`,
+      value: count(num(staff['on_roll'])),
+      tone: 'neutral',
+    });
+  }
+
+  if (admissions !== null) {
+    const candidates = num(admissions['candidates']);
+    const admitted = num(admissions['admissions']);
+    widgets.push({
+      id: 'kpi-admissions',
+      type: 'kpi',
+      label: `Admitted this year (of ${count(candidates)} candidates)`,
+      value: count(admitted),
+      tone: 'positive',
+    });
+  }
+
+  // Same success-shaped-failure care as Attendance Analytics: a zero rate here
+  // could mean "everyone absent" or "nobody marked the register", and only
+  // `succeeded` tells the two apart.
+  const attendanceRead = merged.succeeded('attendance');
+  if (attendance !== null && attendanceRead) {
+    const marked = num(attendance['marked_days']);
+    widgets.push({
+      id: 'kpi-attendance',
+      type: 'kpi',
+      label: 'Attendance rate (selected window)',
+      value: marked > 0 ? percent(num(attendance['present_days']) / marked) : '—',
+      tone: attendanceTone(marked > 0 ? num(attendance['present_days']) / marked : null),
+    });
+  }
+
+  if (byClass.length > 0) {
+    widgets.push({
+      id: 'bar-class',
+      type: 'bar',
+      title: 'Strength by class',
+      x: 'classname',
+      y: 'students',
+      data: byClass.map((r) => ({ classname: String(r['classname']), students: num(r['students']) })),
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['class'],
+    notes: [
+      'This snapshot combines Enrollment, Fee Collection, Staff Overview, Admissions and Attendance into one page. Each tile is read from its own report and appears only if this session can read that domain -- open the individual dashboard for the full breakdown behind any one number.',
+      'Attendance follows the same definition as Attendance Analytics: present student-days over MARKED student-days, not over the calendar. See that dashboard for marking coverage before trusting the rate alone.',
+    ],
+  };
+}
+
+/**
+ * Transport Analytics -- corrected 2026-08-26 against schema/erp-v1.ts's
+ * VERIFIED `student_transport_data_set` entry (read directly off
+ * `information_schema` on the local `ai_analysis` instance, not inferred).
+ * No year or date filter reaches this report at all (see
+ * reports/catalog.ts's TRANSPORT_ANALYTICS header for why), so every widget
+ * here reflects whatever assignment rows the table holds right now.
+ *
+ * `class_order` is read from students_data_set the same way
+ * `buildAttendance`'s is, joined on `studentprofileid` -- the only student key
+ * this table carries, and not the same column every other roster table uses.
+ */
+function buildTransportAnalytics(merged: Merged): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const totals = merged.sumAll('totals', ['riders', 'pickup_routes', 'drop_routes']);
+  const byPickupRoute = merged.sumBy('by_pickup_route', 'pickuproutename', ['students']);
+  const byMode = merged.sumBy('by_mode', 'modeoftransport', ['students']);
+  const byClass = merged.sumBy('by_class', 'classname', ['students']);
+
+  const classSeq = new Map<string, number>();
+  for (const { row } of merged.concatRows('class_order')) {
+    const name = label(row['classname']);
+    const seq = num(row['seq']);
+    const seen = classSeq.get(name);
+    if (seen === undefined || seq < seen) classSeq.set(name, seq);
+  }
+  const orderedClasses = [...byClass].sort(
+    (a, b) =>
+      (classSeq.get(label(a['classname'])) ?? Number.MAX_SAFE_INTEGER) -
+      (classSeq.get(label(b['classname'])) ?? Number.MAX_SAFE_INTEGER),
+  );
+
+  const riders = totals !== null ? num(totals['riders']) : null;
+  if (totals !== null) {
+    widgets.push(
+      { id: 'kpi-riders', type: 'kpi', label: 'Riders', value: count(riders ?? 0), tone: 'neutral' },
+      {
+        id: 'kpi-pickup-routes',
+        type: 'kpi',
+        label: 'Pickup routes in use',
+        value: count(num(totals['pickup_routes'])),
+        tone: 'neutral',
+      },
+      {
+        id: 'kpi-drop-routes',
+        type: 'kpi',
+        label: 'Drop routes in use',
+        value: count(num(totals['drop_routes'])),
+        tone: 'neutral',
+      },
+    );
+  }
+
+  if (byPickupRoute.length > 0) {
+    widgets.push({
+      id: 'bar-route',
+      type: 'bar',
+      title: 'Riders by pickup route',
+      x: 'pickuproutename',
+      y: 'students',
+      data: byPickupRoute.map((r) => ({
+        pickuproutename: label(r['pickuproutename']),
+        students: num(r['students']),
+      })),
+    });
+  }
+
+  if (orderedClasses.length > 0) {
+    widgets.push({
+      id: 'bar-class',
+      type: 'bar',
+      title: 'Riders by class',
+      x: 'classname',
+      y: 'students',
+      data: orderedClasses.map((r) => ({ classname: label(r['classname']), students: num(r['students']) })),
+    });
+  }
+
+  if (byMode.length > 0) {
+    widgets.push({
+      id: 'donut-mode',
+      type: 'donut',
+      title: 'Mode of transport',
+      label_field: 'modeoftransport',
+      value_field: 'students',
+      data: byMode.map((r) => ({ modeoftransport: label(r['modeoftransport']), students: num(r['students']) })),
+    });
+  }
+
+  const notes = [
+    'This table carries no date column that can be trusted for filtering (the same stamped-current-year trap the attendance tables have), so this dashboard reflects every transport assignment on record right now rather than a single academic year.',
+    'Capacity and utilisation are not shown here: no vehicle-capacity column exists in this table, only student/route/stop/mode assignments.',
+  ];
+  if (riders === 0) {
+    // Named, not blank -- the same reasoning buildAttendance's empty-register
+    // note follows: an empty page here is a fact about this school's data, not
+    // a broken query.
+    notes.unshift('No transport assignments are recorded for the selected schools.');
+  }
+
+  return { widgets, groupBy: ['pickup route', 'class', 'mode of transport'], notes };
+}
+
+/**
+ * Library & Textbooks -- corrected 2026-08-26 against schema/erp-v1.ts's
+ * VERIFIED `books_data_set` and `book_issue_data_set` entries.
+ */
+function buildLibraryTextbooks(merged: Merged, { asOf }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+
+  const inventory = merged.sumAll('inventory', ['titles', 'total_copies', 'available_copies']);
+  const overdue = merged.sumAll('overdue', ['overdue']);
+  const byCategory = merged.sumBy('by_category', 'booktypename', ['total_copies', 'available_copies']);
+  const byMonth = merged.sumBy('issues_by_month', 'ym', ['issues']);
+  const byIssueType = merged.sumBy('by_issue_type', 'issuetype', ['issues']);
+  const lowStock = merged.concatRows('low_stock');
+
+  const titles = inventory !== null ? num(inventory['titles']) : null;
+  if (inventory !== null) {
+    widgets.push(
+      { id: 'kpi-titles', type: 'kpi', label: 'Titles held', value: count(titles ?? 0), tone: 'neutral' },
+      {
+        id: 'kpi-copies',
+        type: 'kpi',
+        label: 'Copies held',
+        value: count(num(inventory['total_copies'])),
+        tone: 'neutral',
+      },
+      {
+        id: 'kpi-available',
+        type: 'kpi',
+        label: 'Copies available now',
+        value: count(num(inventory['available_copies'])),
+        tone: 'neutral',
+      },
+    );
+  }
+
+  if (overdue !== null) {
+    const overdueCount = num(overdue['overdue']);
+    widgets.push({
+      id: 'kpi-overdue',
+      type: 'kpi',
+      label: `Overdue as of ${asOf}`,
+      value: count(overdueCount),
+      tone: overdueCount > 0 ? 'warning' : 'positive',
+    });
+  }
+
+  if (byMonth.length > 0) {
+    widgets.push({
+      id: 'line-month',
+      type: 'line',
+      title: 'Issues by month',
+      x: 'ym',
+      y: 'issues',
+      data: byMonth.map((r) => ({ ym: label(r['ym']), issues: num(r['issues']) })),
+    });
+  }
+
+  if (byCategory.length > 0) {
+    widgets.push({
+      id: 'table-category',
+      type: 'table',
+      // Titled by what the column is (docs/06 §3 -- a pill or a title claiming
+      // more than the data supports is the thing the logic panel exists to
+      // prevent). booktypename is the ERP's own free-text label, not a curated
+      // subject taxonomy: 'STORY' and 'Story Books' both occur as separate
+      // values in the real data, and it is reported as written.
+      title: "Copies by the ERP's own book-type label",
+      columns: [
+        { field: 'booktypename', label: 'Book type' },
+        { field: 'total_copies', label: 'Held', align: 'right' },
+        { field: 'available_copies', label: 'Available', align: 'right' },
+      ],
+      rows: byCategory.map((r) => ({
+        booktypename: label(r['booktypename']),
+        total_copies: num(r['total_copies']),
+        available_copies: num(r['available_copies']),
+      })),
+    });
+  }
+
+  if (lowStock.length > 0) {
+    const multi = new Set(lowStock.map((r) => r.school_id)).size > 1;
+    widgets.push({
+      id: 'table-low-stock',
+      type: 'table',
+      title: 'Low stock (fewer than 3 copies available)',
+      columns: [
+        ...(multi ? [{ field: 'school_id', label: 'School' }] : []),
+        { field: 'bookname', label: 'Title' },
+        { field: 'booktypename', label: 'Book type' },
+        { field: 'total_copies', label: 'Held', align: 'right' },
+        { field: 'available_copies', label: 'Available', align: 'right' },
+      ],
+      rows: lowStock.map(({ school_id, row }) => ({
+        ...(multi ? { school_id } : {}),
+        bookname: label(row['bookname']),
+        booktypename: label(row['booktypename']),
+        total_copies: num(row['total_copies']),
+        available_copies: num(row['available_copies']),
+      })),
+    });
+  }
+
+  if (byIssueType.length > 1) {
+    // Only worth a widget once there is more than one type to compare -- a
+    // single row would just repeat the total, the same restraint Attendance
+    // takes with a would-be one-slice donut.
+    widgets.push({
+      id: 'donut-issue-type',
+      type: 'donut',
+      title: 'Issues by who they were issued to',
+      label_field: 'issuetype',
+      value_field: 'issues',
+      data: byIssueType.map((r) => ({ issuetype: label(r['issuetype']), issues: num(r['issues']) })),
+    });
+  }
+
+  const notes = [
+    'Titles and copies are different numbers here: this table holds one row per PHYSICAL COPY, so a title with several copies on the shelf is several rows sharing the same name. "Available" is read from each copy\'s own status, not a stored count.',
+    'This dashboard cannot be filtered by academic year: book_issue_data_set stamps every row with the CURRENT academic year regardless of when the book was actually issued (the same trap both attendance tables have), so the month chart and the overdue figure are read from the issue and due dates directly instead.',
+    'Low stock means fewer than 3 copies available for a title, out of however many copies this table records -- a threshold this report chose, not one the ERP supplied.',
+    'Issue records include both students and staff; the split is published above rather than assumed away.',
+  ];
+  if (titles === 0) {
+    notes.unshift('No library data is recorded for the selected schools.');
+  }
+
+  return { widgets, groupBy: ['book type', 'month', 'issue type'], notes };
+}
+
 // -- Merging ------------------------------------------------------------------
 
 /** Exported for services/custom-reports.ts, which merges a `run_predefined` result the same way `buildDashboard` does. */
@@ -1353,7 +1720,7 @@ export class Merged {
     for (const query of this.queriesFor(key)) {
       if (query.status !== 'ok') continue;
       for (const row of query.rows ?? []) {
-        const id = keys.map((k) => String(row[k] ?? '')).join(' ');
+        const id = keys.map((k) => String(row[k] ?? '')).join(' ');
         let entry = acc.get(id);
         if (entry === undefined) {
           entry = {};

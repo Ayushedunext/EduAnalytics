@@ -31,6 +31,7 @@ describe('hydrateWidget', () => {
           columns: ['classname', 'n'],
           rows: [{ classname: 'IX', n: 12 }],
           truncated: false,
+          sql: 'SELECT classname, COUNT(*) AS n FROM students_data_set GROUP BY classname',
         },
       ],
     ]);
@@ -47,7 +48,7 @@ describe('hydrateWidget', () => {
 
   it('carries the truncated flag onto a hydrated table', () => {
     const cache = new Map([
-      ['q1', { columns: ['n'], rows: [{ n: 1 }], truncated: true }],
+      ['q1', { columns: ['n'], rows: [{ n: 1 }], truncated: true, sql: 'SELECT COUNT(*) AS n FROM students_data_set' }],
     ]);
     const widget = {
       id: 't1',
@@ -82,7 +83,15 @@ describe('hydrate', () => {
       ],
     };
     const cache = new Map([
-      ['q1', { columns: ['classname', 'n'], rows: [{ classname: 'IX', n: 12 }], truncated: false }],
+      [
+        'q1',
+        {
+          columns: ['classname', 'n'],
+          rows: [{ classname: 'IX', n: 12 }],
+          truncated: false,
+          sql: 'SELECT classname, COUNT(*) AS n FROM students_data_set GROUP BY classname',
+        },
+      ],
     ]);
     const spec = hydrate(draft, cache, SCOPE, 'corr-1');
     expect(spec.title).toBe('Enrollment by class');

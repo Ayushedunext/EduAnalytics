@@ -2,17 +2,16 @@
  * A predefined dashboard.
  *
  * Contract source: docs/06 §2–3 · ADR-015 (the page renders a spec, and only a
- * spec) · ADR-019 / Invariant 6 (the Logic panel is part of the report).
+ * spec) · ADR-019 / Invariant 6 (the Logic panel is part of the report) ·
+ * ADR-018 (clone-to-edit).
  *
  * [MANDATORY] CODING_GUIDELINES §17: "Every report surface exposes the standard
  * affordances: 🧠 View logic, ⧉ Clone, ⬇ PDF, scope line. A new report surface
- * missing them is incomplete, not minimal."
+ * missing them is incomplete, not minimal." All four are real here.
  *
- * Logic and the scope line are here and real. Clone (ADR-018) and PDF (ADR-021)
- * are rendered DISABLED with the reason, rather than omitted: docs/10 §3's
- * "locked ≠ hidden" applies to unbuilt affordances as much as to gated ones, and
- * a user who cannot see that cloning is coming will not ask for it. They need
- * `report_definitions` and the Puppeteer path respectively.
+ * ⧉ Clone posts today's filter values (the ones this screen is actually
+ * showing) as the new report's starting values — cloning is meant to capture
+ * "this view, editable", not reset to a blank form.
  *
  * Every widget is drawn by the shared renderer in `@sap/chart-spec/react` — the
  * same layer the PDF path will use (ADR-021), so screen and export cannot
@@ -22,11 +21,14 @@
 import { useEffect, useState } from 'react';
 import { ChartSpecView } from '@sap/chart-spec/react';
 import {
+  cloneReport,
   getReport,
   reportPdfUrl,
+  ApiFailure,
   type DashboardResponse,
   type SessionResponse,
 } from '../api/client';
+import { LogicPanel } from './LogicPanel';
 
 interface Props {
   session: SessionResponse;
@@ -35,6 +37,7 @@ interface Props {
   academicYear: string | null;
   onBack: () => void;
   onAskAI: (seedQuestion: string) => void;
+  onCloned: (id: string) => void;
 }
 
 export function DashboardPage({
@@ -44,11 +47,13 @@ export function DashboardPage({
   academicYear,
   onBack,
   onAskAI,
+  onCloned,
 }: Props): JSX.Element {
   const [report, setReport] = useState<DashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLogic, setShowLogic] = useState(false);
+  const [cloning, setCloning] = useState(false);
 
   useEffect(() => {
     if (academicYear === null) return undefined;
@@ -120,11 +125,31 @@ export function DashboardPage({
               </button>
               <button
                 type="button"
-                className="chipbtn disabled"
-                disabled
-                title="Cloning needs the saved-report store (ADR-018) — not built yet"
+                className="chipbtn"
+                disabled={cloning || academicYear === null}
+                title="Clone this dashboard into My Reports, editable, without changing the original"
+                onClick={() => {
+                  if (academicYear === null) return;
+                  const name = window.prompt('Name this report', `${report?.spec.title ?? 'Report'} (copy)`);
+                  if (name === null || name.trim() === '') return;
+                  setCloning(true);
+                  setError(null);
+                  const asOfValue = report?.logic.filters.find((f) => f.label === 'As of')?.value;
+                  cloneReport({
+                    base_report_id: reportId,
+                    name: name.trim(),
+                    academic_year: academicYear,
+                    ...(asOfValue === undefined ? {} : { as_of: asOfValue }),
+                    school_ids: schoolIds,
+                  })
+                    .then((cloned) => { onCloned(cloned.id); })
+                    .catch((err: unknown) => {
+                      setError(err instanceof ApiFailure ? err.message : 'Could not clone this report.');
+                    })
+                    .finally(() => { setCloning(false); });
+                }}
               >
-                ⧉ Clone &amp; customise
+                {cloning ? 'Cloning…' : '⧉ Clone & customise'}
               </button>
               {/**
                 * A link, not a fetch. The server sets `Content-Disposition`, so
@@ -195,61 +220,6 @@ export function DashboardPage({
         )}
       </div>
     </main>
-  );
-}
-
-/**
- * docs/06 §3: "plain-language chips (Source · Scope · Filters · Group-by ·
- * Chart) + the generated SQL, read-only. Scope line states it is injected from
- * the token and cannot be widened."
- *
- * This is Invariant 6 on screen. A Principal has to be able to answer "where
- * does this number come from?", and the answer is the statement itself.
- */
-function LogicPanel({ report }: { report: DashboardResponse }): JSX.Element {
-  const { logic } = report;
-  return (
-    <section className="card logicPanel" aria-label="Report logic">
-      <h3 className="specPanelTitle">Report logic</h3>
-
-      <dl className="logicChips">
-        <Chip label="Source" value={logic.source} />
-        <Chip
-          label="Scope"
-          value={`${logic.scope.map((s) => s.school_name).join(', ')} — injected from your launch token, read-only`}
-        />
-        <Chip label="Filters" value={logic.filters.map((f) => `${f.label}: ${f.value}`).join(' · ')} />
-        <Chip label="Group by" value={logic.group_by.join(' · ')} />
-        <Chip label="Charts" value={[...new Set(logic.charts)].join(' · ')} />
-        <Chip label="Served from" value={`${report.spec.meta.served_from} (three-tier order)`} />
-      </dl>
-
-      {logic.notes.map((note) => (
-        <p key={note} className="logicNote">
-          {note}
-        </p>
-      ))}
-
-      <h4 className="logicSqlHeading">Generated SQL</h4>
-      {logic.queries.map((query) => (
-        <div key={query.key} className="logicQuery">
-          <div className="logicQueryTitle">
-            {query.key} — {query.description}
-          </div>
-          {/* Rendered as text, never as markup (§4). */}
-          <pre className="logicSql">{query.sql}</pre>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function Chip({ label, value }: { label: string; value: string }): JSX.Element {
-  return (
-    <div className="logicChip">
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
   );
 }
 

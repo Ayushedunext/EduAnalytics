@@ -16,13 +16,23 @@
 
 import { useState } from 'react';
 import { ChartSpecView } from '@sap/chart-spec/react';
-import { askAI, ApiFailure, type AskAiSpec, type SessionResponse } from '../api/client';
+import {
+  askAI,
+  saveAiReportAsCustom,
+  ApiFailure,
+  type AskAiDraft,
+  type AskAiQuery,
+  type AskAiSpec,
+  type SessionResponse,
+} from '../api/client';
 
 interface Turn {
   readonly id: string;
   readonly question: string;
   readonly steps: readonly string[];
   readonly spec: AskAiSpec | null;
+  readonly queries: readonly AskAiQuery[];
+  readonly draft: AskAiDraft | null;
   readonly error: string | null;
   readonly done: boolean;
 }
@@ -32,9 +42,10 @@ interface Props {
   schoolIds: readonly string[];
   seedQuestion?: string;
   onBack: () => void;
+  onSaved: (id: string) => void;
 }
 
-export function AskAI({ session, schoolIds, seedQuestion, onBack }: Props): JSX.Element {
+export function AskAI({ session, schoolIds, seedQuestion, onBack, onSaved }: Props): JSX.Element {
   const [input, setInput] = useState(seedQuestion ?? '');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -44,7 +55,10 @@ export function AskAI({ session, schoolIds, seedQuestion, onBack }: Props): JSX.
     if (question === '' || busy) return;
 
     const id = `${String(Date.now())}-${String(Math.random())}`;
-    setTurns((prev) => [...prev, { id, question, steps: [], spec: null, error: null, done: false }]);
+    setTurns((prev) => [
+      ...prev,
+      { id, question, steps: [], spec: null, queries: [], draft: null, error: null, done: false },
+    ]);
     setInput('');
     setBusy(true);
 
@@ -58,7 +72,7 @@ export function AskAI({ session, schoolIds, seedQuestion, onBack }: Props): JSX.
           prev.map((t) => (t.id === id ? { ...t, steps: [...t.steps, event.step] } : t)),
         );
       } else if (event.type === 'result') {
-        update({ spec: event.spec, done: true });
+        update({ spec: event.spec, queries: event.queries, draft: event.draft, done: true });
       } else {
         update({ error: event.message, done: true });
       }
@@ -114,6 +128,10 @@ export function AskAI({ session, schoolIds, seedQuestion, onBack }: Props): JSX.
               {/* The spec goes in unvalidated on purpose: ChartSpecView validates it
                   against the schema before drawing (ADR-015, CODING_GUIDELINES §10). */}
               {turn.spec !== null && <ChartSpecView spec={turn.spec} />}
+
+              {turn.done && turn.spec !== null && turn.draft !== null && (
+                <SaveAsReport turn={turn} schoolIds={schoolIds} onSaved={onSaved} />
+              )}
             </div>
           ))}
         </div>
@@ -140,5 +158,49 @@ export function AskAI({ session, schoolIds, seedQuestion, onBack }: Props): JSX.
         </form>
       </div>
     </main>
+  );
+}
+
+/**
+ * "Save as report" — makes an Ask AI answer a permanent, re-runnable report
+ * (ADR-018). Re-run always re-executes this exact statement (AUDIT_REPORT
+ * C17), so saving here does not spend a token again, today or later.
+ */
+function SaveAsReport({
+  turn,
+  schoolIds,
+  onSaved,
+}: {
+  turn: Turn;
+  schoolIds: readonly string[];
+  onSaved: (id: string) => void;
+}): JSX.Element {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <button
+        type="button"
+        className="chipbtn"
+        disabled={saving}
+        onClick={() => {
+          if (turn.draft === null) return;
+          const name = window.prompt('Name this report', turn.spec?.title ?? turn.question);
+          if (name === null || name.trim() === '') return;
+          setSaving(true);
+          setError(null);
+          saveAiReportAsCustom({ name: name.trim(), school_ids: schoolIds, queries: [...turn.queries], draft: turn.draft })
+            .then((saved) => { onSaved(saved.id); })
+            .catch((err: unknown) => {
+              setError(err instanceof ApiFailure ? err.message : 'Could not save this report.');
+            })
+            .finally(() => { setSaving(false); });
+        }}
+      >
+        {saving ? 'Saving…' : '💾 Save as report'}
+      </button>
+      {error !== null && <span className="notice">{error}</span>}
+    </div>
   );
 }

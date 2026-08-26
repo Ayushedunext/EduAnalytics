@@ -56,9 +56,24 @@ import {
   type SchemaCatalogLite,
 } from './ai-tools.js';
 
+/** One statement Ask AI ran, keyed the same way the widgets reference it. */
+export interface AskAiQuery {
+  readonly key: string;
+  readonly sql: string;
+}
+
 export type AskAiEvent =
   | { type: 'status'; step: string }
-  | { type: 'result'; spec: ChartSpec }
+  /**
+   * `queries` carries the literal SQL behind this answer (Invariant 6 — every
+   * report exposes its SQL, and Ask AI answers are reports). `draft` is the
+   * model's own pre-hydration widget structure — both together are what
+   * "Save as report" persists verbatim into `report_definitions` (AUDIT_REPORT
+   * C17): the orchestrator already has both the moment the turn ends, so
+   * sending them down here means the client never has to reconstruct what it
+   * is already looking at.
+   */
+  | { type: 'result'; spec: ChartSpec; queries: readonly AskAiQuery[]; draft: ChartSpecDraft }
   | { type: 'error'; code: string; message: string };
 
 export async function runAskAi(args: {
@@ -197,6 +212,7 @@ export async function runAskAi(args: {
 
   onEvent({ type: 'status', step: 'Building chart' });
   const spec = hydrate(draft, resultCache, scope, correlationId);
+  const queries: AskAiQuery[] = [...resultCache].map(([key, result]) => ({ key, sql: result.sql }));
 
   await auditSink.write({
     kind: 'ai.query',
@@ -213,7 +229,7 @@ export async function runAskAi(args: {
     cache_read_tokens: cacheReadTokens,
   });
 
-  onEvent({ type: 'result', spec });
+  onEvent({ type: 'result', spec, queries, draft });
 }
 
 /**

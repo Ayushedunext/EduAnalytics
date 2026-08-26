@@ -38,6 +38,10 @@
 | ADR-027 | Invariant 1 scope: no ERP on the data path | Accepted |
 | ADR-028 | Result-cache contract: permission class in the key; three-tier serving order | Accepted (amends ADR-012) |
 | ADR-029 | Launch transport, webhook authentication, CSRF posture | Accepted |
+| ADR-030 | Ask-AI chart-specs are hydrated server-side; the model never receives or emits row data | Accepted |
+| ADR-031 | BYOK is multi-provider: Anthropic or Google Gemini, admin's choice | Accepted (amends ADR-017) |
+| ADR-032 | `report_definitions.school_scope` is intersected with the viewer's token scope at execution | Accepted |
+| ADR-033 | Saved AI reports re-run the persisted statement, never the model | Accepted |
 
 ---
 
@@ -398,6 +402,38 @@ Separately, the Redis result cache is the only store where row-level PII leaves 
 **Future impact.** A third provider (Bedrock/Vertex, per docs/05 §7's original extensibility note) is a new `services/ai-providers/*.ts` file implementing `ProviderMeta`, one registry-map entry, and nothing else — Settings, the vault, `ai-chat.ts`'s loop, and the redaction/hydration/audit chain need no changes. Per-school provider budgets, if ever needed, extend `ProviderMeta`/the vault row rather than restructuring either.
 
 **Status.** Accepted. Amends ADR-017's provider clause. Updates docs/05 §4 (BYOK section generalized from "the organization's own Anthropic account") and §5 (the 3-step wizard's step ① becomes provider-conditional), and docs/08 §6 ("Anthropic API key" wording generalized to "the org's AI provider key" — the vault's crypto needed no changes, since it was already provider-agnostic). Migration `db/platform/migrations/0006_tenant_ai_config_provider.sql`.
+
+## ADR-032 — `report_definitions.school_scope` is intersected with the viewer's token scope at execution
+
+**Context.** AUDIT_REPORT A8: ADR-018 persists a `school_scope` column on every report definition, but nowhere states what that value means at execution time once ADR-018's own `trust`-visibility clause lets a report cross session boundaries — a Director's 12-school clone opened later by a Principal whose token carries one school. Left undefined, this is a tenant-isolation-adjacent ambiguity: does the stored scope widen the viewer's session, does a mismatch error out and break every shared report for anyone but its author, or something else? Raised as Phase-3-blocking TL question 18 and decided this session, ahead of building `services/custom-reports.ts`.
+
+**Decision.** At execution, **effective scope = the definition's stored `school_scope` ∩ the viewer's own token scope** — never the stored scope alone, and never widened by it. The Logic panel's Scope chip always shows the *effective* (viewer's) scope, never the author's original one. If the intersection is empty, the report refuses to run (`TENANT_UNAVAILABLE`) rather than falling back to either set alone. Implemented in `services/custom-reports.ts`'s `effectiveScope()`, exercised by `test/custom-reports.test.ts`'s AUDIT_REPORT A8 suite.
+
+**Reasoning.** Intersection is the only reading consistent with Invariant 2 ("scope is law", token-derived, never widened by anything a client or a stored value supplies) applied to a SECOND source of scope: a stored column cannot be allowed to grant a session more than its own launch token did, by the same logic ADR-007 already applies to a request-supplied `school_ids` parameter. Showing the effective (not the author's) scope in the Logic panel closes a second issue the audit named in passing: displaying the author's original scope to a viewer who cannot see all of it would leak school names outside their grant.
+
+**Alternatives considered.** Reject on any mismatch between stored and token scope — rejected: it would break every `trust`-shared report for anyone whose token scope isn't an exact superset of the author's, defeating the point of ADR-018's `trust` visibility tier the moment it is used across roles, which is its whole use case (a Director sharing to Principals). Store no scope at all, resolving purely from the viewer's token at every run — rejected: a report authored for "my 3 schools" would silently answer for whichever schools the CURRENT viewer happens to hold, changing what a shared report means depending on who opens it, which is a worse and quieter failure than the intersection rule.
+
+**Trade-offs.** A Principal opening a trust-shared, multi-school report sees a narrower answer than its author did — expected and correct, but worth stating: "your school's slice of the Director's report", not "the Director's report". No UI currently explains this distinction on the report itself; a future pass could add a note when the effective scope is narrower than the stored one.
+
+**Future impact.** Drill-down (deferred to Phase 2/4 per docs/11) inherits this rule for free once built on the same `report_definitions` row — a drill click narrows within the already-intersected effective scope, never the stored one.
+
+**Status.** Accepted. Updates docs/06 §1 (school_scope semantics stated explicitly). Implemented in `services/custom-reports.ts`; no schema change to the `report_definitions.school_scope` column itself, which continues to record only the author's scope at save time.
+
+## ADR-033 — Saved AI reports re-run the persisted statement, never the model
+
+**Context.** AUDIT_REPORT C17: ADR-018 saves an AI answer's chart-spec and `sql_text` into `report_definitions`, and docs/11's Phase 3 exit criterion is "clones re-run with fresh data" — but nothing stated whether "Re-run" re-executes the persisted SQL (free, deterministic) or re-invokes the model (billable, and locked the instant the org's `ai_status` leaves `active`). ADR-016's "dashboards unaffected [by a locked AI key]" and ADR-017's "the product is fully functional with AI locked" both imply the former without saying so; docs/10's "AI snapshot" badge and Re-run affordance read ambiguously either way. Raised as Phase-3-blocking TL question 19 and decided this session, ahead of building the save/re-run path.
+
+**Decision.** Opening or re-running a saved AI report **always re-executes its persisted statement(s) through the deterministic `run_query`/`run_multi` path** — no token spent, no dependency on `ai_status`, identical to how a predefined dashboard or a template-mode clone re-runs. A distinct, separately-gated **"✎ Refine with AI"** action (re-invoking the model to change the report) is real per docs/10 but is **not built in this slice** — deferred, and explicitly flagged as such rather than silently dropped. Implemented in `services/custom-reports.ts`'s `runRawSqlMode` (used by both `saveAiReport` and every subsequent `viewReport` call on that report); proven in `test/custom-reports.test.ts`'s AUDIT_REPORT C17 case, which asserts the re-run path never imports `services/ai-chat.ts`'s model-calling loop.
+
+**Reasoning.** This is the reading that makes ADR-016/017's promises literally true rather than aspirational: a school whose Anthropic/Gemini key lapses must not also lose every report it already built with AI, the same way it does not lose its predefined dashboards. Persisting `sql_text` (ADR-018) already captured everything needed to answer again without the model; the only question was whether the product would actually use that fact.
+
+**Alternatives considered.** Re-invoke the model on every open — rejected: costs tokens for a view action that changed nothing about the question being asked, and turns a locked BYOK key into a data-loss event for every AI-derived report the org has ever saved, contradicting ADR-017's stated failure mode ("dashboards unaffected"). Ask the user each time (re-run SQL vs. re-ask the model) — rejected as unnecessary friction: the two are different ACTIONS with different costs and different names (Re-run vs. Refine), not two settings on one button.
+
+**Trade-offs.** A saved AI report's numbers go stale in the same way a predefined dashboard's do (replica lag only, `served_from`/`as_of` labelled) but never picks up a genuinely different answer to the original question the way re-asking the model might (e.g., a smarter model noticing a better query). That upgrade path is exactly what the deferred "✎ Refine" action is for.
+
+**Future impact.** "✎ Refine with AI" is additive: a new `ai_status`-gated endpoint that re-invokes the model seeded with the current definition and, on success, calls the same `updateReportSql`-style save path already built — no change to the re-run/view path this ADR fixes.
+
+**Status.** Accepted. Updates docs/06 §1 (Re-run semantics stated explicitly) and docs/10 §2 (My Reports' Re-run affordance). Implemented in `services/custom-reports.ts`; "✎ Refine with AI" remains unbuilt and tracked in docs/11.
 
 ---
 

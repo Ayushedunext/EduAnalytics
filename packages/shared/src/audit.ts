@@ -92,6 +92,23 @@ export interface ScopeViolationEvent extends AuditBase {
   readonly layer: 'orchestrator' | 'mcp';
 }
 
+/**
+ * A change to a custom report definition (ADR-018) — clone, save-from-AI,
+ * visual/SQL edit, rollback, delete. Not `report.viewed`/`report.exported`,
+ * which are reused unchanged for custom reports (their shape is already
+ * origin-agnostic); this event is for changes to the DEFINITION itself, one
+ * kind with an `action` field rather than five near-duplicate kinds, matching
+ * `ConfigChangedEvent`'s convention below.
+ */
+export interface ReportDefinitionChangedEvent extends AuditBase {
+  readonly kind: 'report_definition.changed';
+  readonly report_id: string;
+  readonly school_ids: readonly string[];
+  readonly action: 'cloned' | 'saved_from_ai' | 'updated_visual' | 'updated_sql' | 'rolled_back' | 'deleted';
+  readonly base_report_id?: string;
+  readonly version: number;
+}
+
 /** docs/08 §7: "Config changes — key save/replace/disable, channel connect, agent publish". */
 export interface ConfigChangedEvent extends AuditBase {
   readonly kind: 'config.changed';
@@ -115,7 +132,8 @@ export type AuditEvent =
   | ExportedEvent
   | AiQueryEvent
   | ScopeViolationEvent
-  | ConfigChangedEvent;
+  | ConfigChangedEvent
+  | ReportDefinitionChangedEvent;
 
 export type AuditEventKind = AuditEvent['kind'];
 

@@ -229,6 +229,145 @@ export function getHome(schoolIds: readonly string[]): Promise<HomeResponse> {
   return request<HomeResponse>(`/api/home${query}`);
 }
 
+// -- Custom reports (ADR-018) -------------------------------------------------
+
+export interface CustomReportSummary {
+  id: string;
+  name: string;
+  source_kind: 'predefined_clone' | 'ai_saved';
+  base_report_id: string | null;
+  shared_flag: 'private' | 'school' | 'trust';
+  is_owner: boolean;
+  updated_at: string;
+}
+
+/**
+ * Same shape as `DashboardResponse`, plus the fields that make it a custom
+ * report rather than a predefined one: `mode` (how it executes — see
+ * services/custom-reports.ts), `current_version` and the ownership/promotion
+ * flags a My Reports screen needs to decide what to show.
+ */
+export interface CustomReportResponse {
+  id: string;
+  name: string;
+  source_kind: 'predefined_clone' | 'ai_saved';
+  base_report_id: string | null;
+  shared_flag: 'private' | 'school' | 'trust';
+  mode: 'template' | 'raw_sql';
+  current_version: number;
+  is_owner: boolean;
+  can_promote: boolean;
+  spec: DashboardResponse['spec'];
+  logic: ReportLogic;
+  degraded: { key: string; message: string }[];
+  degraded_schools: { school_id: string; message: string }[];
+}
+
+export interface ReportVersionSummary {
+  version: number;
+  edited_by: string;
+  edited_at: string;
+}
+
+export function listMyReports(): Promise<{ reports: CustomReportSummary[] }> {
+  return request<{ reports: CustomReportSummary[] }>('/api/reports');
+}
+
+export function cloneReport(body: {
+  base_report_id: string;
+  name: string;
+  academic_year: string;
+  as_of?: string;
+  school_ids: readonly string[];
+}): Promise<CustomReportResponse> {
+  const query = new URLSearchParams();
+  if (body.school_ids.length > 0) query.set('school_ids', body.school_ids.join(','));
+  return request<CustomReportResponse>(`/api/reports/clone?${query.toString()}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      base_report_id: body.base_report_id,
+      name: body.name,
+      academic_year: body.academic_year,
+      ...(body.as_of === undefined ? {} : { as_of: body.as_of }),
+    }),
+  });
+}
+
+export function saveAiReportAsCustom(body: {
+  name: string;
+  school_ids: readonly string[];
+  queries: readonly AskAiQuery[];
+  draft: AskAiDraft;
+}): Promise<CustomReportResponse> {
+  const query = new URLSearchParams();
+  if (body.school_ids.length > 0) query.set('school_ids', body.school_ids.join(','));
+  return request<CustomReportResponse>(`/api/reports/from-ai?${query.toString()}`, {
+    method: 'POST',
+    body: JSON.stringify({ name: body.name, queries: body.queries, draft: body.draft }),
+  });
+}
+
+export function getCustomReport(id: string, schoolIds: readonly string[]): Promise<CustomReportResponse> {
+  const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
+  return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}${query}`);
+}
+
+export function updateReportVisual(
+  id: string,
+  body: { academic_year: string; as_of?: string; chart_overrides?: Record<string, 'bar' | 'line'> },
+): Promise<CustomReportResponse> {
+  return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/visual`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateReportSql(
+  id: string,
+  body: { queries: { key: string; sql: string }[]; draft: AskAiDraft },
+): Promise<CustomReportResponse> {
+  return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/sql`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function listReportVersions(id: string): Promise<{ versions: ReportVersionSummary[] }> {
+  return request<{ versions: ReportVersionSummary[] }>(`/api/reports/${encodeURIComponent(id)}/versions`);
+}
+
+export function rollbackReport(id: string, version: number): Promise<CustomReportResponse> {
+  return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/rollback`, {
+    method: 'POST',
+    body: JSON.stringify({ version }),
+  });
+}
+
+export function setReportVisibility(
+  id: string,
+  sharedFlag: 'private' | 'school' | 'trust',
+): Promise<void> {
+  return request<void>(`/api/reports/${encodeURIComponent(id)}/visibility`, {
+    method: 'PUT',
+    body: JSON.stringify({ shared_flag: sharedFlag }),
+  });
+}
+
+export function deleteReport(id: string): Promise<void> {
+  return request<void>(`/api/reports/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function customReportPdfUrl(
+  id: string,
+  schoolIds: readonly string[],
+  options: { logic?: boolean } = {},
+): string {
+  const query = new URLSearchParams();
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  if (options.logic === true) query.set('logic', '1');
+  return `${API_BASE}/api/reports/${encodeURIComponent(id)}/export.pdf?${query.toString()}`;
+}
+
 // -- Settings ----------------------------------------------------------------
 
 /** ADR-031: an org picks one provider at a time; `provider` says which. */
@@ -376,6 +515,25 @@ export interface AskAiSpec {
   };
 }
 
+/** One statement Ask AI ran — what "Save as report" persists (AUDIT_REPORT C17). */
+export interface AskAiQuery {
+  key: string;
+  sql: string;
+}
+
+/**
+ * The model-facing draft (before hydration) — carried down so "Save as
+ * report" can persist exactly what re-executes later, matching what
+ * services/ai-chat.ts already validates server-side. Typed loosely for the
+ * same reason `AskAiSpec` is: the server is the source of truth for its shape.
+ */
+export interface AskAiDraft {
+  spec_version: 1;
+  title: string;
+  narrative?: string;
+  widgets: unknown[];
+}
+
 /**
  * The stream this endpoint sends: zero or more `status` steps (docs/05 §2's
  * "Scope confirmed → Planning → Running query → Building chart" trust device),
@@ -383,7 +541,7 @@ export interface AskAiSpec {
  */
 export type AskAiEvent =
   | { type: 'status'; step: string }
-  | { type: 'result'; spec: AskAiSpec }
+  | { type: 'result'; spec: AskAiSpec; queries: AskAiQuery[]; draft: AskAiDraft }
   | { type: 'error'; code: string; message: string };
 
 /**

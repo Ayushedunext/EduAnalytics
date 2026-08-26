@@ -133,10 +133,13 @@ export function Sidebar({
           <span className="flex-1">Agents</span>
           <span className="trail">SOON</span>
         </li>
-        <li className="muted" title="Saved reports need the report store (ADR-018)">
+        <li
+          className={`clickable ${active === 'my-reports' ? 'active' : ''}`}
+          title="Your cloned dashboards and saved Ask AI reports"
+          onClick={() => { onNavigate('my-reports'); }}
+        >
           <span className="w-4 text-center opacity-80">💾</span>
           <span className="flex-1">My Reports</span>
-          <span className="trail">SOON</span>
         </li>
         {/* Real, and reachable by everyone: what a non-admin sees there is the
             "contact your admin" state, which is information they need. Hiding

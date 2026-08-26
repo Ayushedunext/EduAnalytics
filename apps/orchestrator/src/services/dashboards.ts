@@ -32,7 +32,7 @@ import { cacheGet, cacheKey, cacheSet } from '../cache/result-cache.js';
 import { config } from '../config.js';
 
 /** What `run_predefined` returns. Parsed, never trusted as a domain type (§3). */
-interface PredefinedResult {
+export interface PredefinedResult {
   report_id: string;
   title: string;
   source: string;
@@ -149,8 +149,45 @@ function academicYearWindow(year: string): { from: string; to: string } {
   return { from: `${String(start)}-04-01`, to: `${String(start + 1)}-03-31` };
 }
 
+/**
+ * Turn (report id, year, as-of date) into the `run_predefined` params AND the
+ * Logic-panel filter chips — the same two things `buildDashboard` always
+ * derived inline. Exported so services/custom-reports.ts can build the
+ * identical params for a CLONE of a predefined report (ADR-018): a clone's
+ * filter values are edited through this exact vocabulary, never a free-form
+ * one, so "customize" never means "invent a filter the base report never
+ * declared."
+ */
+export function resolveReportParams(
+  reportId: DashboardId,
+  args: { academicYear: string; asOfDate: string },
+): { params: Record<string, string>; filterChips: { label: string; value: string }[] } {
+  const filters = REPORT_FILTERS[reportId];
+  const params: Record<string, string> = {};
+  if (filters.academicYear) params['academic_year'] = args.academicYear;
+  if (filters.asOf) params['as_of_date'] = args.asOfDate;
+  const window = filters.dateWindow ? academicYearWindow(args.academicYear) : null;
+  if (window !== null) {
+    params['from_date'] = window.from;
+    params['to_date'] = window.to;
+  }
+
+  const filterChips = [
+    ...(filters.academicYear ? [{ label: 'Academic year', value: args.academicYear }] : []),
+    ...(filters.asOf ? [{ label: 'As of', value: args.asOfDate }] : []),
+    ...(window === null
+      ? []
+      : [
+          { label: 'From', value: window.from },
+          { label: 'To', value: window.to },
+        ]),
+  ];
+
+  return { params, filterChips };
+}
+
 /** Everything a builder is allowed to know about the request it is answering. */
-interface BuildContext {
+export interface BuildContext {
   readonly year: string;
   readonly asOf: string;
   readonly scope: readonly { school_id: string; school_name: string }[];
@@ -174,15 +211,10 @@ export async function buildDashboard(args: {
     });
   }
 
-  const filters = REPORT_FILTERS[args.reportId];
-  const params: Record<string, string> = {};
-  if (filters.academicYear) params['academic_year'] = args.academicYear;
-  if (filters.asOf) params['as_of_date'] = args.asOfDate;
-  const window = filters.dateWindow ? academicYearWindow(args.academicYear) : null;
-  if (window !== null) {
-    params['from_date'] = window.from;
-    params['to_date'] = window.to;
-  }
+  const { params, filterChips } = resolveReportParams(args.reportId, {
+    academicYear: args.academicYear,
+    asOfDate: args.asOfDate,
+  });
 
   /**
    * Tier ① (docs/09 §4). The key carries the school set, the bound filters AND
@@ -276,16 +308,7 @@ export async function buildDashboard(args: {
        * that never filtered by year is a lie the logic panel exists to prevent
        * (Invariant 6).
        */
-      filters: [
-        ...(filters.academicYear ? [{ label: 'Academic year', value: args.academicYear }] : []),
-        ...(filters.asOf ? [{ label: 'As of', value: args.asOfDate }] : []),
-        ...(window === null
-          ? []
-          : [
-              { label: 'From', value: window.from },
-              { label: 'To', value: window.to },
-            ]),
-      ],
+      filters: filterChips,
       group_by: built.groupBy,
       charts: built.widgets.map((w) => w.type),
       queries: merged.definitions(),
@@ -318,7 +341,7 @@ export async function buildDashboard(args: {
 
 // -- Dashboards ---------------------------------------------------------------
 
-interface DashboardBuild {
+export interface DashboardBuild {
   widgets: Widget[];
   groupBy: string[];
   notes: string[];
@@ -331,8 +354,14 @@ interface DashboardBuild {
  * dashboard catalog is implemented as a registry from the first dashboard, not
  * retrofitted after the fourth" — adding Attendance when its table lands should
  * be a catalog entry plus an entry here, and nothing else.
+ *
+ * Exported for services/custom-reports.ts: a cloned predefined report replays
+ * the SAME builder against a `run_predefined` result built from the clone's
+ * own stored params (ADR-018) — the presentation logic that turns rows into
+ * widgets is a property of the REPORT, not of who asked for it or which filter
+ * values they chose, so a clone must not re-derive it.
  */
-const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) => DashboardBuild> = {
+export const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) => DashboardBuild> = {
   'enrollment-overview': buildEnrollment,
   'fee-collection': buildFeeCollection,
   'fee-defaulters': buildFeeDefaulters,
@@ -1296,7 +1325,8 @@ function buildAttendance(merged: Merged, { year }: BuildContext): DashboardBuild
 
 // -- Merging ------------------------------------------------------------------
 
-class Merged {
+/** Exported for services/custom-reports.ts, which merges a `run_predefined` result the same way `buildDashboard` does. */
+export class Merged {
   constructor(private readonly result: PredefinedResult) {}
 
   private queriesFor(key: string) {

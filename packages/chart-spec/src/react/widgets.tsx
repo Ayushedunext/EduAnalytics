@@ -772,7 +772,20 @@ function Panel({
   actions?: ReactNode | undefined;
   children: ReactNode;
 }): ReactElement {
-  if (compact === true) return <div className="specPanelCompact">{children}</div>;
+  if (compact === true) {
+    return (
+      <div className="specPanelCompact">
+        {/* Axis chrome is dropped at card size (see the callers above), but the
+            title is the one piece of context a shape cannot carry on its own --
+            without it a preview card's chart is a squiggle or a stack of bars
+            with no way to tell what it counts. The card's own header (Home's
+            `pcardHead`) names the DASHBOARD; this names the specific metric the
+            lead chart draws, which is not always the same string. */}
+        {title !== undefined && <div className="specPanelCompactTitle">{title}</div>}
+        {children}
+      </div>
+    );
+  }
   return (
     <section className={`card specPanel${variant !== undefined ? ` specPanel--${variant}` : ''}`}>
       {(title !== undefined || actions !== undefined) && (

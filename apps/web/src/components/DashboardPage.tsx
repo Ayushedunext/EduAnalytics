@@ -79,7 +79,14 @@ export function DashboardPage({
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1180px]">
+      {/* 1900px, not the 1180px "reading column" width other single-report
+          screens use (AskAI.tsx) -- this page's body is `.specPanels`, a
+          12-column bento grid of charts (Home.tsx carries the identical
+          reasoning for its card grid). Capping a grid at 1180px on a wide
+          monitor doesn't make it more readable, it just wastes the columns
+          beside it and forces every panel into a narrower, more cramped
+          share of the space that IS given to it. */}
+      <div className="px-7 py-6 max-w-[1900px]">
         <button type="button" className="backLink" onClick={onBack}>
           ← Home
         </button>

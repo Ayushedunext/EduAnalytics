@@ -44,6 +44,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { CHART_MOTION_MS, useChartMotion } from './ChartMotion.js';
 import { widgetSchema } from '../spec.js';
 import type {
   BarWidget,
@@ -87,19 +88,24 @@ function axisNumber(value: number): string {
 }
 
 /**
- * Entry animation is OFF, everywhere.
+ * Entry animation is OFF unless something explicitly turns it on.
  *
- * The same renderer draws the screen and the PDF (ADR-021), and a PDF is a
- * PHOTOGRAPH: Puppeteer captured a donut mid-grow and produced a report with an
- * empty circle and a legend under it — a chart that looked like a panel with no
- * data rather than one that had not finished drawing. Waiting out an animation
- * would be a timer, and this codebase waits for facts.
+ * It used to be off unconditionally (`const ANIMATE = false`), for a reason
+ * that has not changed: the same renderer draws the screen and the PDF
+ * (ADR-021), and a PDF is a PHOTOGRAPH. Puppeteer once captured a donut
+ * mid-grow and produced a report with an empty circle and a legend under it —
+ * a chart that looked like a panel with no data rather than one that had not
+ * finished drawing. Waiting out an animation would be a timer, and this
+ * codebase waits for facts.
  *
- * Losing it costs a flourish on first paint. Keeping it would mean the export
- * could disagree with the screen about what the data is, which is the one thing
- * the shared renderer exists to prevent.
+ * What changed is only WHERE that decision is made. `useChartMotion()` reads a
+ * context that defaults to `false`, and `print.tsx` provides no value — so the
+ * export still cannot animate, and cannot be made to by editing this file.
+ * See ChartMotion.tsx for why the default carries the safety property.
  */
-const ANIMATE = false;
+function useAnimation(): { readonly isAnimationActive: boolean; readonly animationDuration: number } {
+  return { isAnimationActive: useChartMotion(), animationDuration: CHART_MOTION_MS };
+}
 
 /**
  * A stable id for an `<svg><defs>` gradient, scoped to one chart instance.
@@ -125,8 +131,9 @@ interface TooltipPayloadEntry {
  * Replaces Recharts' default tooltip box, which doesn't share the product's
  * card styling (docs/10 §1) — border, radius and shadow all drift from the
  * `.card` the panel itself sits in. Pointer-driven only, so a headless PDF
- * capture (which never moves a mouse) never renders it — the same reasoning
- * that keeps `ANIMATE` off applies here without needing it.
+ * capture (which never moves a mouse) never renders it — it needs no equivalent
+ * of `useChartMotion()`'s default-off guard, because there is no pointer on the
+ * print surface to trigger it in the first place.
  */
 function ChartTooltip({
   active,
@@ -312,6 +319,8 @@ export function BarPanel({
    * the baseline, so the gradient points at the number that matters.
    */
   const gradId = useGradientId('bar');
+  // Placed beside the existing hook so hook ORDER is unchanged from before.
+  const animation = useAnimation();
 
   if (axis.horizontal) {
     /**
@@ -371,7 +380,7 @@ export function BarPanel({
               fill={`url(#${gradId})`}
               radius={[0, 3, 3, 0]}
               maxBarSize={14}
-              isAnimationActive={ANIMATE}
+              {...animation}
               activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
             >
               {/* The tallest bar reads as solid teal against the others'
@@ -415,7 +424,7 @@ export function BarPanel({
             fill={`url(#${gradId})`}
             radius={[3, 3, 0, 0]}
             maxBarSize={38}
-            isAnimationActive={ANIMATE}
+            {...animation}
             activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
           >
             {highlightIndex !== null &&
@@ -470,6 +479,7 @@ export function LinePanel({
   actions?: ReactNode | undefined;
 }): ReactElement {
   const gradId = useGradientId('area');
+  const animation = useAnimation();
 
   // Empty and single-point series read as a broken chart if forced through
   // the same axes a real trend uses — an honest small state instead (§18/19).
@@ -537,7 +547,7 @@ export function LinePanel({
             dataKey={widget.y}
             stroke="none"
             fill={`url(#${gradId})`}
-            isAnimationActive={ANIMATE}
+            {...animation}
             legendType="none"
           />
           <Line
@@ -547,7 +557,7 @@ export function LinePanel({
             strokeWidth={2.25}
             dot={makeLineDot(widget.data.length - 1)}
             activeDot={{ r: 5.5, fill: SERIES[0], stroke: '#fff', strokeWidth: 2 }}
-            isAnimationActive={ANIMATE}
+            {...animation}
           />
         </ComposedChart>
       </ResponsiveContainer>
@@ -580,6 +590,8 @@ export function DonutPanel({
       </Panel>
     );
   }
+
+  const animation = useAnimation();
 
   /** Restated at the centre of the ring — see `specDonutCenter` below. */
   const total = widget.data.reduce((sum, row) => {
@@ -623,7 +635,7 @@ export function DonutPanel({
               innerRadius={compact === true ? 54 : 58}
               outerRadius={compact === true ? 84 : 88}
               paddingAngle={2}
-              isAnimationActive={ANIMATE}
+              {...animation}
             >
               {widget.data.map((row, index) => {
                 /* dataviz non-negotiable: a category past the validated,

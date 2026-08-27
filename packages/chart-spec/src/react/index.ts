@@ -7,6 +7,7 @@
  */
 
 export { ChartSpecView, type ChartSpecViewProps } from './ChartSpecView.js';
+export { ChartMotionProvider, useChartMotion, CHART_MOTION_MS } from './ChartMotion.js';
 export {
   WidgetView,
   WidgetSpecView,

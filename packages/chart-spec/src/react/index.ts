@@ -16,4 +16,5 @@ export {
   LinePanel,
   DonutPanel,
   TablePanel,
+  type ChartAccent,
 } from './widgets.js';

@@ -46,8 +46,29 @@
  * a slim strip, because the sidebar is already the place to discover those.
  */
 
-import { KpiTile, WidgetSpecView } from '@sap/chart-spec/react';
+import { KpiTile, WidgetSpecView, type ChartAccent } from '@sap/chart-spec/react';
 import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
+
+/**
+ * Which of the four CVD-audited chart colours (widgets.tsx `ACCENT_COLOUR`)
+ * a dashboard's preview chart draws in. Not a per-widget fact — the same
+ * chart on its own full dashboard page still renders teal, since `accent` is
+ * a presentation choice `WidgetSpecView` only honours when `compact`.
+ *
+ * `fee-defaulters` -> `negative` reuses a meaning docs/10 §1's token table
+ * already assigns platform-wide ("Red: ... defaulter counts"); it is not a
+ * colour invented for this grid. The rest alternate `primary`/`secondary`
+ * (teal/mint, both inside the audited four) purely so six teal cards in a
+ * row don't read as one flat colour — never a fifth hue, never decoration
+ * dressed up as meaning where none exists.
+ */
+const PREVIEW_ACCENT: Partial<Record<string, ChartAccent>> = {
+  'fee-defaulters': 'negative',
+  'staff-overview': 'secondary',
+  'attendance-analytics': 'secondary',
+  'transport-analytics': 'secondary',
+  'library-textbooks': 'secondary',
+};
 
 interface Props {
   session: SessionResponse;
@@ -233,7 +254,7 @@ function PreviewCard({
         {preview === undefined ? (
           <div className="skeleton skeletonPreview" />
         ) : preview.status === 'ok' && preview.widget !== null ? (
-          <WidgetSpecView widget={preview.widget} compact />
+          <WidgetSpecView widget={preview.widget} compact accent={PREVIEW_ACCENT[card.id]} />
         ) : (
           <span className="pcardMuted">{preview.reason ?? card.blurb}</span>
         )}

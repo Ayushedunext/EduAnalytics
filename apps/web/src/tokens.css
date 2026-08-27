@@ -454,7 +454,18 @@ body {
    empty 300px column gaps IN the grid (auto-fill reserves them) rather than
    stretching the real cards to fill the row -- the dead-space complaint this
    was written to fix, just moved one level in. */
-.pgallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+/* Fixed 3-up, not auto-fit: at the old `minmax(300px,1fr)` a 1900px page fit
+   4-5 cards a row, which is exactly why the charts read as small and
+   congested -- a card that shares a row with five others has no room for
+   axis ticks. 3 columns give each card roughly double its old width, which
+   is the room the axis labels below (widgets.tsx BarPanel/LinePanel) need to
+   be legible rather than dropped. Two breakpoints, not a bare auto-fit,
+   because auto-fit would silently go back to 4+ columns the moment the
+   viewport is wide enough -- 980px matches docs/10 §4's own single-column
+   floor for this product. */
+.pgallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+@media (max-width: 1400px) { .pgallery { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 980px) { .pgallery { grid-template-columns: 1fr; } }
 .pcard {
   padding: 14px 16px 16px;
   cursor: pointer;
@@ -462,6 +473,14 @@ body {
   width: 100%;
   font-family: var(--font-sans);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  /* A flex column so `.pcardBody` (and the chart inside it) can stretch to
+     fill the card's full height. Needed because `.pgallery`'s grid rows
+     stretch every card in a row to match the tallest one (e.g. a
+     many-department Staff Overview bar chart) -- without this chain, the
+     shorter cards were left with dead space below a chart pinned to its own
+     fixed pixel height. */
+  display: flex;
+  flex-direction: column;
 }
 .pcard:hover { transform: translateY(-3px); box-shadow: var(--shadow-card-hover); border-color: rgba(2, 128, 144, 0.25); }
 .pcardHead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -472,6 +491,7 @@ body {
 /* The live widget renders through the same `.kpi` styling used everywhere
    else (WidgetSpecView -> KpiTile), so a card-sized KPI reads identically to
    its full-dashboard counterpart -- just smaller, never restyled. */
+.pcardBody { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 .pcardBody .kpi { padding: 0; border-left: none; box-shadow: none; background: transparent; }
 .pcardBody .kpiValue { font-size: 26px; }
 .pcardMuted { font-size: 11.5px; color: var(--color-text-muted); line-height: 1.45; display: block; }
@@ -481,10 +501,10 @@ body {
   background-size: 200% 100%;
   border-radius: var(--radius-sm);
 }
-/* Sized to a compact chart (190px, widgets.tsx) rather than a KPI tile --
+/* Sized to a compact chart (240px, widgets.tsx) rather than a KPI tile --
    most previews resolve to a chart, and a KPI settling into a shorter space
    reads better than every chart growing past its skeleton. */
-.skeletonPreview { height: 190px; width: 100%; }
+.skeletonPreview { height: 240px; width: 100%; }
 @media (prefers-reduced-motion: no-preference) {
   .skeleton { animation: shimmer 1.4s ease-in-out infinite; }
 }
@@ -763,7 +783,13 @@ body {
    chrome of its own, the caller's card supplies both. Used only by Home's
    dashboard-preview cards; the dashboard screen and PDF never pass `compact`
    and so never see this rule. */
-.specPanelCompact { width: 100%; }
+.specPanelCompact { width: 100%; flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+/* The chart's own flex-fill slot within a compact card: `min-height` is set
+   per-instance from JS (widgets.tsx, the same clamp() that used to be the
+   chart's fixed height) so it still looks right stood alone, and `flex: 1`
+   lets it grow past that when the grid row (`.pgallery`, above) stretches
+   the card taller than its neighbour. */
+.specChartFill { flex: 1 1 auto; }
 /* The lead chart's own title, at card size -- the dashboard name in
    `.pcardHead` above it names the DASHBOARD, not necessarily this metric
    (services/home.ts, `buildHomePreviews`), so a shape with no label of its
@@ -773,7 +799,7 @@ body {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--color-text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -72,6 +72,32 @@ import type {
 const SERIES: readonly [string, ...string[]] = ['#028090', '#02c39a', '#f2a93b', '#e05252'];
 /** The fold-in colour for any category past the fixed palette (dataviz non-negotiable: never a generated hue). */
 const SERIES_OTHER = '#64748b';
+
+/**
+ * A single-series bar/line's colour, for callers that want visual variety
+ * across SEVERAL single-series charts shown together (Home's preview grid)
+ * without inventing a hue outside the CVD-audited four above. Deliberately
+ * NOT part of the chart-spec contract (spec.ts) -- it is how a caller
+ * presents a widget, not a fact the widget's data carries, so a caller that
+ * passes nothing (every full dashboard and the PDF path) gets exactly
+ * `SERIES[0]`, pixel-identical to before this existed.
+ *
+ * Named `primary`/`secondary` rather than reusing `KpiWidget['tone']`
+ * (`neutral`/`positive`/`warning`/`negative`) on purpose: tone claims the
+ * NUMBER is good or bad news, which is true for a KPI's delta and not true
+ * for, say, which teal step a headcount-by-department bar happens to be
+ * drawn in. `warning`/`negative` are kept because those two really do carry
+ * meaning here too (docs/10 §1 token table: amber = warnings, red =
+ * defaulter counts) -- callers only reach for them when that meaning
+ * actually applies.
+ */
+export type ChartAccent = 'primary' | 'secondary' | 'warning' | 'negative';
+const ACCENT_COLOUR: Record<ChartAccent, string> = {
+  primary: SERIES[0],
+  secondary: SERIES[1] ?? SERIES[0],
+  warning: SERIES[2] ?? SERIES[0],
+  negative: SERIES[3] ?? SERIES[0],
+};
 const AXIS: CSSProperties = { fontSize: 11 };
 const GRID = '#e2e8f0';
 const MUTED = '#64748b';
@@ -214,6 +240,10 @@ export function KpiTile({ widget, hero }: { widget: KpiWidget; hero?: boolean | 
  *
  * The thresholds are about LABEL WIDTH, not category count: five bands read
  * horizontally too when one of them is "No due date recorded".
+ *
+ * The same budget now also sizes Home's compact preview cards (3-up,
+ * tokens.css `.pgallery`, ~600px+ each) — wider than a full dashboard panel,
+ * never narrower, so nothing here needed a compact-specific number.
  */
 function categoryAxis(rows: readonly Record<string, unknown>[], field: string) {
   let longest = 0;
@@ -268,6 +298,42 @@ function CategoryTick({ x = 0, y = 0, payload, maxChars = 24 }: TickProps): Reac
 }
 
 /**
+ * Wraps a chart's `ResponsiveContainer` so a COMPACT card's chart can grow to
+ * fill whatever height the CSS grid row stretches its card to (`.pgallery`
+ * stretches every card in a row to match the tallest one, e.g. a
+ * many-department bar chart) instead of sitting at a fixed pixel height with
+ * dead space below it. `naturalHeight` is what the chart would be standing
+ * alone — still applied as a CSS `min-height` (tokens.css `.specChartFill`),
+ * so nothing changes for a card with no taller neighbour. The full dashboard
+ * and the PDF (`compact` unset) are untouched: a plain `ResponsiveContainer`
+ * at its original fixed height, exactly as before this existed.
+ */
+function ChartFrame({
+  compact,
+  naturalHeight,
+  children,
+}: {
+  compact: boolean | undefined;
+  naturalHeight: number;
+  children: ReactElement;
+}): ReactElement {
+  if (compact === true) {
+    return (
+      <div className="specChartFill" style={{ minHeight: naturalHeight }}>
+        <ResponsiveContainer width="100%" height="100%">
+          {children}
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={naturalHeight}>
+      {children}
+    </ResponsiveContainer>
+  );
+}
+
+/**
  * The tallest bar, so a chart with a genuine standout can say so visually
  * (§8 "highlighting of the highest category when analytically meaningful").
  * Only computed with more than one bar — a single-category chart has no
@@ -291,11 +357,14 @@ function maxValueIndex(rows: readonly Record<string, unknown>[], field: string):
 export function BarPanel({
   widget,
   compact,
+  accent,
   actions,
 }: {
   widget: BarWidget;
-  /** Card-sized: fixed short height, axes dropped, chosen by shape alone (Home preview cards). */
+  /** Card-sized: shorter than the full dashboard panel, real axes (Home preview cards). */
   compact?: boolean | undefined;
+  /** Single-series colour, Home preview cards only -- see `ChartAccent`. */
+  accent?: ChartAccent | undefined;
   actions?: ReactNode | undefined;
 }): ReactElement {
   if (widget.data.length === 0) {
@@ -311,6 +380,7 @@ export function BarPanel({
 
   const axis = categoryAxis(widget.data, widget.x);
   const highlightIndex = maxValueIndex(widget.data, widget.y);
+  const seriesColor = ACCENT_COLOUR[accent ?? 'primary'];
   /**
    * A depth gradient built from ONE hue at two opacities, never a second
    * colour — so it stays inside docs/10 §1's "teal-family series" rule and
@@ -326,9 +396,15 @@ export function BarPanel({
     /**
      * The panel grows with the data instead of squeezing rows to a fixed 260px:
      * 26px a row keeps a 12px bar plus air, and the 560px ceiling stops a
-     * pathological category list from producing a page-long chart.
+     * pathological category list from producing a page-long chart. Compact
+     * uses the same idea at a tighter budget (22px/row, 220-340px) -- Home's
+     * preview cards are wide (3-up, tokens.css `.pgallery`) but still a
+     * preview, not a full report.
      */
-    const height = compact === true ? 190 : clamp(44 + axis.count * 26, 180, 560);
+    const height =
+      compact === true
+        ? clamp(64 + axis.count * 22, 220, 340)
+        : clamp(44 + axis.count * 26, 180, 560);
     /**
      * The axis takes the width its labels need, up to a ceiling that leaves the
      * bars the larger half of the panel. `- 14` is the tick line and its gap.
@@ -343,7 +419,7 @@ export function BarPanel({
 
     return (
       <Panel title={widget.title} variant="wide" compact={compact} actions={actions}>
-        <ResponsiveContainer width="100%" height={height}>
+        <ChartFrame compact={compact} naturalHeight={height}>
           <BarChart
             data={[...widget.data]}
             layout="vertical"
@@ -351,23 +427,22 @@ export function BarPanel({
           >
             {/* Grid lines run along the value axis only — the category axis has
                 no scale to read against. */}
-            {compact !== true && <CartesianGrid stroke={GRID} horizontal={false} />}
+            <CartesianGrid stroke={GRID} horizontal={false} />
             <defs>
               <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor={SERIES[0]} stopOpacity={0.62} />
-                <stop offset="100%" stopColor={SERIES[0]} stopOpacity={1} />
+                <stop offset="0%" stopColor={seriesColor} stopOpacity={0.62} />
+                <stop offset="100%" stopColor={seriesColor} stopOpacity={1} />
               </linearGradient>
             </defs>
-            {/* At card size the exact category names and axis scale are a click
-                away on the real dashboard; the shape of the bars is the thing a
-                glance needs, so both axes are dropped rather than shrunk to
-                illegibility (§8's "one chart language" still applies — same
-                gradient, same highlight, same tooltip, just no axis chrome). */}
-            <XAxis type="number" hide={compact === true} tick={tick} tickFormatter={axisNumber} height={28} />
+            {/* Both axes render at every size now — Home's preview cards are wide
+                enough (3-up, tokens.css `.pgallery`) for the same truncate-with-
+                tooltip treatment the full dashboard uses (`CategoryTick`,
+                `axisNumber` below) to stay legible; a glance no longer has to
+                guess what a bar's category or scale is. */}
+            <XAxis type="number" tick={tick} tickFormatter={axisNumber} height={28} />
             <YAxis
               type="category"
               dataKey={widget.x}
-              hide={compact === true}
               tick={<CategoryTick maxChars={labelChars} />}
               interval={0}
               width={labelWidth}
@@ -381,35 +456,34 @@ export function BarPanel({
               radius={[0, 3, 3, 0]}
               maxBarSize={14}
               {...animation}
-              activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
+              activeBar={{ fill: seriesColor, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
             >
-              {/* The tallest bar reads as solid teal against the others'
-                  gradient — same hue, no fifth colour, just more of it. */}
+              {/* The tallest bar reads as solid against the others' gradient —
+                  same hue, no fifth colour, just more of it. */}
               {highlightIndex !== null &&
                 widget.data.map((_, index) => (
-                  <Cell key={index} fill={index === highlightIndex ? SERIES[0] : `url(#${gradId})`} />
+                  <Cell key={index} fill={index === highlightIndex ? seriesColor : `url(#${gradId})`} />
                 ))}
             </Bar>
           </BarChart>
-        </ResponsiveContainer>
+        </ChartFrame>
       </Panel>
     );
   }
 
   return (
     <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
-      <ResponsiveContainer width="100%" height={compact === true ? 190 : 260}>
+      <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 260}>
         <BarChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
-          {compact !== true && <CartesianGrid stroke={GRID} vertical={false} />}
+          <CartesianGrid stroke={GRID} vertical={false} />
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={SERIES[0]} stopOpacity={1} />
-              <stop offset="100%" stopColor={SERIES[0]} stopOpacity={0.62} />
+              <stop offset="0%" stopColor={seriesColor} stopOpacity={1} />
+              <stop offset="100%" stopColor={seriesColor} stopOpacity={0.62} />
             </linearGradient>
           </defs>
           <XAxis
             dataKey={widget.x}
-            hide={compact === true}
             tick={tick}
             interval={0}
             angle={-35}
@@ -417,7 +491,7 @@ export function BarPanel({
             tickMargin={4}
             height={clamp(axis.longest * 4.8 + 26, 40, 76)}
           />
-          <YAxis hide={compact === true} tick={tick} tickFormatter={axisNumber} width={54} />
+          <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
           <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
           <Bar
             dataKey={widget.y}
@@ -425,15 +499,15 @@ export function BarPanel({
             radius={[3, 3, 0, 0]}
             maxBarSize={38}
             {...animation}
-            activeBar={{ fill: SERIES[0], fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
+            activeBar={{ fill: seriesColor, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
           >
             {highlightIndex !== null &&
               widget.data.map((_, index) => (
-                <Cell key={index} fill={index === highlightIndex ? SERIES[0] : `url(#${gradId})`} />
+                <Cell key={index} fill={index === highlightIndex ? seriesColor : `url(#${gradId})`} />
               ))}
           </Bar>
         </BarChart>
-      </ResponsiveContainer>
+      </ChartFrame>
     </Panel>
   );
 }
@@ -452,7 +526,7 @@ interface LineDotProps {
  * point"). `lastIndex` is closed over rather than read from props because
  * Recharts does not otherwise tell a dot renderer how many points there are.
  */
-function makeLineDot(lastIndex: number): (props: LineDotProps) => ReactElement {
+function makeLineDot(lastIndex: number, color: string): (props: LineDotProps) => ReactElement {
   return function LineDot({ cx = 0, cy = 0, index = -1 }: LineDotProps): ReactElement {
     const isLatest = index === lastIndex;
     return (
@@ -460,7 +534,7 @@ function makeLineDot(lastIndex: number): (props: LineDotProps) => ReactElement {
         cx={cx}
         cy={cy}
         r={isLatest ? 4.5 : 3}
-        fill={SERIES[0]}
+        fill={color}
         stroke={isLatest ? '#fff' : 'none'}
         strokeWidth={isLatest ? 2 : 0}
       />
@@ -471,15 +545,19 @@ function makeLineDot(lastIndex: number): (props: LineDotProps) => ReactElement {
 export function LinePanel({
   widget,
   compact,
+  accent,
   actions,
 }: {
   widget: LineWidget;
-  /** Card-sized: fixed short height, axes dropped (Home preview cards). */
+  /** Card-sized: shorter than the full dashboard panel, real axes (Home preview cards). */
   compact?: boolean | undefined;
+  /** Single-series colour, Home preview cards only -- see `ChartAccent`. */
+  accent?: ChartAccent | undefined;
   actions?: ReactNode | undefined;
 }): ReactElement {
   const gradId = useGradientId('area');
   const animation = useAnimation();
+  const seriesColor = ACCENT_COLOUR[accent ?? 'primary'];
 
   // Empty and single-point series read as a broken chart if forced through
   // the same axes a real trend uses — an honest small state instead (§18/19).
@@ -513,23 +591,24 @@ export function LinePanel({
 
   return (
     <Panel title={widget.title} variant="hero" compact={compact} actions={actions}>
-      <ResponsiveContainer width="100%" height={compact === true ? 190 : 260}>
+      <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 260}>
         <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <defs>
             {/* A static fade to transparent — fixed SVG stops, not a timed
                 effect, so the PDF capture (ADR-021) still matches the screen
                 exactly at whatever instant Puppeteer takes the shot. */}
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={SERIES[0]} stopOpacity={0.24} />
-              <stop offset="100%" stopColor={SERIES[0]} stopOpacity={0} />
+              <stop offset="0%" stopColor={seriesColor} stopOpacity={0.24} />
+              <stop offset="100%" stopColor={seriesColor} stopOpacity={0} />
             </linearGradient>
           </defs>
-          {compact !== true && <CartesianGrid stroke={GRID} vertical={false} />}
+          <CartesianGrid stroke={GRID} vertical={false} />
           {/* A line's x is a sequence — months, terms — so it stays horizontal
-              and only sizes its band to the labels it actually has. */}
+              and only sizes its band to the labels it actually has. Rendered
+              at every size now (see BarPanel's axes above for why compact no
+              longer drops them). */}
           <XAxis
             dataKey={widget.x}
-            hide={compact === true}
             tick={tick}
             interval={0}
             angle={-35}
@@ -537,10 +616,10 @@ export function LinePanel({
             tickMargin={4}
             height={clamp(categoryAxis(widget.data, widget.x).longest * 4.8 + 26, 40, 76)}
           />
-          <YAxis hide={compact === true} tick={tick} tickFormatter={axisNumber} width={54} />
+          <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
           <Tooltip
             content={<ChartTooltip />}
-            cursor={{ stroke: SERIES[0], strokeWidth: 1, strokeDasharray: '3 3' }}
+            cursor={{ stroke: seriesColor, strokeWidth: 1, strokeDasharray: '3 3' }}
           />
           <Area
             type="monotone"
@@ -553,14 +632,14 @@ export function LinePanel({
           <Line
             type="monotone"
             dataKey={widget.y}
-            stroke={SERIES[0]}
+            stroke={seriesColor}
             strokeWidth={2.25}
-            dot={makeLineDot(widget.data.length - 1)}
-            activeDot={{ r: 5.5, fill: SERIES[0], stroke: '#fff', strokeWidth: 2 }}
+            dot={makeLineDot(widget.data.length - 1, seriesColor)}
+            activeDot={{ r: 5.5, fill: seriesColor, stroke: '#fff', strokeWidth: 2 }}
             {...animation}
           />
         </ComposedChart>
-      </ResponsiveContainer>
+      </ChartFrame>
     </Panel>
   );
 }
@@ -626,14 +705,14 @@ export function DonutPanel({
        * overlay from stealing hover off the ring underneath it.
        */}
       <div className="specDonutWrap">
-        <ResponsiveContainer width="100%" height={compact === true ? 190 : 220}>
+        <ResponsiveContainer width="100%" height={compact === true ? 210 : 220}>
           <PieChart>
             <Pie
               data={[...widget.data]}
               dataKey={widget.value_field}
               nameKey={widget.label_field}
-              innerRadius={compact === true ? 54 : 58}
-              outerRadius={compact === true ? 84 : 88}
+              innerRadius={58}
+              outerRadius={compact === true ? 90 : 88}
               paddingAngle={2}
               {...animation}
             >
@@ -842,11 +921,14 @@ export function WidgetView({
   widget,
   hero,
   compact,
+  accent,
   actions,
 }: {
   widget: Widget;
   hero?: boolean | undefined;
   compact?: boolean | undefined;
+  /** Single-series colour for a bar/line widget — see `ChartAccent`. Ignored by kpi/donut/table: a donut is already multi-colour by category, and tone-colouring a KPI already goes through its own `tone` field. */
+  accent?: ChartAccent | undefined;
   /** Platform chrome beside the panel title — see `Panel`'s doc comment. Never offered to a KPI tile, which has no panel head to hold it. */
   actions?: ReactNode | undefined;
 }): ReactElement {
@@ -854,9 +936,9 @@ export function WidgetView({
     case 'kpi':
       return <KpiTile widget={widget} hero={hero} />;
     case 'bar':
-      return <BarPanel widget={widget} compact={compact} actions={actions} />;
+      return <BarPanel widget={widget} compact={compact} accent={accent} actions={actions} />;
     case 'line':
-      return <LinePanel widget={widget} compact={compact} actions={actions} />;
+      return <LinePanel widget={widget} compact={compact} accent={accent} actions={actions} />;
     case 'donut':
       return <DonutPanel widget={widget} compact={compact} actions={actions} />;
     case 'table':
@@ -876,14 +958,16 @@ export function WidgetSpecView({
   widget,
   hero,
   compact,
+  accent,
 }: {
   widget: unknown;
   hero?: boolean | undefined;
   compact?: boolean | undefined;
+  accent?: ChartAccent | undefined;
 }): ReactElement {
   const parsed = widgetSchema.safeParse(widget);
   if (!parsed.success) {
     return <div className="notice">This could not be displayed because its definition is not valid.</div>;
   }
-  return <WidgetView widget={parsed.data} hero={hero} compact={compact} />;
+  return <WidgetView widget={parsed.data} hero={hero} compact={compact} accent={accent} />;
 }

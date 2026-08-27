@@ -243,8 +243,13 @@ export async function buildHomePreviews(args: {
  * screen matches what was designed; the STATUS of each is decided here, on the
  * server, from what the platform can actually serve today. A card's availability
  * is not a UI opinion — the SPA renders what this says.
+ *
+ * Exported because it is also the catalog of what a NEW custom report can be
+ * built from (`listReportSources` in custom-reports.ts, docs/06 §3). One list
+ * for both: a card that is `coming` or `blocked` on Home cannot be a report
+ * source either, and two tables would eventually disagree about which.
  */
-const DASHBOARDS: readonly DashboardCard[] = [
+export const DASHBOARDS: readonly DashboardCard[] = [
   {
     id: 'group-overview',
     title: 'Group Overview',

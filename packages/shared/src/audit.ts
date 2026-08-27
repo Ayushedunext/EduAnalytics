@@ -106,7 +106,22 @@ export interface ReportDefinitionChangedEvent extends AuditBase {
   readonly kind: 'report_definition.changed';
   readonly report_id: string;
   readonly school_ids: readonly string[];
-  readonly action: 'cloned' | 'saved_from_ai' | 'updated_visual' | 'updated_sql' | 'refined_with_ai' | 'rolled_back' | 'deleted';
+  readonly action:
+    | 'cloned'
+    | 'duplicated'
+    | 'saved_from_ai'
+    | 'updated_visual'
+    | 'updated_sql'
+    | 'refined_with_ai'
+    | 'rolled_back'
+    | 'deleted';
+  /**
+   * For `cloned`, the PREDEFINED dashboard the copy came from; for
+   * `duplicated`, the custom report id it was copied from. Both answer the
+   * same question the trail is asked — "where did this report come from" —
+   * and both are ids of a thing that already existed, so they share the field
+   * rather than adding a near-duplicate one that means almost the same.
+   */
   readonly base_report_id?: string;
   readonly version: number;
 }

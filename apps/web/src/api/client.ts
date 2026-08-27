@@ -591,7 +591,7 @@ export interface AskAiDraft {
  */
 export type AskAiEvent =
   | { type: 'status'; step: string }
-  | { type: 'result'; spec: AskAiSpec; queries: AskAiQuery[]; draft: AskAiDraft }
+  | { type: 'result'; spec: AskAiSpec; queries: AskAiQuery[]; draft: AskAiDraft; logic: ReportLogic }
   | { type: 'error'; code: string; message: string };
 
 /**
@@ -600,12 +600,21 @@ export type AskAiEvent =
  * they arrive rather than after everything is in. Still the same CSRF-cookie
  * echo and credentialed-fetch pattern as every other mutating call.
  */
+/** "✎ Refine" on an Ask AI answer that has not been saved yet — the same seed shape a saved report's `report_id` produces server-side, just echoed straight from the turn already on screen (docs/06 §1). */
+export interface AskAiInlineSeed {
+  reportName: string;
+  queries: readonly AskAiQuery[];
+  widgets: readonly unknown[];
+}
+
 export async function askAI(
   question: string,
   schoolIds: readonly string[],
   onEvent: (event: AskAiEvent) => void,
   /** "✎ Refine with AI" (docs/06 §1): seeds this turn from an existing report's current definition instead of a blank question. */
   reportId?: string,
+  /** Mutually exclusive with `reportId` — set only when refining an unsaved turn, which has no report id yet. */
+  inlineSeed?: AskAiInlineSeed,
 ): Promise<void> {
   const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
   const headers = new Headers({ 'content-type': 'application/json' });
@@ -616,7 +625,13 @@ export async function askAI(
     method: 'POST',
     headers,
     credentials: 'include',
-    body: JSON.stringify({ question, ...(reportId === undefined ? {} : { report_id: reportId }) }),
+    body: JSON.stringify({
+      question,
+      ...(reportId === undefined ? {} : { report_id: reportId }),
+      ...(inlineSeed === undefined
+        ? {}
+        : { seed: { report_name: inlineSeed.reportName, queries: inlineSeed.queries, widgets: inlineSeed.widgets } }),
+    }),
   });
 
   if (!res.ok) {

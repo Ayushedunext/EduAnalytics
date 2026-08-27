@@ -589,6 +589,82 @@ body {
   border-radius: var(--radius-sm); padding: 8px 10px;
 }
 
+/* ---------- Ask AI page: chat (35%) + artifact canvas (65%) (docs/10 §3) ---------- */
+
+.askSplit { display: grid; grid-template-columns: clamp(300px, 35%, 400px) 1fr; gap: 16px; flex: 1; min-height: 0; }
+@media (max-width: 860px) { .askSplit { grid-template-columns: 1fr; } }
+
+.askChat { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.askChatMsgs { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+
+.askBubble { max-width: 88%; border-radius: 12px; padding: 10px 13px; font-size: 13px; line-height: 1.5; }
+.askBubble--ai { align-self: flex-start; background: var(--color-chip); color: var(--color-ink); border-bottom-left-radius: 4px; }
+.askBubble--user {
+  align-self: flex-end; background: var(--color-primary); color: #fff; border-bottom-right-radius: 4px;
+  border: none; font-family: var(--font-sans); text-align: left; cursor: pointer;
+}
+.askBubble--user:hover { filter: brightness(1.06); }
+.askBubble--user.is-selected { box-shadow: 0 0 0 2px var(--color-mint); }
+
+.askStatusList { list-style: none; margin: 0; padding: 0 4px; display: flex; flex-direction: column; gap: 3px; }
+.askStatusLine { font-size: 11.5px; color: var(--color-text-muted); }
+
+.askChips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 8px; }
+
+.askChatForm { display: flex; gap: 8px; border-top: 1px solid var(--color-border); padding: 12px; }
+.askChatInput {
+  flex: 1; font-family: var(--font-sans); font-size: 13.5px; border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm); padding: 10px 12px;
+}
+
+.askRefineChip {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--color-primary-soft); border: 1px solid var(--color-info); border-radius: var(--radius-sm);
+  padding: 7px 10px; margin: 0 16px 8px; font-size: 12px; color: var(--color-text-secondary);
+}
+.askRefineChip b { color: var(--color-text-primary); }
+.askRefineChip button {
+  background: none; border: none; color: var(--color-text-muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px;
+}
+.askRefineChip button:hover { color: var(--color-text-primary); }
+
+.askCanvas { padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
+.askCanvasEmpty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center; color: var(--color-text-muted);
+}
+.askCanvasEmpty .icon { font-size: 40px; }
+.askCanvasEmpty b { color: var(--color-text-primary); }
+.askCanvasEmpty .msg { font-size: 12.5px; max-width: 32ch; line-height: 1.5; }
+
+.askArtifactTitle { font-size: 16px; font-weight: 700; color: var(--color-text-primary); margin-bottom: 2px; }
+.askArtifactSub { font-size: 11.5px; color: var(--color-text-muted); margin-bottom: 14px; }
+.askArtifactActions { margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Canvas is the wide pane, but on a narrow viewport `.askSplit` stacks to one
+   column and the canvas can end up narrower than the 1024px breakpoint
+   `.specPanels` keys off — same fix `.askAiTurnSpec` already applies. */
+@media (max-width: 860px) {
+  .askCanvas .specPanel,
+  .askCanvas .specPanel--hero,
+  .askCanvas .specPanel--side,
+  .askCanvas .specPanel--medium,
+  .askCanvas .specPanel--wide {
+    grid-column: span 12;
+  }
+}
+
+/* ---------- Locked-state centered card (docs/10 §3, reused pattern) ---------- */
+
+.lockedCard { max-width: 480px; margin: 8vh auto; text-align: center; padding: 40px 36px; }
+.lockedCard .icon {
+  width: 64px; height: 64px; border-radius: var(--radius-lg); background: var(--color-background);
+  display: flex; align-items: center; justify-content: center; font-size: 26px; margin: 0 auto 18px;
+}
+.lockedCard h2 { font-size: 19px; margin-bottom: 10px; }
+.lockedCard p { font-size: 13.5px; color: var(--color-text-muted); line-height: 1.6; margin-bottom: 8px; }
+.lockedCard .okLine { color: #067a5b; font-weight: 600; font-size: 13px; margin: 14px 0 20px; }
+
 .specNarrative {
   background: #fbfdfe; border: 1px solid #e2ecf0; border-left: 3px solid var(--color-info);
   border-radius: var(--radius-sm); padding: 12px 14px; font-size: 13px; margin: 0 0 16px; line-height: 1.55;

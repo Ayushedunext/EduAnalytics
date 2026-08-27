@@ -55,6 +55,7 @@ import {
   type CachedResult,
   type SchemaCatalogLite,
 } from './ai-tools.js';
+import type { ReportLogic } from './dashboards.js';
 
 /** One statement Ask AI ran, keyed the same way the widgets reference it. */
 export interface AskAiQuery {
@@ -73,8 +74,35 @@ export type AskAiEvent =
    * sending them down here means the client never has to reconstruct what it
    * is already looking at.
    */
-  | { type: 'result'; spec: ChartSpec; queries: readonly AskAiQuery[]; draft: ChartSpecDraft }
+  | { type: 'result'; spec: ChartSpec; queries: readonly AskAiQuery[]; draft: ChartSpecDraft; logic: ReportLogic }
   | { type: 'error'; code: string; message: string };
+
+/**
+ * The 🧠 Logic panel's contents for an Ask AI answer (docs/06 §3, docs/10
+ * §3's "🧠 Logic ... present ... on every report surface, including AI
+ * artifacts") — the SAME shape `custom-reports.ts`'s `runRawSqlMode` builds
+ * once an answer is saved and re-run, so the panel never changes shape (and
+ * never drifts) the moment "💾 Save as report" is clicked. `notes` is the one
+ * thing that legitimately differs between the two callers — saved vs. not
+ * yet saved is a real difference worth stating, everything else here is
+ * identical either way.
+ */
+export function buildAskAiLogic(
+  scope: readonly { school_id: string; school_name: string }[],
+  spec: ChartSpec,
+  queries: readonly AskAiQuery[],
+  notes: readonly string[],
+): ReportLogic {
+  return {
+    source: 'Ask AI',
+    scope,
+    filters: [],
+    group_by: [],
+    charts: spec.widgets.map((w) => w.type),
+    queries: queries.map((q) => ({ key: q.key, description: 'Ask AI query', sql: q.sql })),
+    notes,
+  };
+}
 
 /**
  * Seeds a turn with an EXISTING report's current definition — "✎ Refine with
@@ -248,7 +276,11 @@ export async function runAskAi(args: {
     ...(refiningReportId === undefined ? {} : { report_id: refiningReportId }),
   });
 
-  onEvent({ type: 'result', spec, queries, draft });
+  const logic = buildAskAiLogic(scope, spec, queries, [
+    'This is a live Ask AI answer — not yet saved. Scope is injected from your launch token and cannot be widened from this screen.',
+    'Save it to keep this exact statement re-runnable later, including if your organisation’s AI key is later locked.',
+  ]);
+  onEvent({ type: 'result', spec, queries, draft, logic });
 }
 
 /**

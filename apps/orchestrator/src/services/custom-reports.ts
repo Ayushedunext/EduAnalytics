@@ -59,7 +59,7 @@ import {
   type PredefinedResult,
   type ReportLogic,
 } from './dashboards.js';
-import { hydrate } from './ai-chat.js';
+import { hydrate, buildAskAiLogic } from './ai-chat.js';
 import type { CachedResult } from './ai-tools.js';
 import {
   getReportDefinition,
@@ -410,18 +410,10 @@ async function runRawSqlMode(args: {
 
   return {
     spec,
-    logic: {
-      source: 'Ask AI',
-      scope,
-      filters: [],
-      group_by: [],
-      charts: spec.widgets.map((w) => w.type),
-      queries: args.def.queries.map((q) => ({ key: q.key, description: 'Ask AI query', sql: q.sql })),
-      notes: [
-        'This report was saved from an Ask AI answer. Re-run always re-executes this exact statement — it keeps working even if your organisation’s AI key is locked, because nothing here calls the model again.',
-        'Scope is injected from your launch token, intersected with this report’s saved scope.',
-      ],
-    },
+    logic: buildAskAiLogic(scope, spec, args.def.queries, [
+      'This report was saved from an Ask AI answer. Re-run always re-executes this exact statement — it keeps working even if your organisation’s AI key is locked, because nothing here calls the model again.',
+      'Scope is injected from your launch token, intersected with this report’s saved scope.',
+    ]),
     sqlText: args.def.queries.map((q) => `-- ${q.key}\n${q.sql}`).join('\n\n'),
   };
 }

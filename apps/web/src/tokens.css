@@ -635,6 +635,20 @@ body {
    dashboard-preview cards; the dashboard screen and PDF never pass `compact`
    and so never see this rule. */
 .specPanelCompact { width: 100%; }
+/* The lead chart's own title, at card size -- the dashboard name in
+   `.pcardHead` above it names the DASHBOARD, not necessarily this metric
+   (services/home.ts, `buildHomePreviews`), so a shape with no label of its
+   own would be unreadable. Muted and small: a caption under the dashboard
+   card's own bold title, not a second heading competing with it. */
+.specPanelCompactTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .specDonutCenter--compact .value { font-size: 20px; }
 
 /* Wide tables scroll inside the panel rather than stretching the page. */

@@ -68,7 +68,7 @@ export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Prop
   if (error !== null && report === null) {
     return (
       <main className="flex-1 overflow-y-auto">
-        <div className="px-7 py-6 max-w-[1180px]">
+        <div className="px-7 py-6 max-w-[1900px]">
           <button type="button" className="backLink" onClick={onBack}>
             ← My Reports
           </button>
@@ -81,7 +81,7 @@ export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Prop
   if (report === null) {
     return (
       <main className="flex-1 overflow-y-auto">
-        <div className="px-7 py-6 max-w-[1180px]">
+        <div className="px-7 py-6 max-w-[1900px]">
           <div className="mt-10 text-[13px] text-[var(--color-muted)] animate-pulse">Loading…</div>
         </div>
       </main>
@@ -90,7 +90,12 @@ export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Prop
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1180px]">
+      {/* 1900px, matching DashboardPage.tsx -- this screen renders the same
+          `.specPanels` bento grid via ChartSpecView (a cloned report is the
+          identical renderer, ADR-015), so it has the same "grid wasted at a
+          reading-column width" problem, not the "single reading column"
+          shape a 1180px cap fits. */}
+      <div className="px-7 py-6 max-w-[1900px]">
         <button type="button" className="backLink" onClick={onBack}>
           ← My Reports
         </button>

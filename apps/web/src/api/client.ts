@@ -224,6 +224,52 @@ export function getReport(
   return request<DashboardResponse>(`/api/report/${encodeURIComponent(reportId)}?${query.toString()}`);
 }
 
+/** One clicked `{dim, value}` pair, with the text the breadcrumb shows for it. */
+export interface DrillStep {
+  dim: string;
+  value: string;
+  label: string;
+}
+
+export interface DrillResponse {
+  /** Unknown on purpose -- the renderer validates it before drawing (§10). */
+  widget: unknown;
+  level: 1 | 2 | 3;
+  context: DrillStep[];
+  /** The schools this level actually read, after a school click narrowed them. */
+  school_ids: string[];
+  /** Invariant 6: docs/06 §4.4 puts every level's SQL in the logic panel. */
+  query: { key: string; description: string; sql: string };
+  group_by: string;
+  degraded: { key: string; message: string }[];
+  degraded_schools: { school_id: string; message: string }[];
+}
+
+/**
+ * One level of a drill path (ADR-020).
+ *
+ * A POST, so it carries the CSRF token like every other mutating call --
+ * `request` adds it. The click is a read, but it is audited as its own event
+ * (docs/08 §7), which is what makes it a POST rather than a link.
+ *
+ * The filters go in the query string and the drill context in the body: the
+ * server validates the filters with the same code the report view and the PDF
+ * use, and only the context is new.
+ */
+export function drillReport(
+  reportId: string,
+  schoolIds: readonly string[],
+  academicYear: string,
+  body: { widget_id: string; level: number; context: readonly DrillStep[] },
+): Promise<DrillResponse> {
+  const query = new URLSearchParams({ academic_year: academicYear });
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  return request<DrillResponse>(
+    `/api/report/${encodeURIComponent(reportId)}/drill?${query.toString()}`,
+    { method: 'POST', body: JSON.stringify({ ...body, context: [...body.context] }) },
+  );
+}
+
 export function getHome(schoolIds: readonly string[]): Promise<HomeResponse> {
   const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
   return request<HomeResponse>(`/api/home${query}`);

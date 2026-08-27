@@ -19,6 +19,11 @@
  * product question (AUDIT_REPORT A2), and adding it speculatively would put a
  * widget in the contract that no renderer supports.
  *
+ * Grouped bars (`bar.series`, added 2026-08-27 for the Fee Collection drill)
+ * are NOT an addition to that vocabulary and needed no new ADR: a grouped bar
+ * is still a `bar`, so the union, the PDF route and every `switch` over
+ * `WidgetType` are untouched. What WOULD need one is a sixth widget type.
+ *
  * -- Two-stage spec: draft (model) then hydrated (renderer) ----------------
  * Decided 2026-08-18 (AUDIT_REPORT C15). A widget's DATA is attached
  * server-side; the model never emits data rows. It emits a ChartSpecDraft
@@ -132,20 +137,87 @@ export const kpiWidgetSchema = z
   })
   .strict();
 
+/**
+ * One measure drawn as its own set of bars, beside the others.
+ *
+ * `field` names a numeric field present on every row of `data`; `label` is what
+ * the legend calls it. The label travels in the SPEC rather than being derived
+ * from the field name, for the same reason KPI values arrive pre-formatted:
+ * `total_payable_amount` is a column, "Fee payable" is a sentence, and the
+ * screen and the PDF must not each invent their own translation.
+ *
+ * Deliberately NOT a colour. Which teal step a series is drawn in is a
+ * presentation decision the renderer makes from the docs/10 §1 palette in fixed
+ * order (`SERIES` in react/widgets.tsx); a spec that carried hex would let a
+ * saved report pin a colour that a later palette audit has to honour.
+ */
+export const barSeriesSchema = z
+  .object({ field: safeFieldName, label: z.string().min(1) })
+  .strict();
+export type BarSeries = z.infer<typeof barSeriesSchema>;
+
+/**
+ * What a chart carries so that clicking it can narrow the report (ADR-020,
+ * docs/06 §4.4). Shared by every widget a reader can click, so a drill path
+ * means the same thing on a bar as on a donut.
+ */
+const drillFields = {
+  /** Whether clicking a value drills. */
+  drillable: z.boolean().optional(),
+  /** The stack of clicked pairs that produced THIS view. Empty at level 1. */
+  drill_context: drillContextSchema.optional(),
+  /**
+   * The dimension a click on this chart pushes onto that stack — 'school',
+   * 'quarter', 'class'. Required whenever `drillable` is true, because a
+   * clicked value is meaningless without the dimension it narrows;
+   * `checkWidgetInvariants` below enforces the pair rather than leaving it to
+   * each renderer to notice.
+   */
+  drill_dim: z.string().min(1).optional(),
+  /**
+   * Which field carries the value to PUSH, when it differs from the field the
+   * axis displays. Drilling into a school narrows by `school_id` while the axis
+   * reads `school_name`, and binding the display label would make the drill
+   * depend on a school's name being unique and unedited. Absent means the
+   * category label is also the value.
+   */
+  drill_value_field: safeFieldName.optional(),
+};
+
 /** Fields shared by the data-bound cartesian widgets. */
 const cartesian = {
   ...widgetBase,
+  ...drillFields,
   /** Field name in data for the category axis. */
   x: z.string().min(1),
   /** Field name in data for the value axis. */
   y: z.string().min(1),
   data: z.array(dataRowSchema),
-  /** ADR-020 and docs/06 §4.4: whether clicking a value drills. */
-  drillable: z.boolean().optional(),
-  drill_context: drillContextSchema.optional(),
 };
 
-export const barWidgetSchema = z.object({ ...cartesian, type: z.literal('bar') }).strict();
+export const barWidgetSchema = z
+  .object({
+    ...cartesian,
+    type: z.literal('bar'),
+    /**
+     * Several measures side by side — demand, collection and pending for the
+     * same school — rather than one bar per category.
+     *
+     * Grouped bars are NOT a new widget type: ADR-015 closes the vocabulary at
+     * kpi/bar/line/donut/table and this stays a `bar`, so nothing that reads the
+     * union (the PDF route, the clone form, the AI spec validator) grows a
+     * branch. Omitted, a bar is exactly the single-`y` bar it has always been.
+     *
+     * `series[0].field` must be `y`. One field is the widget's primary measure
+     * whether or not there are others — it is what `maxValueIndex`, the Home
+     * preview card and any future sort read — and letting `y` name a measure
+     * absent from the group would produce a chart whose "main" value is not
+     * drawn. Requiring at least two entries keeps `series` meaning "grouped":
+     * a one-entry group is a single-series bar with extra ceremony.
+     */
+    series: z.array(barSeriesSchema).min(2).optional(),
+  })
+  .strict();
 
 export const lineWidgetSchema = z
   .object({
@@ -159,12 +231,11 @@ export const lineWidgetSchema = z
 export const donutWidgetSchema = z
   .object({
     ...widgetBase,
+    ...drillFields,
     type: z.literal('donut'),
     label_field: z.string().min(1),
     value_field: z.string().min(1),
     data: z.array(dataRowSchema),
-    drillable: z.boolean().optional(),
-    drill_context: drillContextSchema.optional(),
   })
   .strict();
 
@@ -203,14 +274,56 @@ export type LineWidget = z.infer<typeof lineWidgetSchema>;
 export type DonutWidget = z.infer<typeof donutWidgetSchema>;
 export type TableWidget = z.infer<typeof tableWidgetSchema>;
 
-export const widgetSchema = z.discriminatedUnion('type', [
+/**
+ * Cross-field rules that a `.strict()` object cannot state on its own.
+ *
+ * They live on the UNION rather than on each member because
+ * `z.discriminatedUnion` requires plain objects: a member wrapped in `.refine`
+ * is a ZodEffects and the union stops narrowing by `type`, which would cost
+ * every consumer of `Widget` its discriminated narrowing to buy two checks.
+ * Applied here, the checks are identical and the union is unchanged.
+ */
+function checkWidgetInvariants(widget: Widget, ctx: z.RefinementCtx): void {
+  /**
+   * ADR-020 makes a clicked value a `{dim, value}` pair bound as a parameter. A
+   * widget that says "clicking me drills" without saying INTO WHAT leaves the
+   * renderer to guess the dim from the title, or the caller to hardcode it per
+   * report -- either of which is a drill path living somewhere other than the
+   * curated catalog the ADR requires.
+   */
+  if ('drillable' in widget && widget.drillable === true && widget.drill_dim === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'a drillable widget must name the dimension a click drills on (drill_dim)',
+      path: ['drill_dim'],
+    });
+  }
+
+  /**
+   * One field is a bar's primary measure whether or not there are others -- it
+   * is what `maxValueIndex`, the Home preview card and any future sort read --
+   * so letting `y` name a measure absent from the group would produce a chart
+   * whose "main" value is not among the bars drawn.
+   */
+  if (widget.type === 'bar' && widget.series !== undefined && widget.series[0]?.field !== widget.y) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "the first series must be the widget's y field",
+      path: ['series', 0, 'field'],
+    });
+  }
+}
+
+const widgetUnion = z.discriminatedUnion('type', [
   kpiWidgetSchema,
   barWidgetSchema,
   lineWidgetSchema,
   donutWidgetSchema,
   tableWidgetSchema,
 ]);
-export type Widget = z.infer<typeof widgetSchema>;
+export type Widget = z.infer<typeof widgetUnion>;
+
+export const widgetSchema = widgetUnion.superRefine(checkWidgetInvariants);
 export type WidgetType = Widget['type'];
 
 /** The renderable contract. Read identically by the SPA and the PDF (ADR-021). */
@@ -232,6 +345,16 @@ export type ChartSpec = z.infer<typeof chartSpecSchema>;
  * The model-facing spec. Identical in structure except that data-bound widgets
  * name a query_ref instead of carrying rows. See the two-stage note at the top
  * of this file. Phase 3 surface; no Phase 1 code path produces one.
+ *
+ * -- No drill fields, on purpose (2026-08-27) ---------------------------------
+ * A draft cannot declare `drillable`. docs/06 §4.4 closes with AI artifacts
+ * adopting drill-down being "explicitly designed as a later config-level step"
+ * against the Dimension Hierarchy Catalog — so today a model asking for a
+ * drillable chart is asking for something no path can serve. It used to be
+ * offered here and copied through hydration (services/ai-chat.ts), which since
+ * `drillable` began requiring a `drill_dim` would have produced a hydrated spec
+ * the renderer rejects: the model would have been able to make its own answer
+ * un-renderable. A field the contract cannot honour is worse than no field.
  */
 const draftCartesian = {
   ...widgetBase,
@@ -239,7 +362,6 @@ const draftCartesian = {
   y: z.string().min(1),
   /** Names the query result the orchestrator will attach. Never data. */
   query_ref: z.string().min(1),
-  drillable: z.boolean().optional(),
 };
 
 export const widgetDraftSchema = z.discriminatedUnion('type', [
@@ -259,7 +381,6 @@ export const widgetDraftSchema = z.discriminatedUnion('type', [
       label_field: z.string().min(1),
       value_field: z.string().min(1),
       query_ref: z.string().min(1),
-      drillable: z.boolean().optional(),
     })
     .strict(),
   z

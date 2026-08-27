@@ -26,7 +26,15 @@ import { DOMAIN_PERM, type DataDomain } from '../src/schema/catalog.js';
 
 const ALL_PERMS = ['students.read', 'fees.read', 'staff.read'];
 
-/** Plausible values, in the shape `run_predefined` would bind them. */
+/**
+ * Plausible values, in the shape `run_predefined` would bind them.
+ *
+ * `drill_quarter` is deliberately absent: it is an OPTIONAL parameter, and
+ * `run_predefined` binds an absent optional as null (run-predefined.ts). Every
+ * statement that reads it must therefore survive the guard with the value
+ * missing, which is what `bind()` below reproduces by falling through to 'x' —
+ * see the null-branch test at the end of this file for the real shape.
+ */
 const VALUES: Record<string, string> = {
   academic_year: '2026-27',
   as_of_date: '2026-08-19',
@@ -287,5 +295,70 @@ describe('the student-level list is capped by the report, not by the row cap', (
     if (report === undefined || list === undefined) throw new Error('report vanished');
     // Clamped down, never widened to the 5,000-row cap.
     expect(prepare(report, list.sql).sql).toMatch(/LIMIT 50/);
+  });
+});
+
+/**
+ * A drill level is a panel that does not exist until someone clicks it
+ * (ADR-020). It ships as vetted SQL like any other query — same guard, same
+ * caps — but a DEFAULT run of the report must not pay for it: on
+ * `fee_compile_data_set`, which carries no usable index, two unasked-for levels
+ * are two extra full scans on every dashboard open.
+ */
+describe('drill-only queries are opt-in, not part of a dashboard', () => {
+  const drillQueries = reports.flatMap((report) =>
+    report.queries
+      .filter((q) => q.drill_only === true)
+      .map((q) => [`${report.id} · ${q.key}`, report, q] as const),
+  );
+
+  it('there is at least one, or this file is asserting nothing', () => {
+    expect(drillQueries.length).toBeGreaterThan(0);
+  });
+
+  it.each(drillQueries)('%s survives the guard with its drill filter unbound', (_label, report, q) => {
+    /**
+     * Bound as NULL, which is what an un-clicked drill parameter really is —
+     * not the placeholder string `bind()` supplies. A statement written as
+     * `:p IS NULL OR expr = :p` has to hold in both branches, and only this
+     * shape exercises the one a caller can reach without clicking.
+     */
+    const declared = Object.fromEntries(
+      report.params.map((p) => [p.name, p.name.startsWith('drill_') ? null : (VALUES[p.name] ?? 'x')]),
+    );
+    expect(() =>
+      prepareSelect({
+        sql: q.sql,
+        catalog: ERP_V1,
+        tenantKey: 'stmarksmb',
+        perms: ALL_PERMS,
+        rowCap: 5000,
+        declaredParams: declared,
+      }),
+    ).not.toThrow();
+  });
+
+  it.each(drillQueries)('%s binds its drill filter rather than splicing it', (_label, _report, q) => {
+    /**
+     * The clicked value must reach the database as a parameter. A statement
+     * that had interpolated it would carry a literal here, and "a click can
+     * only narrow" would rest on nobody having made a mistake in this file.
+     */
+    if (!q.sql.includes('drill_')) return;
+    expect(q.sql).toMatch(/:drill_\w+/);
+  });
+
+  it('every report declaring a drill parameter declares it optional', () => {
+    for (const report of reports) {
+      for (const param of report.params) {
+        if (!param.name.startsWith('drill_')) continue;
+        /**
+         * Required would break the base dashboard: the same report is run with
+         * no drill context every time someone opens it, and a required drill
+         * filter would refuse that request outright.
+         */
+        expect(param.required, `${report.id}: ${param.name}`).toBe(false);
+      }
+    }
   });
 });

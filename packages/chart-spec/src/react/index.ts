@@ -17,4 +17,6 @@ export {
   DonutPanel,
   TablePanel,
   type ChartAccent,
+  type DrillHandler,
+  type DrillTarget,
 } from './widgets.js';

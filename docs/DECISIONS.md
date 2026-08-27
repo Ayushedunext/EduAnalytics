@@ -193,7 +193,7 @@
 **Alternatives considered.** AI-generated HTML/React artifacts — rejected: XSS surface, inconsistent output, unprintable, unreproducible; image generation — rejected: not interactive, not data-bound.
 **Trade-offs.** New visual ideas require a widget type added to the contract (deliberate gate); the AI is constrained to the vocabulary we define.
 **Future impact.** AI artifacts adopting drill-down is a spec-level config (`drillable` + hierarchy catalog), not a rebuild. This ADR is the seam for mobile/email surfaces.
-**Status.** Accepted.
+**Status.** Accepted. *Clarified 2026-08-27 (not amended): grouped bars are within this ADR, not an addition to the widget vocabulary it closes. `bar` gained an optional `series[{field,label}]` listing the measures drawn side by side (Fee Collection's payable/collected/pending) — the union, the `WidgetType` switch, the PDF route and the AI spec validator are unchanged, and a bar without it is byte-identically the single-`y` bar it always was. A sixth widget TYPE would still need a new ADR. Series colours are assigned by the renderer from the docs/10 §1 palette in fixed order and are never carried in a spec, so a saved report cannot pin a colour a later palette audit has to honour. In the same change the model-facing draft LOST `drillable`: docs/06 §4.4 defers AI artifacts adopting drill-down to a config-level step against the Dimension Hierarchy Catalog, so a draft that could ask for it could only produce a spec the renderer rejects.*
 
 ## ADR-016 — Dashboards and AI are separate serving paths
 
@@ -243,7 +243,7 @@
 **Alternatives considered.** Free-form drill on any column — rejected: nonsense paths, PII leaks, unbounded queries; pre-rendering all levels eagerly — rejected: N×M×K query waste (top-3 prefetch is the measured middle ground); a separate "drill report" type — rejected: it's a property of a report, and clones must inherit it.
 **Trade-offs.** Max 3 levels is a hard product cap; catalog maintenance is an ongoing data task (assumption A8).
 **Future impact.** AI artifacts adopt drilling via the spec `drillable` flag against the same catalog (post-GA config step).
-**Status.** Accepted.
+**Status.** Accepted. *First implementation 2026-08-27 (Fee Collection), which settled three things this ADR left open and one it got slightly wrong. (1) The Dimension Hierarchy Catalog is `DRILL_PATHS` in services/dashboards.ts and the drill request is validated against it — a dimension no level declares is refused, never turned into a GROUP BY. (2) A clicked SCHOOL is a scope narrowing, not a bound parameter: it goes through the same token intersection every request makes and never reaches the SQL, so "school as L1 for multi-school" costs no new enforcement. Non-school dimensions bind as this ADR says. (3) The fee path reads school→quarter→class rather than the month→class→fee_type sketched above, because the demand ledger buckets by the period money was owed FOR and a school reads that in academic quarters — same shape, one bucket coarser; a `drill_only` flag keeps those levels out of a default dashboard run so an unclicked drill costs no scan. Serving is replica-with-cache: the Rollup Store's class and fee_type dims (ADR-010) are still not built, which docs/06 §6 already anticipated as the interim.*
 
 ## ADR-021 — PDF rendering server-side from the persisted spec
 

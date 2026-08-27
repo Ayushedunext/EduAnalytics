@@ -571,10 +571,38 @@ body {
   }
 }
 
-.specPanelHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.specPanelHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .specPanelTitle { font-size: 14.5px; color: var(--color-text-primary); font-weight: 600; letter-spacing: -0.005em; }
 .specPanelBadge { font-size: 10.5px; color: var(--color-text-muted); font-weight: 600; white-space: nowrap; }
 .specPanelActions { display: flex; align-items: center; flex-shrink: 0; }
+
+/* ---------- drill-down (ADR-020, docs/06 §4.4) ---------- */
+
+/* The hover hint under a drillable chart. Muted and small: it explains an
+   affordance, it is not a finding, so it must never compete with the numbers
+   above it for attention. */
+.specDrillHint {
+  margin: 8px 0 0; font-size: 11.5px; color: var(--color-text-muted); line-height: 1.4;
+}
+
+/* Breadcrumb + Back + Reset, rendered into `.specPanelActions` by the page
+   (DashboardPage.tsx) rather than by the renderer -- drill NAVIGATION is page
+   state, not part of the spec (ADR-015). */
+.drillTrail { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 100%; font-size: 11.5px; }
+.drillLevel {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--color-primary); background: var(--color-primary-soft);
+  border-radius: var(--radius-pill); padding: 2px 8px; white-space: nowrap;
+}
+.drillCrumb {
+  background: transparent; border: none; padding: 0; font-family: var(--font-sans);
+  font-size: 11.5px; color: var(--color-primary); font-weight: 600; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.drillCrumb:disabled { color: var(--color-text-secondary); cursor: default; text-decoration: none; }
+.drillCrumbSep { color: var(--color-text-muted); }
+.drillTrail .chipbtn { padding: 3px 9px; font-size: 11px; }
+.drillBusy { color: var(--color-text-muted); }
 
 /* ---------- per-widget clone (docs/06 §3) ---------- */
 
@@ -977,6 +1005,15 @@ body {
 .logicSqlHeading { font-size: 12px; font-weight: 700; color: var(--color-text-primary); margin: 16px 0 8px; }
 .logicQuery { margin-bottom: 12px; }
 .logicQueryTitle { font-size: 11.5px; color: var(--color-text-muted); margin-bottom: 4px; }
+/* docs/06 §4.4: a drill report shows every level's SQL with the active one
+   highlighted -- a reader looking at a class breakdown must be able to tell
+   which of the three statements produced the numbers in front of them. */
+.logicQuery--active { border-left: 2px solid var(--color-primary); padding-left: 10px; margin-left: -12px; }
+.logicQueryFlag {
+  margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--color-primary); background: var(--color-primary-soft);
+  border-radius: var(--radius-pill); padding: 1px 7px;
+}
 .logicSql {
   background: var(--color-ink); color: #cfe9ec; border-radius: var(--radius-sm); padding: 12px 14px;
   font-size: 11.5px; line-height: 1.6; overflow-x: auto; white-space: pre-wrap; word-break: break-word;

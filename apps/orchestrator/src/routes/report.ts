@@ -19,9 +19,11 @@
  */
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { z } from 'zod';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
 import { buildDashboard, isDashboardId } from '../services/dashboards.js';
+import { buildDrill } from '../services/drill.js';
 import { renderReportPdf } from '../services/pdf.js';
 import { orgName, schoolNames } from '../db/registry.js';
 import { auditSink } from '../db/audit.js';
@@ -156,6 +158,99 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
   })().catch(next);
 });
 
+
+/**
+ * POST /api/report/:id/drill — one level of a drill path (ADR-020).
+ *
+ * A POST, deliberately, where the report itself is a GET. ADR-029 clause 3
+ * makes GET side-effect-free by contract and fronts every mutating request with
+ * a CSRF token; a drill carries a context in a body and is audited as its own
+ * event (docs/08 §7: "who viewed which student-level slice is answerable"), so
+ * it takes the token like every other POST. That the click is a read is not the
+ * point — the record it writes is why it is not a link.
+ *
+ * The filters travel in the QUERY STRING beside the drill body, so
+ * `parseReportRequest` validates them once for the report view, the PDF and
+ * this. A drilled level that parsed its own academic year would be a second
+ * door into the same data with its own bugs.
+ */
+const drillBodySchema = z
+  .object({
+    widget_id: z.string().min(1).max(64),
+    level: z.number().int(),
+    /**
+     * The stack of clicked pairs. Capped at the ADR's three levels here as well
+     * as in `resolveDrill`, so an oversized body is refused at the boundary
+     * rather than after a catalog lookup (CODING_GUIDELINES §3).
+     *
+     * `label` is display text and is length-capped for the same reason every
+     * other free string on this boundary is: it is echoed back into a chart
+     * title, and an unbounded one would be a way to put a page of text into a
+     * cached spec.
+     */
+    context: z
+      .array(
+        z
+          .object({
+            dim: z.string().min(1).max(64),
+            value: z.string().min(1).max(128),
+            label: z.string().min(1).max(128),
+          })
+          .strict(),
+      )
+      .max(3),
+  })
+  .strict();
+
+reportRouter.post('/api/report/:id/drill', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const { session, reportId, academicYear, asOfDate, schoolIds } = await parseReportRequest(req);
+
+    const body = drillBodySchema.safeParse(req.body);
+    if (!body.success) {
+      throw new PlatformError({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'That drill request could not be read.',
+        diagnostics: { issues: body.error.issues.map((i) => i.path.join('.')) },
+        correlationId: req.correlationId,
+      });
+    }
+
+    const drill = await buildDrill({
+      session,
+      schoolIds,
+      reportId,
+      widgetId: body.data.widget_id,
+      level: body.data.level,
+      context: body.data.context,
+      academicYear,
+      asOfDate,
+      correlationId: req.correlationId,
+    });
+
+    /**
+     * [MANDATORY] docs/08 §7 / CODING_GUIDELINES §13: "Drill click — level +
+     * drill context". Written AFTER the level was produced, and with the
+     * NARROWED school set the level actually read rather than the set the
+     * request arrived with — the trail has to answer "which slice did this
+     * person see?", and a click into one school recorded against all three
+     * would answer it wrongly.
+     */
+    await auditSink.write({
+      kind: 'drill.clicked',
+      at: new Date().toISOString(),
+      actor_sub: session.sub,
+      org_id: session.org_id,
+      correlation_id: req.correlationId,
+      report_id: reportId,
+      school_ids: drill.school_ids,
+      level: drill.level,
+      context: drill.context.map((step) => ({ dim: step.dim, value: step.value })),
+    });
+
+    res.json(drill);
+  })().catch(next);
+});
 
 /**
  * GET /api/report/:id/export.pdf — the official document (ADR-021, docs/06 §5).

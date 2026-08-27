@@ -24,7 +24,7 @@
 
 import type { ReactElement, ReactNode } from 'react';
 import { chartSpecSchema, type ChartSpec, type Widget } from '../spec.js';
-import { WidgetView } from './widgets.js';
+import { WidgetView, type DrillTarget } from './widgets.js';
 
 export interface ChartSpecViewProps {
   /** Unknown on purpose — see the validation note above. */
@@ -39,9 +39,24 @@ export interface ChartSpecViewProps {
    * interactive controls.
    */
   readonly renderWidgetActions?: (widget: Widget) => ReactNode;
+  /**
+   * A reader clicked a value on a `drillable` widget (ADR-020, docs/06 §4.4).
+   *
+   * The widget travels with the target because the caller has to know WHICH
+   * panel to swap: a report may hold several drillable charts, and a handler
+   * that only received `{dim, value}` would have to infer the panel from the
+   * dim — which stops working the moment two charts drill on the same
+   * dimension. Omitted (the PDF route) means every chart renders inert.
+   */
+  readonly onDrill?: (widget: Widget, target: DrillTarget) => void;
 }
 
-export function ChartSpecView({ spec, header, renderWidgetActions }: ChartSpecViewProps): ReactElement {
+export function ChartSpecView({
+  spec,
+  header,
+  renderWidgetActions,
+  onDrill,
+}: ChartSpecViewProps): ReactElement {
   const parsed = chartSpecSchema.safeParse(spec);
 
   if (!parsed.success) {
@@ -78,7 +93,14 @@ export function ChartSpecView({ spec, header, renderWidgetActions }: ChartSpecVi
 
       <div className="specPanels">
         {panels.map((widget) => (
-          <WidgetView key={widget.id} widget={widget} actions={renderWidgetActions?.(widget)} />
+          <WidgetView
+            key={widget.id}
+            widget={widget}
+            actions={renderWidgetActions?.(widget)}
+            onDrill={
+              onDrill === undefined ? undefined : (target) => { onDrill(widget, target); }
+            }
+          />
         ))}
       </div>
     </div>

@@ -376,7 +376,19 @@ async function runTemplateMode(args: {
   };
 }
 
-/** bar<->line only (docs above): both share x/y/data/drillable, so the swap is exhaustive and safe. Anything else is returned unchanged. */
+/**
+ * bar<->line only (docs above): both share every cartesian field, so the swap is
+ * exhaustive and safe. Anything else is returned unchanged.
+ *
+ * The drill fields travel TOGETHER. `drillable` without `drill_dim` is an
+ * invalid widget (spec.ts, `checkWidgetInvariants`), so carrying one across the
+ * swap and dropping the other would turn a chart-type override into an
+ * unrenderable report. A grouped bar's `series` is deliberately NOT carried:
+ * `line.series` is a field name that splits one measure into several lines, and
+ * `bar.series` is a list of measures drawn side by side — the same word for two
+ * different things, and copying one into the other would produce a line chart
+ * split on a column that does not exist.
+ */
 function applyChartOverride(widget: Widget, overrides: Record<string, 'bar' | 'line'> | undefined): Widget {
   const target = overrides?.[widget.id];
   if (target === undefined || (widget.type !== 'bar' && widget.type !== 'line')) return widget;
@@ -389,6 +401,10 @@ function applyChartOverride(widget: Widget, overrides: Record<string, 'bar' | 'l
     data: widget.data,
     ...(widget.drillable === undefined ? {} : { drillable: widget.drillable }),
     ...(widget.drill_context === undefined ? {} : { drill_context: widget.drill_context }),
+    ...(widget.drill_dim === undefined ? {} : { drill_dim: widget.drill_dim }),
+    ...(widget.drill_value_field === undefined
+      ? {}
+      : { drill_value_field: widget.drill_value_field }),
   };
   return target === 'bar' ? { ...shared, type: 'bar' } : { ...shared, type: 'line' };
 }

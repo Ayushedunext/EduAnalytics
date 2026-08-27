@@ -288,6 +288,119 @@ export const WIDGET_BUCKET_OPTIONS: Partial<Record<DashboardId, Readonly<Record<
   },
 };
 
+/**
+ * The Dimension Hierarchy Catalog ADR-020 requires — the ONLY drill paths that
+ * exist.
+ *
+ * -- Why a table and not a per-report branch ---------------------------------
+ * ADR-020 rejects free-form drill on any column ("nonsense paths, PII leaks,
+ * unbounded queries"). That is only enforceable if there is one place that
+ * enumerates what may be drilled into: the route validates a click against this
+ * table, so a request naming a dimension no level declares is refused rather
+ * than turned into a GROUP BY. A click can pick a level; it cannot invent one.
+ *
+ * -- What a level is ----------------------------------------------------------
+ * `dim` is the dimension a click at the PREVIOUS level pushed to get here, and
+ * the value it pushed is bound as a parameter (`param`) or narrows the school
+ * set (`kind: 'scope'`) — never concatenated. `query` names one of the report's
+ * own pre-vetted statements; level 1 has none because it re-groups a result set
+ * the base dashboard already fetched.
+ *
+ * Three levels maximum, by ADR-020 and by `drillContextSchema.max(3)`. Levels
+ * 2-3 are optional in the ADR (a 2-level drill is valid); this path uses all
+ * three.
+ */
+export interface DrillLevel {
+  /** The dimension a click at this level pushes onto the stack. Absent at the leaf. */
+  readonly drill_dim?: string;
+  /** Field in the level's rows carrying the value to push, when it is not the axis label. */
+  readonly drill_value_field?: string;
+  /** Which `run_predefined` query feeds this level. Absent at level 1 (see above). */
+  readonly query?: string;
+  /** The x-axis field of the level's chart. */
+  readonly x: string;
+  /** How the value pushed to REACH this level is applied. */
+  readonly narrow?:
+    | { readonly kind: 'scope' }
+    | { readonly kind: 'param'; readonly param: string; readonly type: 'number' };
+  /** Title for the chart at this level, `{context}` replaced by the breadcrumb. */
+  readonly title: string;
+  /** For the Logic panel's group-by line at this level. */
+  readonly group_by: string;
+}
+
+export interface DrillPath {
+  /** The widget a click starts from. Only this widget of the report drills. */
+  readonly widget_id: string;
+  /** The measures drawn at every level, in legend order. */
+  readonly series: readonly { readonly field: string; readonly label: string }[];
+  readonly levels: readonly [DrillLevel, ...DrillLevel[]];
+}
+
+/**
+ * Fees: school → quarter → class, which is docs/06 §4.4's curated fee path
+ * expressed against the demand ledger (the doc writes it month→class→fee_type;
+ * the demand ledger buckets by the period money was owed FOR, and a school
+ * reads that in quarters — the same shape, one bucket coarser).
+ *
+ * Level 1 costs no query at all: `by_component` is already on the page, and
+ * grouping those rows by school rather than summing them across schools answers
+ * "which school is behind?" for free. That matters here more than it would
+ * elsewhere — the fee tables carry no usable index, so each avoided scan is
+ * seconds (apps/mcp-server/src/reports/catalog.ts).
+ */
+export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
+  'fee-collection': {
+    widget_id: 'bar-school',
+    series: [
+      { field: 'payable', label: 'Fee payable' },
+      { field: 'collected', label: 'Fee collected' },
+      { field: 'pending', label: 'Fee pending' },
+    ],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        /**
+         * The axis reads a school's NAME and the click pushes its id. Binding
+         * the visible label would make the drill depend on names being unique
+         * and never edited in the ERP — neither of which the registry promises.
+         */
+        drill_value_field: 'school_id',
+        title: 'Demand, collection and pending by school',
+        group_by: 'school',
+      },
+      {
+        x: 'quarter',
+        drill_dim: 'quarter',
+        drill_value_field: 'seq',
+        query: 'demand_by_quarter',
+        /**
+         * A school is not a filter value: narrowing to one is a SCOPE
+         * narrowing, so it goes through the same intersect-with-the-token check
+         * every other request makes (ADR-007 layer 1, then again at the MCP
+         * layer). The school id never reaches the SQL.
+         */
+        narrow: { kind: 'scope' },
+        title: 'Demand, collection and pending by quarter · {context}',
+        group_by: 'academic quarter',
+      },
+      {
+        x: 'classname',
+        query: 'demand_by_class',
+        narrow: { kind: 'param', param: 'drill_quarter', type: 'number' },
+        title: 'Demand, collection and pending by class · {context}',
+        group_by: 'class',
+        /** The leaf: no `drill_dim`, so the chart at this level is not clickable. */
+      },
+    ],
+  },
+};
+
+export function drillPathFor(reportId: DashboardId): DrillPath | undefined {
+  return DRILL_PATHS[reportId];
+}
+
 /** Everything a builder is allowed to know about the request it is answering. */
 export interface BuildContext {
   readonly year: string;
@@ -609,8 +722,17 @@ function buildEnrollment(merged: Merged, { year }: BuildContext): DashboardBuild
   return { widgets, groupBy: ['class', 'section', 'gender', 'category'], notes: [] };
 }
 
-function buildFeeCollection(merged: Merged, { year }: BuildContext): DashboardBuild {
+function buildFeeCollection(merged: Merged, { year, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
+  /**
+   * Non-null by construction: the entry exists in `DRILL_PATHS` above and
+   * test/drill-path.test.ts asserts that every path names a widget its builder
+   * actually pushes. Read from the table rather than repeated here so the
+   * chart's titles, series labels and drill dimensions have ONE definition --
+   * the level the route serves after a click and the level rendered before it
+   * must not be able to disagree about what the chart is.
+   */
+  const path = DRILL_PATHS['fee-collection'] as DrillPath;
 
   const byMonth = merged.sumBy('by_month', 'fee_month', ['collected'], 'mo');
   const byClass = merged.sumBy('by_class', 'classname', ['collected'], 'seq');
@@ -653,6 +775,48 @@ function buildFeeCollection(merged: Merged, { year }: BuildContext): DashboardBu
         tone: 'neutral',
       },
     );
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — demand, collection and pending
+   * side by side, one group of bars per school.
+   *
+   * Built from the SAME `by_component` rows the KPI tiles above are summed
+   * from, grouped by school instead of across schools, so it costs no extra
+   * query on a table where one scan is seconds. The three measures are the
+   * demand ledger's own columns and tie exactly: pending is what the ledger
+   * carries as `balance_amount`, not payable minus collected computed here,
+   * because a school that has over-received against a head would otherwise show
+   * a negative bar that the ledger itself does not report.
+   *
+   * Drillable even with ONE school in scope. A single group of three bars is a
+   * legitimate reading of a single-school report — and it is the entry point to
+   * the quarter and class levels, which every school wants regardless of how
+   * many schools the reader can see.
+   */
+  const perSchool = merged.sumPerSchool('by_component', ['payable', 'paid', 'balance']);
+  if (perSchool.length > 0) {
+    const named = new Map(scope.map((s) => [s.school_id, s.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'payable',
+      series: [...path.series],
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        /** Falls back to the id: an unnamed bar is still a bar someone can act on. */
+        school_name: named.get(entry.school_id) ?? entry.school_id,
+        payable: entry.totals['payable'] ?? 0,
+        collected: entry.totals['paid'] ?? 0,
+        pending: entry.totals['balance'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
   }
 
   if (byMonth.length > 0) {
@@ -719,7 +883,7 @@ function buildFeeCollection(merged: Merged, { year }: BuildContext): DashboardBu
 
   return {
     widgets,
-    groupBy: ['month', 'class', 'payment mode', 'fee head'],
+    groupBy: ['school', 'month', 'class', 'payment mode', 'fee head'],
     /**
      * Stated because the two figures will not tie exactly, and a reader who
      * spots that without being told will reasonably distrust both. Demand and
@@ -727,7 +891,9 @@ function buildFeeCollection(merged: Merged, { year }: BuildContext): DashboardBu
      * different period from the demand it settles.
      */
     notes: [
-      'The KPI tiles come from the fee demand ledger (what was owed and settled). The month, class and payment-mode charts come from the receipt ledger (what was banked, and when). The two will not tie exactly.',
+      'The KPI tiles and the payable/collected/pending chart come from the fee demand ledger (what was owed and settled). The month, class and payment-mode charts come from the receipt ledger (what was banked, and when). The two will not tie exactly.',
+      'Fee pending is the demand ledger’s own outstanding balance, not payable minus collected — the two differ wherever a head has been over-received.',
+      'Quarters are ACADEMIC quarters measured from the period a fee was demanded for: Q1 is April–June, Q4 is January–March. Demand with no period recorded is left out of the quarter view, so the four quarters can add up to less than the school total — no such rows exist in any school today.',
     ],
   };
 }
@@ -1877,6 +2043,39 @@ export class Merged {
       rows.sort((a, b) => num(b[measure]) - num(a[measure]));
     }
     return rows;
+  }
+
+  /**
+   * The same numeric fields summed WITHIN each school instead of across them.
+   *
+   * `sumBy` answers "what is the total?"; this answers "which school?", which
+   * is drill level 1 (`DRILL_PATHS`). Deliberately built from a result set the
+   * base dashboard already fetched rather than from a per-school query: the fee
+   * tables have no usable index, so the school breakdown is free this way and a
+   * scan otherwise.
+   *
+   * Schools that FAILED are simply absent — never a zero row. A school that
+   * could not be reached and a school that collected nothing are the same
+   * height on a bar chart and opposite facts (§10); the absent school is
+   * already named in `schoolFailures()`, which the page renders as a notice.
+   */
+  sumPerSchool(key: string, sumFields: string[]): { school_id: string; totals: Record<string, number> }[] {
+    const out: { school_id: string; totals: Record<string, number> }[] = [];
+    for (const school of this.result.schools) {
+      if (school.status !== 'ok') continue;
+      let seen = false;
+      const totals: Record<string, number> = {};
+      for (const f of sumFields) totals[f] = 0;
+      for (const query of school.queries ?? []) {
+        if (query.key !== key || query.status !== 'ok') continue;
+        for (const row of query.rows ?? []) {
+          seen = true;
+          for (const f of sumFields) totals[f] = (totals[f] ?? 0) + num(row[f]);
+        }
+      }
+      if (seen) out.push({ school_id: school.school_id, totals });
+    }
+    return out;
   }
 
   /**

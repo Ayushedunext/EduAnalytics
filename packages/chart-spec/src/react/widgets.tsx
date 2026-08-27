@@ -36,6 +36,7 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  Legend,
   Line,
   Pie,
   PieChart,
@@ -47,6 +48,7 @@ import {
 import { CHART_MOTION_MS, useChartMotion } from './ChartMotion.js';
 import { widgetSchema } from '../spec.js';
 import type {
+  BarSeries,
   BarWidget,
   DonutWidget,
   KpiWidget,
@@ -354,19 +356,134 @@ function maxValueIndex(rows: readonly Record<string, unknown>[], field: string):
   return best >= 0 ? best : null;
 }
 
+/**
+ * One drill click, as ADR-020 defines it: a `{dim, value}` pair pushed onto the
+ * drill stack, plus the text the breadcrumb should show for it.
+ *
+ * `label` is separate from `value` because they are not always the same string
+ * — a school drills on its id and reads as its name — and a breadcrumb built
+ * from the id would name a slice nobody recognises. The renderer reports the
+ * click; deciding what to fetch next belongs to the caller, which owns the
+ * drill path (services/dashboards.ts `DRILL_PATHS`).
+ */
+export interface DrillTarget {
+  readonly dim: string;
+  readonly value: string;
+  readonly label: string;
+}
+
+export type DrillHandler = (target: DrillTarget) => void;
+
+/**
+ * The Recharts click state, narrowed to the one field this file reads.
+ * Recharts' own `CategoricalChartState` is not exported from its public types,
+ * and the alternative — `any` on a click handler — is exactly the shape §3
+ * refuses.
+ */
+interface ChartClickState {
+  /**
+   * Recharts types this as `number | TooltipIndex | undefined`, where
+   * `TooltipIndex` widens to a string or null. Accepted as it really is and
+   * narrowed in `drillTargetAt`, rather than declared as a number here and
+   * cast — a cast would move the same uncertainty somewhere it cannot be
+   * checked.
+   */
+  readonly activeTooltipIndex?: number | string | null | undefined;
+}
+
+/**
+ * Turn a click on category N into the pair the caller pushes.
+ *
+ * Reads the ROW, not the label Recharts hands back: `drill_value_field` lets a
+ * chart display one string and narrow on another (a school's name versus its
+ * id), and a drill built from the visible label would silently depend on those
+ * being the same. Returns null when the widget is not drillable, when the index
+ * is out of range, or when the row has no usable value — a click that cannot be
+ * turned into a bound parameter must do nothing rather than something
+ * approximate.
+ */
+function drillTargetAt(
+  widget: {
+    data: readonly Record<string, unknown>[];
+    x: string;
+    drillable?: boolean | undefined;
+    drill_dim?: string | undefined;
+    drill_value_field?: string | undefined;
+  },
+  index: number | string | null | undefined,
+): DrillTarget | null {
+  if (widget.drillable !== true || widget.drill_dim === undefined) return null;
+  const at = typeof index === 'string' ? Number(index) : index;
+  if (at === null || at === undefined || !Number.isInteger(at)) return null;
+  if (at < 0 || at >= widget.data.length) return null;
+  const row = widget.data[at];
+  if (row === undefined) return null;
+  const label = String(row[widget.x] ?? '');
+  const raw = row[widget.drill_value_field ?? widget.x];
+  if (raw === null || raw === undefined) return null;
+  const value = String(raw);
+  if (value === '') return null;
+  return { dim: widget.drill_dim, value, label: label === '' ? value : label };
+}
+
+/**
+ * The measures a bar chart draws, as a list, whether or not it is grouped.
+ *
+ * A single-series bar is the one-element case rather than a separate concept,
+ * so the axis-sizing arithmetic and the click handling below have ONE shape to
+ * reason about. What stays separate is the PAINT: a lone series keeps its
+ * gradient and tallest-bar highlight (devices that mean "compare within this
+ * chart"), which would read as noise once three colours are already carrying
+ * identity.
+ */
+function seriesOf(widget: BarWidget): readonly BarSeries[] {
+  return widget.series ?? [{ field: widget.y, label: widget.title ?? widget.y }];
+}
+
 export function BarPanel({
   widget,
   compact,
   accent,
   actions,
+  onDrill,
 }: {
   widget: BarWidget;
   /** Card-sized: shorter than the full dashboard panel, real axes (Home preview cards). */
   compact?: boolean | undefined;
-  /** Single-series colour, Home preview cards only -- see `ChartAccent`. */
+  /** Single-series colour, Home preview cards only -- see `ChartAccent`. Ignored by a grouped bar, whose colours carry series identity rather than variety. */
   accent?: ChartAccent | undefined;
   actions?: ReactNode | undefined;
+  /**
+   * Called when a reader clicks a category, for a `drillable` widget (ADR-020).
+   * Absent means the chart is inert -- which is how the PDF route renders it
+   * (print.tsx passes nothing), so an export can never carry a dead affordance.
+   */
+  onDrill?: DrillHandler | undefined;
 }): ReactElement {
+  const series = seriesOf(widget);
+  const grouped = widget.series !== undefined;
+  const seriesColour = ACCENT_COLOUR[accent ?? 'primary'];
+  /**
+   * A depth gradient built from ONE hue at two opacities, never a second
+   * colour -- so it stays inside docs/10 section 1's "teal-family series" rule
+   * and costs nothing on the CVD audit (opacity, unlike hue, isn't a channel a
+   * colour-vision deficiency affects). Solid at the value end, softer toward
+   * the baseline, so the gradient points at the number that matters.
+   *
+   * Single-series only. With three colours already spending the reader's
+   * attention on identity, a fourth signal drawn in opacity is decoration.
+   */
+  const gradId = useGradientId('bar');
+  // Placed beside the existing hook so hook ORDER is unchanged from before.
+  const animation = useAnimation();
+
+  /**
+   * Both hooks run before the empty check, unconditionally. React requires the
+   * same hooks in the same order on every render, and an early `return` above
+   * a `useId()` would break that the first time a widget went from having rows
+   * to having none -- a filter change, or a drill into an empty slice, which is
+   * exactly when this chart is most likely to be re-rendered.
+   */
   if (widget.data.length === 0) {
     return (
       <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
@@ -379,39 +496,136 @@ export function BarPanel({
   }
 
   const axis = categoryAxis(widget.data, widget.x);
-  const highlightIndex = maxValueIndex(widget.data, widget.y);
-  const seriesColor = ACCENT_COLOUR[accent ?? 'primary'];
+  const highlightIndex = grouped ? null : maxValueIndex(widget.data, widget.y);
+
+  /** Live only when the spec says drillable AND the caller wants the clicks. */
+  const drillable =
+    widget.drillable === true && widget.drill_dim !== undefined && onDrill !== undefined;
   /**
-   * A depth gradient built from ONE hue at two opacities, never a second
-   * colour — so it stays inside docs/10 §1's "teal-family series" rule and
-   * costs nothing on the CVD audit (opacity, unlike hue, isn't a channel a
-   * colour-vision deficiency affects). Solid at the value end, softer toward
-   * the baseline, so the gradient points at the number that matters.
+   * Cursor and click sit on the CHART, not on the panel: the title and the
+   * "Clone" button beside it are not drill targets, and a pointer cursor over
+   * the whole card would promise a click that does nothing there.
    */
-  const gradId = useGradientId('bar');
-  // Placed beside the existing hook so hook ORDER is unchanged from before.
-  const animation = useAnimation();
+  const chartProps = drillable
+    ? {
+        onClick: (state: ChartClickState): void => {
+          const target = drillTargetAt(widget, state.activeTooltipIndex);
+          if (target !== null) onDrill?.(target);
+        },
+        style: { cursor: 'pointer' } as CSSProperties,
+      }
+    : {};
+
+  /**
+   * The bars themselves. Grouped bars are flat fills in the fixed docs/10
+   * section 1 order (`SERIES`) -- colour carries series identity, so it must
+   * not also depend on which series happens to be tallest, and removing one
+   * series must never repaint the survivors.
+   *
+   * `barGap` is the 2px surface gap that keeps adjacent fills readable as two
+   * marks rather than one wide one; the category gap Recharts defaults to is
+   * already wider, which is what makes the grouping legible without a box
+   * around it.
+   */
+  const bars = grouped
+    ? series.map((entry, index) => (
+        <Bar
+          key={entry.field}
+          dataKey={entry.field}
+          name={entry.label}
+          fill={SERIES[index] ?? SERIES_OTHER}
+          radius={axis.horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
+          maxBarSize={axis.horizontal ? 11 : 26}
+          {...animation}
+          activeBar={{ stroke: INK, strokeWidth: 1 }}
+        />
+      ))
+    : [
+        <Bar
+          key={widget.y}
+          dataKey={widget.y}
+          fill={`url(#${gradId})`}
+          radius={axis.horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
+          maxBarSize={axis.horizontal ? 14 : 38}
+          {...animation}
+          activeBar={{ fill: seriesColour, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
+        >
+          {/* The tallest bar reads as solid against the others' gradient --
+              same hue, no fifth colour, just more of it. */}
+          {highlightIndex !== null &&
+            widget.data.map((_, index) => (
+              <Cell key={index} fill={index === highlightIndex ? seriesColour : `url(#${gradId})`} />
+            ))}
+        </Bar>,
+      ];
+
+  const gradientDefs = grouped ? null : (
+    <defs>
+      <linearGradient
+        id={gradId}
+        x1="0"
+        y1="0"
+        x2={axis.horizontal ? '1' : '0'}
+        y2={axis.horizontal ? '0' : '1'}
+      >
+        <stop offset="0%" stopColor={seriesColour} stopOpacity={axis.horizontal ? 0.62 : 1} />
+        <stop offset="100%" stopColor={seriesColour} stopOpacity={axis.horizontal ? 1 : 0.62} />
+      </linearGradient>
+    </defs>
+  );
+
+  /**
+   * [MANDATORY for two or more series] identity is never colour alone, so a
+   * grouped bar always carries a legend. A single-series bar never does: its
+   * title already names the one thing it draws, and a legend box repeating it
+   * would be chrome standing in for information.
+   */
+  const legend = grouped ? (
+    <Legend
+      verticalAlign="top"
+      align="left"
+      height={26}
+      iconType="circle"
+      iconSize={8}
+      wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 4 }}
+    />
+  ) : null;
+
+  /**
+   * docs/06 section 4.4 asks for a hover hint naming what a click does. Dropped
+   * at card size, where there is no room for a line of prose under the chart,
+   * and absent from the PDF for free -- the export passes no `onDrill`.
+   */
+  const hint =
+    drillable && compact !== true ? (
+      <p className="specDrillHint">Click a bar to see this {widget.drill_dim} broken down.</p>
+    ) : null;
 
   if (axis.horizontal) {
     /**
      * The panel grows with the data instead of squeezing rows to a fixed 260px:
-     * 26px a row keeps a 12px bar plus air, and the 560px ceiling stops a
+     * 26px a row keeps a 12px bar plus air, and the ceiling stops a
      * pathological category list from producing a page-long chart. Compact
-     * uses the same idea at a tighter budget (22px/row, 220-340px) -- Home's
-     * preview cards are wide (3-up, tokens.css `.pgallery`) but still a
-     * preview, not a full report.
+     * uses the same idea at a tighter budget -- Home's preview cards are wide
+     * (3-up, tokens.css `.pgallery`) but still a preview, not a full report.
+     *
+     * A grouped band holds one bar PER SERIES, so its budget is per-bar rather
+     * than per-category: three measures across nine classes is 27 bars, and a
+     * band sized for one would draw them on top of each other.
      */
+    const perRow = grouped ? 13 * series.length + 10 : 26;
+    const compactPerRow = grouped ? 11 * series.length + 8 : 22;
     const height =
       compact === true
-        ? clamp(64 + axis.count * 22, 220, 340)
-        : clamp(44 + axis.count * 26, 180, 560);
+        ? clamp(64 + axis.count * compactPerRow, 220, 340)
+        : clamp(44 + axis.count * perRow + (grouped ? 26 : 0), 180, 640);
     /**
      * The axis takes the width its labels need, up to a ceiling that leaves the
      * bars the larger half of the panel. `- 14` is the tick line and its gap.
      *
      * Both numbers come from the same budget on purpose: Recharts WRAPS a
      * category tick that does not fit its band, and a wrapped label collides
-     * with the rows either side of it — worse than the ellipsis it was avoiding.
+     * with the rows either side of it -- worse than the ellipsis it was avoiding.
      * So the ellipsis is applied at exactly the width the axis was given.
      */
     const labelWidth = clamp(axis.longest * CHAR_PX + 14, 104, 168);
@@ -424,17 +638,14 @@ export function BarPanel({
             data={[...widget.data]}
             layout="vertical"
             margin={{ top: 4, right: 16, bottom: 4, left: 0 }}
+            barGap={2}
+            {...chartProps}
           >
-            {/* Grid lines run along the value axis only — the category axis has
+            {/* Grid lines run along the value axis only -- the category axis has
                 no scale to read against. */}
             <CartesianGrid stroke={GRID} horizontal={false} />
-            <defs>
-              <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor={seriesColor} stopOpacity={0.62} />
-                <stop offset="100%" stopColor={seriesColor} stopOpacity={1} />
-              </linearGradient>
-            </defs>
-            {/* Both axes render at every size now — Home's preview cards are wide
+            {gradientDefs}
+            {/* Both axes render at every size now -- Home's preview cards are wide
                 enough (3-up, tokens.css `.pgallery`) for the same truncate-with-
                 tooltip treatment the full dashboard uses (`CategoryTick`,
                 `axisNumber` below) to stay legible; a glance no longer has to
@@ -450,38 +661,29 @@ export function BarPanel({
             {/* The tooltip carries the untruncated name: the axis may abbreviate,
                 the reader can still find out what a bar is. */}
             <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
-            <Bar
-              dataKey={widget.y}
-              fill={`url(#${gradId})`}
-              radius={[0, 3, 3, 0]}
-              maxBarSize={14}
-              {...animation}
-              activeBar={{ fill: seriesColor, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
-            >
-              {/* The tallest bar reads as solid against the others' gradient —
-                  same hue, no fifth colour, just more of it. */}
-              {highlightIndex !== null &&
-                widget.data.map((_, index) => (
-                  <Cell key={index} fill={index === highlightIndex ? seriesColor : `url(#${gradId})`} />
-                ))}
-            </Bar>
+            {legend}
+            {bars}
           </BarChart>
         </ChartFrame>
+        {hint}
       </Panel>
     );
   }
 
   return (
     <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
-      <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 260}>
-        <BarChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+      <ChartFrame
+        compact={compact}
+        naturalHeight={compact === true ? 240 : grouped ? 300 : 260}
+      >
+        <BarChart
+          data={[...widget.data]}
+          margin={{ top: 8, right: 8, bottom: 4, left: 0 }}
+          barGap={2}
+          {...chartProps}
+        >
           <CartesianGrid stroke={GRID} vertical={false} />
-          <defs>
-            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={seriesColor} stopOpacity={1} />
-              <stop offset="100%" stopColor={seriesColor} stopOpacity={0.62} />
-            </linearGradient>
-          </defs>
+          {gradientDefs}
           <XAxis
             dataKey={widget.x}
             tick={tick}
@@ -493,21 +695,11 @@ export function BarPanel({
           />
           <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
           <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
-          <Bar
-            dataKey={widget.y}
-            fill={`url(#${gradId})`}
-            radius={[3, 3, 0, 0]}
-            maxBarSize={38}
-            {...animation}
-            activeBar={{ fill: seriesColor, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
-          >
-            {highlightIndex !== null &&
-              widget.data.map((_, index) => (
-                <Cell key={index} fill={index === highlightIndex ? seriesColor : `url(#${gradId})`} />
-              ))}
-          </Bar>
+          {legend}
+          {bars}
         </BarChart>
       </ChartFrame>
+      {hint}
     </Panel>
   );
 }
@@ -923,6 +1115,7 @@ export function WidgetView({
   compact,
   accent,
   actions,
+  onDrill,
 }: {
   widget: Widget;
   hero?: boolean | undefined;
@@ -931,12 +1124,27 @@ export function WidgetView({
   accent?: ChartAccent | undefined;
   /** Platform chrome beside the panel title — see `Panel`'s doc comment. Never offered to a KPI tile, which has no panel head to hold it. */
   actions?: ReactNode | undefined;
+  /**
+   * Drill clicks (ADR-020). Only the `bar` branch takes it today, because
+   * `bar-school` is the only drillable widget the catalog ships; the prop is
+   * declared on the dispatcher rather than plumbed report-by-report so a
+   * drillable donut is a one-line change here and nothing at the call sites.
+   */
+  onDrill?: DrillHandler | undefined;
 }): ReactElement {
   switch (widget.type) {
     case 'kpi':
       return <KpiTile widget={widget} hero={hero} />;
     case 'bar':
-      return <BarPanel widget={widget} compact={compact} accent={accent} actions={actions} />;
+      return (
+        <BarPanel
+          widget={widget}
+          compact={compact}
+          accent={accent}
+          actions={actions}
+          onDrill={onDrill}
+        />
+      );
     case 'line':
       return <LinePanel widget={widget} compact={compact} accent={accent} actions={actions} />;
     case 'donut':

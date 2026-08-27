@@ -79,6 +79,20 @@ export interface ReportQuery {
    * builder that reads the result does not know which variant ran.
    */
   readonly variants?: Readonly<Record<string, string>>;
+  /**
+   * A level of a drill path (ADR-020), not a panel of the base dashboard.
+   *
+   * `run_predefined` SKIPS these unless the caller names them in `query_keys`.
+   * Without that, opening Fee Collection would run its by-quarter and by-class
+   * drill statements — two more full scans of `fee_compile_data_set` — to build
+   * widgets nobody has asked for yet, on a table whose scans are measured in
+   * seconds (see the cost note at the top of this file). A drill level is
+   * fetched when it is clicked and not before.
+   *
+   * It is NOT an access control: a drill query is as vetted as any other and
+   * the same guard, scope and caps apply. It only says who pays for it.
+   */
+  readonly drill_only?: boolean;
 }
 
 export interface PredefinedReport {
@@ -140,6 +154,52 @@ const BUCKET: ReportParam = {
   type: 'string',
   required: false,
   description: 'Time grouping for a time-series widget: week | month | quarter | year.',
+};
+
+/**
+ * The academic quarter a demand row belongs to, as a SQL expression.
+ *
+ * Not `QUARTER(periodfromdate)`. MySQL's QUARTER is a CALENDAR quarter starting
+ * in January, and an Indian school year starts in April: a report that labelled
+ * April-June "Q2" would disagree with every fee circular the school has sent.
+ * `academicYearWindow` in the orchestrator already fixes the year at 1 April to
+ * 31 March (services/dashboards.ts) and this is the same boundary expressed for
+ * the demand ledger, so the two cannot drift.
+ *
+ * The arithmetic: shift the month so April lands on 0 (`+ 8`, mod 12), take its
+ * quarter (`/ 3`, floored), number it from 1. April→Q1, July→Q2, October→Q3,
+ * January→Q4. Written with FLOOR/MOD rather than the `DIV`/`MOD` operators
+ * because the guard's parser must read every shipped statement (test:
+ * reports-catalog.test.ts) and function calls parse where those operators do
+ * not reliably.
+ *
+ * `periodfromdate` and not `periodtodate`: a quarter here means "the period the
+ * money was demanded FOR", which is where a bursar looks for an instalment. The
+ * defaulter report asks the other question — how late is it — and uses
+ * `periodtodate` for exactly that reason.
+ */
+const ACADEMIC_QUARTER = 'FLOOR(MOD(MONTH(periodfromdate) + 8, 12) / 3) + 1';
+
+/**
+ * The quarter a drill click narrowed to (ADR-020: clicked values enter as BOUND
+ * parameters, never concatenated — a click can only narrow).
+ *
+ * Optional, and null when absent, so the one query that reads it degrades to
+ * "every quarter" rather than to `= NULL`, which matches nothing. That is safe
+ * here and would not be for `academic_year`: an unnarrowed quarter is a
+ * legitimate view of the same report, whereas an unfiltered year silently sums
+ * a decade (see ENROLLMENT_OVERVIEW).
+ *
+ * Typed `number`, so `run_predefined` refuses a string before it reaches the
+ * guard — the drill value arrives from a click in a browser, which is to say
+ * from outside.
+ */
+const DRILL_QUARTER: ReportParam = {
+  name: 'drill_quarter',
+  type: 'number',
+  required: false,
+  description:
+    'Drill context: restrict to one academic quarter, 1 (Apr-Jun) to 4 (Jan-Mar). Omitted means all quarters.',
 };
 
 /**
@@ -208,7 +268,7 @@ const FEE_COLLECTION: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'fee_collection_data_set · fee_compile_data_set',
   domain: 'fees',
-  params: [ACADEMIC_YEAR, BUCKET],
+  params: [ACADEMIC_YEAR, BUCKET, DRILL_QUARTER],
   queries: [
     /**
      * There is deliberately no separate `totals` query. It would be a second
@@ -271,6 +331,70 @@ const FEE_COLLECTION: PredefinedReport = {
         'ROUND(SUM(paid_amount)) AS paid, ROUND(SUM(balance_amount)) AS balance ' +
         'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
         'GROUP BY componentname ORDER BY payable DESC',
+    },
+    /**
+     * Drill level 2 — demand, collection and pending by academic quarter, for
+     * whichever school the reader clicked at level 1.
+     *
+     * There is no level-1 query. Level 1 groups the SAME `by_component` rows by
+     * school instead of summing them across schools, which the orchestrator
+     * already has in hand from the base dashboard (services/dashboards.ts) —
+     * so opening the report and drilling into the school breakdown costs one
+     * scan between them, not two.
+     *
+     * The school itself never appears in this SQL. Narrowing to one school is a
+     * SCOPE narrowing, handled where every other scope decision is (the launch
+     * token, checked at the orchestrator and again at `requireInScope`), so a
+     * drill click cannot reach a school the session was not already entitled
+     * to — and the model, or a browser, never supplies a tenant identifier.
+     *
+     * `periodfromdate IS NOT NULL` keeps the axis to exactly Q1..Q4. A row with
+     * no demand period has no quarter, and letting it through would draw a
+     * fifth, unlabelled bar whose click binds a quarter that matches nothing —
+     * a drill target that leads to an empty chart. The cost is that the four
+     * quarters can sum to less than the school total, which is stated on screen
+     * (services/dashboards.ts notes) rather than left for a reader to notice.
+     * Measured 2026-08-27 across the real extract: zero such rows in any of the
+     * eight schools, so this is defence, not a live discrepancy.
+     */
+    {
+      key: 'demand_by_quarter',
+      description: 'Demand, collection and pending by academic quarter, from the demand ledger',
+      drill_only: true,
+      sql:
+        `SELECT CONCAT('Q', ${ACADEMIC_QUARTER}) AS quarter, ${ACADEMIC_QUARTER} AS seq, ` +
+        'ROUND(SUM(total_payable_amount)) AS payable, ROUND(SUM(paid_amount)) AS collected, ' +
+        'ROUND(SUM(balance_amount)) AS pending ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        'AND periodfromdate IS NOT NULL ' +
+        'GROUP BY quarter, seq ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the same three measures by class, within the clicked
+     * school and quarter.
+     *
+     * `:drill_quarter IS NULL OR …` rather than two statements: the alternative
+     * is a `variants` pair that differ only in a WHERE clause, and the day one
+     * of them gained a measure the other would quietly answer a different
+     * question under the same heading. Level 3 always arrives WITH a quarter
+     * (its drill context is [school, quarter] by construction — see DRILL_PATHS
+     * in services/dashboards.ts); the null branch is what keeps the statement
+     * honest if it is ever run on its own.
+     *
+     * Ordered by `classseq`, never by `classname`: class labels sort as text,
+     * which puts X before IX.
+     */
+    {
+      key: 'demand_by_class',
+      description: 'Demand, collection and pending by class, from the demand ledger',
+      drill_only: true,
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, ' +
+        'ROUND(SUM(total_payable_amount)) AS payable, ROUND(SUM(paid_amount)) AS collected, ' +
+        'ROUND(SUM(balance_amount)) AS pending ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        `AND (:drill_quarter IS NULL OR ${ACADEMIC_QUARTER} = :drill_quarter) ` +
+        'GROUP BY classname ORDER BY seq',
     },
   ],
 };

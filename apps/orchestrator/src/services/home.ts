@@ -39,9 +39,14 @@ import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
 import { withMcp, type RunMultiResult } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
-import { cacheGet, cacheKey, cacheSet } from '../cache/result-cache.js';
+import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
 import { config } from '../config.js';
-import { buildDashboard, isDashboardId, type DashboardId } from './dashboards.js';
+import {
+  DASHBOARD_LEAD_QUERY,
+  buildDashboard,
+  isDashboardId,
+  type DashboardId,
+} from './dashboards.js';
 
 /**
  * Vetted SQL. Read-only, catalog tables only, no placeholders, no tenant filter
@@ -131,21 +136,14 @@ export interface HomeSummary {
 /**
  * One dashboard's lead CHART, for the Home overview.
  *
- * `widget` is the FIRST chart-typed widget (bar/line/donut) of that
- * dashboard's own spec, never a KPI and never a table — Home's own KPI strip
- * above already carries the numbers, so a second row of number-only tiles
- * would say nothing a preview card needs to. Every builder in
- * services/dashboards.ts pushes its headline chart before its secondary ones
- * (services/dashboards.ts, e.g. `bar-department` before `bar-stafftype`), so
- * taking the first chart widget in the spec's own order is the same
- * "never re-pick by inspecting values" rule the KPI strip already follows —
- * just applied one type over. Falls back to the lead KPI only for a dashboard
- * whose only widgets ARE KPIs for this school selection (e.g. Admissions with
- * no chartable breakdown yet); `null` only when the dashboard has no widgets
- * at all, which `buildDashboard` itself already treats as a failure below.
- * `status: 'blocked'` covers both "no permission" and "no data": either way
- * there is nothing to preview, and the reason travels so the card can say why
- * rather than rendering empty.
+ * `widget` is the chart `DASHBOARD_LEAD_QUERY` names for that dashboard
+ * (services/dashboards.ts) — a bar/line/donut, never a KPI and never a table.
+ * Home's own KPI strip above already carries the numbers, so the preview's job
+ * is to be the thing the strip cannot be: a shape.
+ *
+ * `status: 'blocked'` covers "no permission", "no data" and "could not be
+ * read": either way there is nothing to preview, and the reason travels so the
+ * card can say why rather than rendering empty.
  */
 export interface HomePreview {
   readonly id: DashboardId;
@@ -156,84 +154,105 @@ export interface HomePreview {
   readonly reason?: string;
 }
 
-export interface HomePreviews {
-  readonly previews: readonly HomePreview[];
-}
-
-/**
- * Live previews for the Home overview — one lead widget per dashboard this
- * session can actually open.
- *
- * Deliberately a SEPARATE call from `buildHomeSummary`, not folded into it: the
- * KPI strip above answers from 4 lightweight aggregate queries, and Home is the
- * one screen every user loads on every visit (docs/09 §3's dashboard-cold
- * budget is 0.5-2s). Fetching six dashboards' worth of predefined queries in
- * that same request would make the FIRST paint of Home pay for all of them.
- * Splitting the call lets the KPI strip render immediately and the preview
- * cards fill in as this resolves, with a skeleton in between (docs/10 §1,
- * "feels instant").
- *
- * No new SQL, no new cache: each dashboard is fetched through the exact same
- * `buildDashboard` the standalone report page uses, so it is the same vetted
- * statement, the same permission check, and the same Redis cache entry
- * (services/dashboards.ts) — a school's Fee Collection preview and its Fee
- * Collection dashboard are never two different numbers for the same period,
- * and after the first load of either, the other is a cache hit.
- */
-export async function buildHomePreviews(args: {
-  session: SessionClaims;
-  schoolIds: readonly string[];
-  academicYear: string;
-  asOfDate: string;
-  correlationId: string;
-}): Promise<HomePreviews> {
-  const eligible = DASHBOARDS.filter(
+/** The dashboards Home offers a preview card for, in catalog order. */
+export function previewableDashboards(): readonly (DashboardCard & { id: DashboardId })[] {
+  return DASHBOARDS.filter(
     (card): card is DashboardCard & { id: DashboardId } =>
       card.status === 'available' && isDashboardId(card.id),
   );
+}
 
-  const previews = await Promise.all(
-    eligible.map(async (card): Promise<HomePreview> => {
-      try {
-        const result = await buildDashboard({
-          session: args.session,
-          schoolIds: args.schoolIds,
-          reportId: card.id,
-          academicYear: args.academicYear,
-          asOfDate: args.asOfDate,
-          correlationId: args.correlationId,
-        });
-        const chart = result.spec.widgets.find(
-          (w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut',
-        );
-        return {
-          id: card.id,
-          title: card.title,
-          icon: card.icon,
-          widget: chart ?? result.spec.widgets[0] ?? null,
-          status: 'ok',
-        };
-      } catch (err) {
-        /**
-         * One dashboard's failure (no permission, no data, a degraded school)
-         * must not blank the other five — same partial-failure reasoning as the
-         * fan-outs above (ADR-011), one level up: here the "fan-out" is across
-         * dashboards rather than schools.
-         */
-        return {
-          id: card.id,
-          title: card.title,
-          icon: card.icon,
-          widget: null,
-          status: 'blocked',
-          reason:
-            err instanceof PlatformError ? err.message : 'This dashboard could not be loaded.',
-        };
-      }
-    }),
-  );
+/**
+ * ONE dashboard's live preview for the Home overview.
+ *
+ * -- Why one, and not all nine ------------------------------------------------
+ * This used to build every available dashboard in full and keep each one's
+ * first chart. Measured against the real extract that was 45 queries to produce
+ * 9 widgets, 6.7 s for a single school, and — because a school gets three
+ * connections (ADR-013) — the cost landed on dashboards that had not earned it:
+ * `transport-analytics` reads a 0-row table and still took 6.2 s of that, doing
+ * nothing but waiting behind the fee scans.
+ *
+ * So a preview now asks for the ONE query behind the chart it draws
+ * (`DASHBOARD_LEAD_QUERY`), and the endpoint answers for ONE dashboard, so a
+ * card appears the moment its own data lands instead of every card waiting for
+ * the slowest. Nine cheap requests, not one expensive one.
+ *
+ * -- What deliberately did NOT change -----------------------------------------
+ * Still the same `buildDashboard`, the same vetted `run_predefined` statement,
+ * the same double scope check and the same masking — a preview is a narrower
+ * REQUEST, never a shortcut past any rail. `query_keys` names one of the
+ * report's own pre-vetted queries and nothing else (docs/06 §3's per-widget
+ * clone mechanism, mcp-server/src/tools/run-predefined.ts).
+ *
+ * The one thing that does change is which cache entry it lands in: a preview
+ * has its own key (services/dashboards.ts) precisely so a one-widget answer can
+ * never be served to the full dashboard page. That costs the old behaviour
+ * where loading Home warmed the dashboards — worth it, because the previous
+ * "sharing" was only ever free when Home had already paid for all 45 queries.
+ */
+export async function buildHomePreview(args: {
+  session: SessionClaims;
+  schoolIds: readonly string[];
+  reportId: DashboardId;
+  academicYear: string;
+  asOfDate: string;
+  correlationId: string;
+}): Promise<HomePreview> {
+  const card = previewableDashboards().find((c) => c.id === args.reportId);
+  if (card === undefined) {
+    throw new PlatformError({
+      code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+      message: 'That dashboard has no preview.',
+      correlationId: args.correlationId,
+    });
+  }
 
-  return { previews };
+  try {
+    const result = await buildDashboard({
+      session: args.session,
+      schoolIds: args.schoolIds,
+      reportId: card.id,
+      academicYear: args.academicYear,
+      asOfDate: args.asOfDate,
+      correlationId: args.correlationId,
+      queryKeys: [DASHBOARD_LEAD_QUERY[card.id]],
+    });
+
+    /**
+     * The lead query produces exactly one chart widget, because every builder
+     * guards its widgets on the rows they need. Finding it by type rather than
+     * by id keeps this honest if a builder ever pushes a KPI off the same
+     * result set: the card wants the shape, and falls back to whatever single
+     * widget did come back rather than showing nothing.
+     */
+    const chart = result.spec.widgets.find(
+      (w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut',
+    );
+    return {
+      id: card.id,
+      title: card.title,
+      icon: card.icon,
+      widget: chart ?? result.spec.widgets[0] ?? null,
+      status: 'ok',
+    };
+  } catch (err) {
+    /**
+     * One dashboard's failure (no permission, no data, a degraded school) must
+     * not blank the other eight — the same partial-failure reasoning as the
+     * fan-outs above (ADR-011), one level up. Each card is now its own request,
+     * so this is what keeps a 200 with a stated reason from becoming a 500 that
+     * the SPA would render as a dead card.
+     */
+    return {
+      id: card.id,
+      title: card.title,
+      icon: card.icon,
+      widget: null,
+      status: 'blocked',
+      reason: err instanceof PlatformError ? err.message : 'This dashboard could not be loaded.',
+    };
+  }
 }
 
 /**
@@ -429,7 +448,22 @@ export async function buildHomeSummary(args: {
 
   const hit = await cacheGet<HomeSummary>(key);
   if (hit !== null) {
-    return { ...hit, spec: { ...hit.spec, meta: { ...hit.spec.meta, served_from: 'cache' } } };
+    /**
+     * Served now, rebuilt behind the response once stale (cache/result-cache.ts).
+     * The KPI strip wants this more than any dashboard does: `outstandingByYear`
+     * is a full scan of `fee_compile_data_set`, and this is the screen every user
+     * lands on, so without it exactly one user per TTL waits out that scan before
+     * seeing anything at all.
+     */
+    if (hit.stale) {
+      refreshInBackground(key, async () =>
+        buildHomeSummary({ ...args, correlationId: `${args.correlationId}:refresh` }),
+      );
+    }
+    return {
+      ...hit.value,
+      spec: { ...hit.value.spec, meta: { ...hit.value.spec.meta, served_from: 'cache' } },
+    };
   }
 
   const { students, staff, outstanding, attendance } = await withMcp(

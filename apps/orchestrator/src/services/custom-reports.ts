@@ -758,7 +758,27 @@ export async function viewReport(args: {
 
   let outcome: ViewOutcome;
   if (hit !== null) {
-    outcome = { ...hit, spec: { ...hit.spec, meta: { ...hit.spec.meta, served_from: 'cache' } } };
+    /**
+     * Deliberately NOT stale-while-revalidate, unlike the predefined dashboards
+     * and the Home summary (cache/result-cache.ts).
+     *
+     * This function writes a `report.viewed` audit row below, and the refresh
+     * hook takes a closure that re-enters its caller — so refreshing here would
+     * record a view that nobody made, in the one table whose value is that it
+     * says what actually happened (docs/08 §7, CODING_GUIDELINES §125). Splitting
+     * the read out from the audit write to make it eligible is a reasonable
+     * change; doing it silently as part of a performance pass is not. The
+     * predefined path has no such problem because `buildDashboard` and
+     * `buildHomeSummary` write no audit at all — their `report.viewed` rows are
+     * written a layer up, in routes/report.ts, which the refresh never re-enters.
+     *
+     * These entries still get the LONGER retention every entry now has, so this
+     * is no worse than before; it simply does not get the extra win.
+     */
+    outcome = {
+      ...hit.value,
+      spec: { ...hit.value.spec, meta: { ...hit.value.spec.meta, served_from: 'cache' } },
+    };
   } else if (def.mode === 'template') {
     const run = await runTemplateMode({
       session: args.session,

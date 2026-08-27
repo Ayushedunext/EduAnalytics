@@ -845,7 +845,7 @@ function Panel({
   variant?: PanelVariant | undefined;
   /**
    * A caller that already owns the card chrome and the title -- Home's preview
-   * cards (services/home.ts `buildHomePreviews`) -- gets the chart with neither
+   * cards (services/home.ts `buildHomePreview`) -- gets the chart with neither
    * repeated. Never used by the dashboard screen or the PDF: both still get the
    * full `.card specPanel` exactly as before, which is what keeps ADR-021 true
    * (same renderer produces what prints).

@@ -18,7 +18,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
-import { buildHomePreviews, buildHomeSummary } from '../services/home.js';
+import { buildHomePreview, buildHomeSummary } from '../services/home.js';
+import { isDashboardId } from '../services/dashboards.js';
 import { ACADEMIC_YEAR, AS_OF_DATE, isRealDate, today } from './report.js';
 
 export const homeRouter = Router();
@@ -47,23 +48,50 @@ homeRouter.get('/api/home', (req: Request, res: Response, next: NextFunction): v
 });
 
 /**
- * GET /api/home/previews — the live dashboard-preview cards on Home.
+ * GET /api/home/preview/:id — ONE live dashboard-preview card on Home.
  *
- * A second, deliberately separate call from `/api/home` (services/home.ts,
- * `buildHomePreviews`): it needs the academic year `/api/home` already worked
- * out, so the SPA calls this one right after, and Home's KPI strip is not held
- * up waiting for it. `academic_year` is still validated for shape here rather
- * than trusted, same reasoning as `/api/report/:id` (this file's sibling
- * route) — it is bound as a parameter either way, but a malformed value would
- * silently match no rows everywhere at once instead of failing loudly.
+ * -- Why per dashboard, and not all of them in one response -------------------
+ * This was `/api/home/previews`, which built every available dashboard and
+ * returned them together. That made the screen only as fast as its slowest
+ * card: against the real extract, `enrollment-overview` was ready in 146 ms and
+ * sat invisible for another 6.5 s while the fee scans finished, because one
+ * `Promise.all` cannot answer early.
+ *
+ * One dashboard per request means each card renders when its own data lands.
+ * The SPA fires them together (apps/web/src/App.tsx) and fills the grid as they
+ * arrive; the browser's own per-origin concurrency is the only queue, and every
+ * request is cheap now that a preview fetches one query rather than a whole
+ * dashboard (services/home.ts, `buildHomePreview`).
+ *
+ * Still a second, deliberately separate call from `/api/home`: it needs the
+ * academic year that response worked out, and the KPI strip must not wait on
+ * any of this. `academic_year` is validated for SHAPE here rather than trusted,
+ * same reasoning as `/api/report/:id` — it is bound as a parameter either way,
+ * but a malformed value would silently match no rows everywhere at once instead
+ * of failing loudly.
+ *
+ * A dashboard that cannot be previewed answers 200 with `status: 'blocked'` and
+ * a reason, not an error status: the card has something honest to say, and one
+ * unavailable dashboard is not a failed request (ADR-011). An id that is not a
+ * previewable dashboard at all IS an error — that is a caller bug, not a state.
  */
-homeRouter.get('/api/home/previews', (req: Request, res: Response, next: NextFunction): void => {
+homeRouter.get('/api/home/preview/:id', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     const session = req.session;
     if (session === undefined) {
       throw new PlatformError({
         code: ERROR_CODES.SESSION_INVALID,
         message: 'Please open Analytics from the ERP menu.',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const rawId = req.params['id'];
+    const reportId = typeof rawId === 'string' ? rawId : '';
+    if (!isDashboardId(reportId)) {
+      throw new PlatformError({
+        code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+        message: 'That dashboard does not exist.',
         correlationId: req.correlationId,
       });
     }
@@ -90,14 +118,15 @@ homeRouter.get('/api/home/previews', (req: Request, res: Response, next: NextFun
 
     const schoolIds = await resolveRequestedSchools(req);
 
-    const previews = await buildHomePreviews({
+    const preview = await buildHomePreview({
       session,
       schoolIds,
+      reportId,
       academicYear,
       asOfDate,
       correlationId: req.correlationId,
     });
 
-    res.json(previews);
+    res.json(preview);
   })().catch(next);
 });

@@ -28,7 +28,7 @@ import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
 import { withMcp } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
-import { cacheGet, cacheKey, cacheSet } from '../cache/result-cache.js';
+import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
 import { config } from '../config.js';
 
 /** What `run_predefined` returns. Parsed, never trusted as a domain type (§3). */
@@ -230,6 +230,51 @@ export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<stri
 };
 
 /**
+ * The ONE query behind each dashboard's lead chart — what Home's preview cards
+ * actually need.
+ *
+ * -- Why this table exists ----------------------------------------------------
+ * Home previewed nine dashboards by building each one in full and then keeping
+ * its first chart: 45 queries issued to draw 9 widgets, with 36 results parsed,
+ * merged, masked and thrown away. Against the real extract that measured 6.7 s
+ * for one school, and the cost was not evenly spread — a 0-row transport query
+ * took 6.2 s of it, purely queued behind fee scans in a school's three-connection
+ * pool (ADR-013). Fetching only the lead query removes the queue with the work.
+ *
+ * -- Why a table and not "the first widget" -----------------------------------
+ * The old code picked the lead widget by INSPECTING the built spec. That cannot
+ * work once the fetch is narrowed, because you must know which query to ask for
+ * before you have anything to inspect. So the choice is declared, and declared
+ * here beside `WIDGET_QUERY_KEYS` rather than in services/home.ts: which result
+ * set feeds which widget is a fact about the REPORT, and this module already
+ * owns that mapping. Home decides to show a preview; it does not decide what a
+ * dashboard's headline chart is.
+ *
+ * Each entry names the query feeding the first `bar`/`line`/`donut` its builder
+ * pushes, which is the same widget the previous inspect-the-spec code selected —
+ * the selection is unchanged, only the moment it is made. `enrollment-overview`
+ * is `by_class` (bar-class), `fee-collection` `by_month` (line-month), and so
+ * on. A dashboard whose lead query returns no rows previews as blocked with its
+ * reason, which is the state it was already in when the whole report was empty.
+ *
+ * [MANDATORY] every key here must name a real query in the report's catalog
+ * entry (mcp-server/src/reports/catalog.ts) — test/home-previews.test.ts asserts
+ * the table is total over DASHBOARD_IDS, and the MCP server refuses an unknown
+ * key outright rather than silently running the whole report.
+ */
+export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
+  'enrollment-overview': 'by_class',
+  'fee-collection': 'by_month',
+  'fee-defaulters': 'aging',
+  'staff-overview': 'by_department',
+  'admissions-funnel': 'funnel',
+  'attendance-analytics': 'by_month',
+  'principal-snapshot': 'by_class',
+  'transport-analytics': 'by_pickup_route',
+  'library-textbooks': 'issues_by_month',
+};
+
+/**
  * Which of a report's widgets accept a `bucket` override, and which values —
  * a widget's own SQL declares its bucket variants (mcp-server/src/reports/
  * catalog.ts); this table only says which widgets HAVE one, for the clone
@@ -258,6 +303,21 @@ export async function buildDashboard(args: {
   /** The date "overdue" and "on roll" are measured against (YYYY-MM-DD). */
   asOfDate: string;
   correlationId: string;
+  /**
+   * Run only these of the report's named queries, instead of all of them.
+   *
+   * The same `query_keys` mechanism the per-widget clone already uses
+   * (services/custom-reports.ts, docs/06 §3), reached here so Home's preview
+   * cards can ask for the ONE query behind the chart they draw rather than the
+   * whole dashboard's. It is still not SQL from a caller: a key names one of
+   * the report's own pre-vetted statements and the MCP server refuses anything
+   * else (mcp-server/src/tools/run-predefined.ts).
+   *
+   * Every builder guards each widget with `if (rows.length > 0)`, so a partial
+   * fetch produces exactly the widgets whose queries ran — no builder needs to
+   * know it was asked for less.
+   */
+  queryKeys?: readonly string[];
 }): Promise<DashboardResult> {
   const scope = await schoolNames(args.schoolIds);
   if (scope.length === 0) {
@@ -278,9 +338,21 @@ export async function buildDashboard(args: {
    * the session's permission class — [MANDATORY] docs/08 §5, because masking is
    * role-dependent and a key without it would serve a Principal's unmasked
    * defaulter list to an accountant.
+   *
+   * A partial fetch gets its OWN key. That is not tidiness: a preview holding
+   * one widget must never be served to the full dashboard page, which would
+   * silently render a report with most of its panels missing — the
+   * success-shaped failure §10 names. Listing the keys sorted keeps the same
+   * request on the same entry regardless of the order they were named in, and
+   * a full fetch keeps the bare `report:<id>` kind it has always had, so no
+   * existing entry is orphaned by this change.
    */
+  const queryKeys = args.queryKeys;
   const key = cacheKey({
-    kind: `report:${args.reportId}`,
+    kind:
+      queryKeys === undefined
+        ? `report:${args.reportId}`
+        : `report:${args.reportId}:q=${[...queryKeys].sort().join('+')}`,
     schoolIds: args.schoolIds,
     permissionClass: args.session.permission_class,
     filters: params,
@@ -289,13 +361,29 @@ export async function buildDashboard(args: {
   const hit = await cacheGet<DashboardResult>(key);
   if (hit !== null) {
     /**
+     * A stale entry is served NOW and rebuilt behind the response
+     * (cache/result-cache.ts). The rebuild is this same function with the same
+     * arguments — so it runs on this session's scope and permission class, and
+     * can only ever rewrite the key this reader was already entitled to read.
+     * `queryKeys` is threaded through it too, or the refresh would write a full
+     * dashboard into a preview's key.
+     */
+    if (hit.stale) {
+      refreshInBackground(key, async () =>
+        buildDashboard({ ...args, correlationId: `${args.correlationId}:refresh` }),
+      );
+    }
+    /**
      * The spec says where the answer came from, and on a hit that is the cache
      * — ADR-028's three tiers are only honest if the label changes with them.
      * `as_of` is deliberately NOT refreshed: the data really is from the moment
      * of the underlying read, and docs/03 assumption 2 accepts replica lag only
      * on condition that it is labelled.
      */
-    return { ...hit, spec: { ...hit.spec, meta: { ...hit.spec.meta, served_from: 'cache' } } };
+    return {
+      ...hit.value,
+      spec: { ...hit.value.spec, meta: { ...hit.value.spec.meta, served_from: 'cache' } },
+    };
   }
 
   const result = await withMcp(args.session, args.correlationId, args.schoolIds, async (mcp) =>
@@ -303,6 +391,7 @@ export async function buildDashboard(args: {
       report_id: args.reportId,
       school_ids: [...args.schoolIds],
       params,
+      ...(queryKeys === undefined ? {} : { query_keys: [...queryKeys] }),
     }),
   );
 

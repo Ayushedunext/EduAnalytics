@@ -30,6 +30,32 @@
  * replica path is complete on its own, and it is what runs today. Failures are
  * logged once per state change rather than per request, so a dead Redis does not
  * also produce a flood.
+ *
+ * -- Why entries carry their age, and may be served after expiry --------------
+ * A plain TTL makes exactly one reader per period pay the full cost. With Home's
+ * ten-minute TTL that is a user every ten minutes waiting out a full scan of the
+ * fee tables while everyone behind them is served in milliseconds — the slowest
+ * experience on the product, handed to whoever happens to arrive first.
+ *
+ * So an entry has two lifetimes. It is FRESH for `CACHE_TTL_SECONDS` and is
+ * simply returned. It is then STALE for a further `CACHE_SERVE_STALE_SECONDS`,
+ * during which it is still returned immediately and a rebuild is started behind
+ * the response (`refreshInBackground`). Only past both is it gone, and only then
+ * does a reader wait.
+ *
+ * The refresh runs on the REQUESTING SESSION's own scope and permission class,
+ * because it is a closure the caller supplies — never a synthetic background
+ * identity. That is not a convenience: "scope is law" (Invariant 2) means the
+ * school set traces back to a signed launch token, and a warmer holding a
+ * fabricated session would be a second, unsigned source of scope. A refresh can
+ * therefore only ever rewrite the exact key the caller was already entitled to
+ * read, which is also why it cannot cross the permission-class boundary the key
+ * itself encodes.
+ *
+ * The trade is staleness, and it is bounded and stated: an entry served stale is
+ * at most `CACHE_TTL_SECONDS + CACHE_SERVE_STALE_SECONDS` old, it still carries
+ * its own `as_of` (the reports label it on screen), and the very next reader
+ * gets the rebuilt copy.
  */
 
 import Redis from 'ioredis';
@@ -107,30 +133,113 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v1:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v2:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
-export async function cacheGet<T>(key: string): Promise<T | null> {
+/**
+ * The stored shape: the value plus the second it was written.
+ *
+ * The timestamp is what makes staleness answerable without a second round trip
+ * — Redis can say an entry exists, not how long it has left, and `TTL` would be
+ * a second command per read on the hottest path in the product.
+ */
+interface Envelope<T> {
+  /** Epoch SECONDS. Seconds, not millis: the granularity that is actually used. */
+  readonly t: number;
+  readonly v: T;
+}
+
+export interface CacheEntry<T> {
+  readonly value: T;
+  /** How old the entry is. Compare against `CACHE_TTL_SECONDS` for freshness. */
+  readonly ageSeconds: number;
+  /** `true` once past `CACHE_TTL_SECONDS` — serve it, then rebuild behind. */
+  readonly stale: boolean;
+}
+
+export async function cacheGet<T>(key: string): Promise<CacheEntry<T> | null> {
   if (!config.CACHE_ENABLED) return null;
   await connect();
   if (!healthy) return null;
   try {
     const raw = await client.get(key);
-    return raw === null ? null : (JSON.parse(raw) as T);
+    if (raw === null) return null;
+    const envelope = JSON.parse(raw) as Envelope<T>;
+    /**
+     * An entry written by an older build has no `t`. Treating that as age zero
+     * would pin it fresh for a full TTL; treating it as stale rebuilds it once
+     * and moves on. The version prefix already makes this unreachable — it is
+     * here so that a future prefix bump that someone forgets fails safe.
+     */
+    if (typeof envelope.t !== 'number') return { value: envelope.v, ageSeconds: Infinity, stale: true };
+    const ageSeconds = Math.max(0, Math.floor(Date.now() / 1000) - envelope.t);
+    return { value: envelope.v, ageSeconds, stale: ageSeconds >= config.CACHE_TTL_SECONDS };
   } catch {
     return null;
   }
 }
 
+/**
+ * Write an entry, fresh from now.
+ *
+ * The Redis TTL is the FULL lifetime — freshness plus the stale-serving window
+ * — because an entry has to outlive its freshness to be servable while it is
+ * rebuilt. Freshness is decided on read, from `t`, not by expiry.
+ */
 export async function cacheSet(key: string, value: unknown, ttlSeconds: number): Promise<void> {
   if (!config.CACHE_ENABLED) return;
   await connect();
   if (!healthy) return;
+  const envelope: Envelope<unknown> = { t: Math.floor(Date.now() / 1000), v: value };
   try {
-    await client.set(key, JSON.stringify(value), 'EX', ttlSeconds);
+    await client.set(key, JSON.stringify(envelope), 'EX', ttlSeconds + config.CACHE_SERVE_STALE_SECONDS);
   } catch {
     // A failed write is a future miss, which is the same thing as not caching.
   }
+}
+
+/**
+ * In-flight refreshes, so a burst of readers on one stale key starts ONE
+ * rebuild.
+ *
+ * Without this, the moment an entry goes stale every concurrent reader would
+ * launch its own rebuild of the same key — a thundering herd aimed at exactly
+ * the expensive query the cache exists to avoid, and worse than simply letting
+ * one reader wait. Process-local is the right scope: it is a de-duplication
+ * hint, not a lock, and a second orchestrator instance starting one more
+ * rebuild of the same key is harmless (they write the same value). A
+ * cross-process lock would be a correctness claim this does not need to make.
+ */
+const refreshing = new Set<string>();
+
+/**
+ * Rebuild a stale entry behind the response.
+ *
+ * Returns immediately; `rebuild` is expected to write the key itself (every
+ * caller already ends in `cacheSet`). Deliberately swallows failures: the
+ * reader has ALREADY been served a stale-but-valid answer, so a failed refresh
+ * is a missed improvement, never an error anyone is waiting on. It is logged,
+ * because a refresh that always fails means the key is served stale until it
+ * expires and someone should be able to see that in the logs.
+ */
+export function refreshInBackground(key: string, rebuild: () => Promise<unknown>): void {
+  if (!config.CACHE_ENABLED) return;
+  if (refreshing.has(key)) return;
+  refreshing.add(key);
+  void rebuild()
+    .catch((err: unknown) => {
+      console.warn(
+        `[orchestrator] background refresh failed for ${key}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    })
+    .finally(() => {
+      refreshing.delete(key);
+    });
+}
+
+/** For tests: how many rebuilds are in flight. */
+export function refreshesInFlight(): number {
+  return refreshing.size;
 }
 
 /** For tests and for a future admin "refresh now" action. */

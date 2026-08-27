@@ -244,22 +244,27 @@ export interface HomePreview {
   reason?: string;
 }
 
-export interface HomePreviewsResponse {
-  previews: HomePreview[];
-}
-
 /**
+ * ONE preview card, fetched on its own.
+ *
  * Fetched separately from `/api/home` and only once the academic year it needs
  * is known (services/home.ts explains why): Home's KPI strip renders from
- * `getHome` immediately, and these cards fill in as this resolves.
+ * `getHome` immediately, and each card fills in as its own request resolves.
+ *
+ * One request per card rather than one for all of them, because a single
+ * response can only be as fast as its slowest dashboard — the fee scans used to
+ * hold back cards that had been ready for six seconds (routes/home.ts).
  */
-export function getHomePreviews(
+export function getHomePreview(
   schoolIds: readonly string[],
   academicYear: string,
-): Promise<HomePreviewsResponse> {
+  reportId: string,
+): Promise<HomePreview> {
   const query = new URLSearchParams({ academic_year: academicYear });
   if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
-  return request<HomePreviewsResponse>(`/api/home/previews?${query.toString()}`);
+  return request<HomePreview>(
+    `/api/home/preview/${encodeURIComponent(reportId)}?${query.toString()}`,
+  );
 }
 
 // -- Custom reports (ADR-018) -------------------------------------------------

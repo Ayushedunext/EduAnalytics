@@ -37,6 +37,16 @@
  * never make (ADR-008/023: reports write nothing to school databases), so it is
  * a request to whoever owns those schemas, recorded here where the cost is felt.
  *
+ * That request is now measured rather than asserted (AUDIT_REPORT C21). Building
+ * the index on a local copy of the extract took the twelve statements below from
+ * 15.6 s to 2.4 s in total — `type=ALL key=NULL` to `type=ref key=idx_school_year`
+ * on every one — with `EXPLAIN ANALYZE` confirming 1,454,684 rows examined
+ * falling to 70,233 actual. `scripts/bench-fee-index.ts` reproduces it, and the
+ * two ALTERs ran `ALGORITHM=INPLACE, LOCK=NONE` in 13 s and 15 s, so the ask on
+ * the schema owner needs no downtime window. The paragraph above still describes
+ * PRODUCTION: nothing has changed in any school database, and until that request
+ * is accepted these queries are still scanning.
+ *
  * -- When report_definitions lands --------------------------------------------
  * docs/06 §1 puts report definitions in a platform table. This module is that
  * table's stand-in: same shape, same `sql_text`, resolved from code until the

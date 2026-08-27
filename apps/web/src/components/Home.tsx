@@ -41,9 +41,17 @@
  * saying the same thing twice. Home's own job is to be the ONE screen that
  * shows something FROM each dashboard rather than a way to each dashboard —
  * `available` dashboards get a live preview card (their own lead widget,
- * services/home.ts `buildHomePreviews`, same cache entry the dashboard itself
- * uses); `coming`/`blocked` ones, which have nothing to preview, collapse into
- * a slim strip, because the sidebar is already the place to discover those.
+ * services/home.ts `buildHomePreview`); `coming`/`blocked` ones, which have
+ * nothing to preview, collapse into a slim strip, because the sidebar is
+ * already the place to discover those.
+ *
+ * -- Each card is its own request ---------------------------------------------
+ * The cards used to arrive together, which meant the grid was only as fast as
+ * its slowest dashboard — Enrollment was ready in 146 ms and sat invisible for
+ * six more seconds waiting on the fee scans. Now every card fetches on its own
+ * (App.tsx, routes/home.ts) and this component renders whichever have landed,
+ * skeleton for the rest. Nothing here decides the order they fill in; they
+ * simply appear as they are ready.
  */
 
 import { KpiTile, WidgetSpecView, type ChartAccent } from '@sap/chart-spec/react';
@@ -74,8 +82,12 @@ interface Props {
   session: SessionResponse;
   home: HomeResponse;
   loading: boolean;
-  /** `null` until the previews fetch resolves (services/home.ts, a second, slower call). */
-  previews: HomePreview[] | null;
+  /**
+   * Keyed by dashboard id, filled in one card at a time as each dashboard's own
+   * request resolves (App.tsx). An id that is not present yet renders as a
+   * skeleton — a card no longer waits for its neighbours.
+   */
+  previews: Record<string, HomePreview>;
   previewsLoading: boolean;
   onOpen: (reportId: string) => void;
   onAskAI: () => void;
@@ -198,9 +210,12 @@ export function Home({
 
         <div className="sect">
           Your dashboards
-          {previewsLoading && previews === null && (
+          {previewsLoading && (
             <span className="text-[11px] font-normal normal-case tracking-normal text-[var(--color-muted)]">
-              loading previews…
+              {/* Counted, not a bare "loading": the cards now arrive one by one,
+                  so the honest status is how many are still outstanding rather
+                  than a label that sits there until the last one lands. */}
+              {`${String(previewable.length - Object.keys(previews).length)} of ${String(previewable.length)} still loading…`}
             </span>
           )}
         </div>
@@ -209,7 +224,7 @@ export function Home({
             <PreviewCard
               key={card.id}
               card={card}
-              preview={previews?.find((p) => p.id === card.id)}
+              preview={previews[card.id]}
               onOpen={onOpen}
             />
           ))}
@@ -229,7 +244,7 @@ export function Home({
 /**
  * A dashboard's own lead CHART, live -- the same bar/line/donut
  * `buildDashboard` would draw first on the full report (services/home.ts,
- * `buildHomePreviews`), rendered here at card size (`compact`, widgets.tsx).
+ * `buildHomePreview`), rendered here at card size (`compact`, widgets.tsx).
  * Home's KPI strip above already carries the numbers, so the preview's job is
  * to be the thing the strip can't be: a shape. Clicking anywhere on the card
  * opens that report, same as the old link-tile did.

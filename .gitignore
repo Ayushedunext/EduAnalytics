@@ -51,6 +51,11 @@ test-results/
 playwright-report/
 blob-report/
 
+# Benchmark output from apps/mcp-server/scripts/bench-fee-index.ts (AUDIT_REPORT
+# C21). Timings and query plans only -- no school rows -- but they are one
+# machine's reading on one day, not a fact about the product.
+bench-fee-index.*.json
+
 # ─────────────────────────────────────────────────────────────
 # Runtime artifacts — generated reports may contain school PII
 # ─────────────────────────────────────────────────────────────

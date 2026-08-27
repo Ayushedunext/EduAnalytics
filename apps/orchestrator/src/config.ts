@@ -143,6 +143,25 @@ const schema = z.object({
   CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(600),
 
   /**
+   * How long past freshness an entry may still be SERVED, while it is rebuilt
+   * behind the response (cache/result-cache.ts).
+   *
+   * A plain TTL hands the slowest experience on the product to whoever arrives
+   * first after each expiry — on Home that is a full scan of the fee tables,
+   * every ten minutes, for one unlucky user. With this window that reader is
+   * served in milliseconds and the rebuild happens behind them.
+   *
+   * 30 minutes: long enough that a screen anyone opens through the day is
+   * effectively always warm, short enough that a page nobody has visited in
+   * half an hour is rebuilt rather than resurrected. The worst case a reader
+   * can see is CACHE_TTL_SECONDS + this, and every report states its own
+   * `as_of` on screen (docs/03 assumption 2), so the age is never hidden.
+   *
+   * Set to 0 to disable stale-serving entirely and go back to a plain TTL.
+   */
+  CACHE_SERVE_STALE_SECONDS: z.coerce.number().int().nonnegative().default(1_800),
+
+  /**
    * An escape hatch for debugging a data question without chasing a stale
    * entry. Off means every read goes to the replica — correct, just slower.
    */

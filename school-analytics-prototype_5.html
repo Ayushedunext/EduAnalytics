@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>School Analytics — Working Prototype</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --teal:#028090; --teal-dark:#046E7C; --ink:#032E36; --sea:#00A896; --mint:#02C39A;
+    --amber:#F2A93B; --red:#E05252; --slate:#334155; --muted:#64748B; --line:#CBD5E1;
+    --canvas:#F1F5F9; --card:#FFFFFF; --chip:#E6F4F1;
+    --radius:10px; --shadow:0 2px 10px rgba(15,42,56,.08), 0 1px 3px rgba(15,42,56,.06);
+    --font:'Inter',-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--font);background:var(--canvas);color:var(--slate);font-size:14px;-webkit-font-smoothing:antialiased}
+  h1,h2,h3{color:var(--ink);letter-spacing:-.01em}
+  button{font-family:var(--font);cursor:pointer;border:none;background:none;font-size:14px}
+  .screen{display:none;min-height:100vh}
+  .screen.active{display:block}
+
+  /* ---------- buttons & bits ---------- */
+  .btn{border-radius:8px;padding:10px 18px;font-weight:600;transition:filter .15s, transform .05s}
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--teal);color:#fff}
+  .btn-primary:hover{filter:brightness(1.08)}
+  .btn-secondary{background:#fff;color:var(--teal);border:1.5px solid var(--teal)}
+  .btn-ghost{background:#fff;color:var(--slate);border:1px solid var(--line)}
+  .btn-mint{background:var(--mint);color:#fff}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .chipbtn{background:#fff;border:1px solid var(--sea);color:var(--teal);border-radius:999px;padding:6px 14px;font-size:12.5px;font-weight:600}
+  .chipbtn:hover{background:var(--chip)}
+  .kicker{font-size:11px;font-weight:700;letter-spacing:.14em;color:var(--sea);text-transform:uppercase}
+  .card{background:var(--card);border:1px solid #E2E8F0;border-radius:var(--radius);box-shadow:var(--shadow)}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;
+    padding:12px 20px;border-radius:10px;font-size:13.5px;opacity:0;pointer-events:none;transition:all .25s;z-index:99;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  /* =================== ERP (deliberately different, utilitarian) =================== */
+  .erp-body{background:#EEF1F6;min-height:100vh;font-family:var(--font)}
+  .erp-login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(140deg,#1B2A4A 0%,#243B6B 55%,#2E4A85 100%)}
+  .erp-login{background:#fff;border-radius:14px;width:400px;max-width:92vw;padding:36px 36px 30px;box-shadow:0 24px 60px rgba(10,20,50,.45)}
+  .erp-logo{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .erp-logo .mark{width:38px;height:38px;border-radius:9px;background:#243B6B;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px}
+  .erp-logo b{font-size:19px;color:#1B2A4A}
+  .erp-sub{color:#8A93A6;font-size:12.5px;margin-bottom:24px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;font-weight:600;color:#5A6478;margin-bottom:6px}
+  .field input{width:100%;border:1px solid #D5DBE7;border-radius:8px;padding:11px 12px;font-size:14px;font-family:var(--font);color:#22304F;background:#FAFBFD}
+  .field input:focus{outline:2px solid #2E4A85;outline-offset:1px;background:#fff}
+  .erp-login .btn{width:100%;background:#243B6B;color:#fff;margin-top:8px;padding:12px}
+  .erp-login .hint{margin-top:16px;font-size:11.5px;color:#9AA3B5;text-align:center}
+
+  .erp-shell{display:flex;min-height:100vh}
+  .erp-nav{width:228px;background:#1B2A4A;color:#B9C2D8;padding:18px 12px;flex-shrink:0}
+  .erp-nav .erp-logo b{color:#fff;font-size:15px}
+  .erp-nav .erp-logo .mark{width:30px;height:30px;font-size:13px;background:#3A56A0}
+  .erp-nav ul{list-style:none;margin-top:20px}
+  .erp-nav li{padding:10px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px;display:flex;gap:10px;align-items:center;cursor:pointer}
+  .erp-nav li:hover{background:#243B6B;color:#fff}
+  .erp-nav li.new{color:#fff;background:linear-gradient(90deg,rgba(2,128,144,.55),rgba(2,195,154,.35));border:1px solid rgba(2,195,154,.5)}
+  .erp-nav li.new .tag{margin-left:auto;background:var(--mint);color:#04332B;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:999px;letter-spacing:.06em}
+  .erp-main{flex:1;padding:26px 30px}
+  .erp-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
+  .erp-topbar h2{font-size:19px;color:#1B2A4A}
+  .erp-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+  .erp-card{background:#fff;border:1px solid #DFE4EE;border-radius:10px;padding:18px}
+  .erp-card b{display:block;font-size:22px;color:#1B2A4A;margin-bottom:4px}
+  .erp-card span{font-size:12.5px;color:#8A93A6}
+  .erp-note{margin-top:26px;background:#fff;border:1px dashed #B9C2D8;border-radius:10px;padding:16px 18px;font-size:13px;color:#5A6478}
+
+  /* launch handoff */
+  .handoff{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(140deg,#1B2A4A,#032E36 70%)}
+  .handoff .box{text-align:center;color:#fff}
+  .handoff .orbs{display:flex;align-items:center;gap:22px;justify-content:center;margin-bottom:28px}
+  .handoff .orb{width:64px;height:64px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px}
+  .handoff .erp-orb{background:#243B6B}
+  .handoff .ana-orb{background:var(--teal)}
+  .handoff .token{width:46px;height:26px;border-radius:999px;background:var(--amber);color:#4A3607;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;animation:slide 1.1s ease-in-out infinite}
+  @keyframes slide{0%{transform:translateX(-26px);opacity:.4}50%{transform:translateX(26px);opacity:1}100%{transform:translateX(-26px);opacity:.4}}
+  .handoff h3{color:#fff;font-size:18px;margin-bottom:8px}
+  .handoff p{color:#9FC1C7;font-size:13px}
+  .handoff .steps{margin-top:18px;font-size:12.5px;color:var(--mint);text-align:left;display:inline-block}
+  .handoff .steps div{margin:4px 0;opacity:0;animation:fadein .3s forwards}
+  .handoff .steps div:nth-child(2){animation-delay:.5s}
+  .handoff .steps div:nth-child(3){animation-delay:1s}
+  @keyframes fadein{to{opacity:1}}
+
+  /* =================== ANALYTICS APP =================== */
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:216px;background:var(--ink);color:#9FC1C7;padding:18px 12px;flex-shrink:0;display:flex;flex-direction:column}
+  .brand{display:flex;gap:10px;align-items:center;padding:4px 8px 18px}
+  .brand .mark{width:34px;height:34px;border-radius:9px;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:16px}
+  .brand div b{color:#fff;font-size:14px;display:block;line-height:1.2}
+  .brand div span{font-size:10.5px;color:#6E9AA1}
+  .nav{list-style:none;flex:1}
+  .nav li{padding:10px 12px;border-radius:8px;font-size:13.5px;margin-bottom:2px;display:flex;gap:10px;align-items:center;cursor:pointer;color:#9FC1C7}
+  .nav li:hover{background:#0A4A55;color:#fff}
+  .nav li.active{background:var(--teal);color:#fff;font-weight:600}
+  .nav li .lock{margin-left:auto;font-size:12px}
+  .sidebar .foot{font-size:10.5px;color:#557E86;padding:10px 8px 2px;border-top:1px solid #0A4A55}
+
+  .main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .topbar{background:#fff;border-bottom:1px solid #E2E8F0;padding:12px 24px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:20}
+  .topbar .crumb{font-size:15px;font-weight:700;color:var(--ink)}
+  .spacer{flex:1}
+  .picker{position:relative}
+  .picker-btn{background:var(--teal);color:#fff;border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center}
+  .picker-menu{position:absolute;right:0;top:44px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);width:250px;padding:10px;display:none;z-index:30}
+  .picker-menu.open{display:block}
+  .picker-menu label{display:flex;gap:9px;align-items:center;padding:8px;border-radius:7px;font-size:13.5px;color:var(--slate);cursor:pointer}
+  .picker-menu label:hover{background:var(--canvas)}
+  .picker-menu .row{display:flex;gap:8px;margin-top:8px}
+  .picker-menu .row button{flex:1;font-size:12px;padding:7px}
+  .ay{border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:12.5px;color:var(--slate);background:#fff}
+  .avatar{width:34px;height:34px;border-radius:50%;background:var(--chip);color:var(--teal);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px}
+
+  .content{padding:24px 28px;flex:1;overflow:auto}
+  .page-title{font-size:21px;margin-bottom:2px}
+  .page-sub{font-size:12.5px;color:var(--muted);margin-bottom:18px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:18px}
+  .kpi{padding:16px 18px}
+  .kpi b{display:block;font-size:24px;letter-spacing:-.02em;margin-bottom:3px;font-variant-numeric:tabular-nums}
+  .kpi span{font-size:12px;color:var(--muted)}
+  .kpi small{display:inline-block;margin-left:6px;font-size:11px;font-weight:700;border-radius:999px;padding:2px 7px}
+  .up{background:#E2F8F1;color:#067A5B}.down{background:#FDECEC;color:var(--red)}
+
+  .askbar{display:flex;align-items:center;gap:12px;background:#fff;border:1.5px solid var(--teal);border-radius:12px;padding:12px 16px;margin-bottom:20px;cursor:pointer;transition:box-shadow .2s}
+  .askbar:hover{box-shadow:0 0 0 4px rgba(2,128,144,.12)}
+  .askbar.locked{border-color:var(--line);cursor:default;background:#F8FAFC}
+  .askbar .bot{width:32px;height:32px;border-radius:8px;background:var(--chip);display:flex;align-items:center;justify-content:center;font-size:16px}
+  .askbar .ph{flex:1;color:var(--muted);font-style:italic;font-size:13.5px}
+  .askbar .go{background:var(--teal);color:#fff;border-radius:8px;padding:8px 16px;font-weight:600;font-size:13px}
+  .askbar.locked .go{background:#C3CDD8}
+
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:1.5fr 1fr}
+  .g2e{grid-template-columns:1fr 1fr}
+  @media(max-width:980px){.g2,.g2e{grid-template-columns:1fr}}
+  .panel{padding:18px 20px}
+  .panel h3{font-size:14.5px;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .panel h3 .live{font-size:10px;color:var(--mint);font-weight:700;letter-spacing:.08em}
+  .chartbox{position:relative;height:250px}
+  .chartbox.tall{height:290px}
+
+  .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+  .dcard{padding:16px;display:flex;gap:12px;align-items:flex-start;cursor:pointer;transition:transform .12s, box-shadow .12s}
+  .dcard:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(15,42,56,.12)}
+  .dcard .ic{width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;background:var(--chip)}
+  .dcard .ic.dir{background:#FBEFD8}
+  .dcard b{display:block;font-size:13.5px;color:var(--ink);margin-bottom:3px}
+  .dcard span{font-size:11.5px;color:var(--muted);line-height:1.45}
+  .sect{font-size:11px;font-weight:800;letter-spacing:.12em;color:var(--muted);margin:22px 0 10px;text-transform:uppercase}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:var(--canvas);text-align:left;padding:9px 12px;color:var(--slate);font-size:12px;font-weight:700;border-bottom:1px solid #E2E8F0}
+  td{padding:9px 12px;border-bottom:1px solid #EEF2F6;color:var(--slate);font-variant-numeric:tabular-nums}
+  tr:last-child td{border-bottom:none}
+  .pill{font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px}
+  .pill.warn{background:#FBEFD8;color:#8A5A0B}.pill.bad{background:#FDECEC;color:var(--red)}.pill.ok{background:#E2F8F1;color:#067A5B}
+  .filters{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .filters .btn-ghost{font-size:12.5px;padding:8px 12px}
+  .actions{display:flex;gap:10px;margin-top:4px}
+
+  /* Ask AI */
+  .ai-wrap{display:grid;grid-template-columns:340px 1fr;gap:16px;height:calc(100vh - 120px);min-height:520px}
+  @media(max-width:980px){.ai-wrap{grid-template-columns:1fr;height:auto}}
+  .chat{display:flex;flex-direction:column;padding:0;overflow:hidden}
+  .chat .msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+  .bubble{max-width:88%;border-radius:12px;padding:10px 13px;font-size:13px;line-height:1.5}
+  .bubble.user{align-self:flex-end;background:var(--teal);color:#fff;border-bottom-right-radius:4px}
+  .bubble.ai{align-self:flex-start;background:var(--chip);color:var(--ink);border-bottom-left-radius:4px}
+  .status{font-size:12px;color:var(--sea);padding-left:4px}
+  .status::before{content:"✓ ";font-weight:700}
+  .status.pending{color:var(--muted)}.status.pending::before{content:"⋯ "}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 8px}
+  .chat .inputrow{display:flex;gap:8px;border-top:1px solid #EEF2F6;padding:12px}
+  .chat input{flex:1;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13.5px;font-family:var(--font)}
+  .chat input:focus{outline:2px solid var(--teal);outline-offset:1px}
+  .canvas-panel{padding:20px;overflow:auto;display:flex;flex-direction:column}
+  .canvas-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;text-align:center}
+  .canvas-empty .big{font-size:40px}
+  .art-title{font-size:16px;color:var(--ink);font-weight:700;margin-bottom:2px}
+  .art-sub{font-size:11.5px;color:var(--muted);margin-bottom:14px}
+  .art-kpis{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .art-kpis .k{background:var(--canvas);border-radius:8px;padding:8px 14px;font-size:12px;color:var(--muted)}
+  .art-kpis .k b{font-size:15px;margin-right:5px}
+  .narr{background:#FBFDFE;border:1px solid #E2ECF0;border-left:3px solid var(--sea);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--slate);margin:14px 0}
+
+  /* locked ask-ai */
+  .locked-card{max-width:480px;margin:8vh auto;text-align:center;padding:40px 36px}
+  .locked-card .lockic{width:64px;height:64px;border-radius:16px;background:var(--canvas);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 18px}
+  .locked-card h2{font-size:19px;margin-bottom:10px}
+  .locked-card p{font-size:13.5px;color:var(--muted);line-height:1.6;margin-bottom:8px}
+  .locked-card .ok-line{color:#067A5B;font-weight:600;font-size:13px;margin:14px 0 20px}
+
+  /* settings wizard */
+  .wiz{max-width:780px}
+  .steprow{padding:20px 22px;margin-bottom:14px;position:relative}
+  .steprow .n{position:absolute;left:22px;top:20px;width:30px;height:30px;border-radius:50%;color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px}
+  .steprow .body{margin-left:48px}
+  .steprow h3{font-size:14.5px;margin-bottom:8px}
+  .steprow p{font-size:13px;color:var(--slate);line-height:1.6}
+  .keyrow{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .keyrow input{flex:1;min-width:240px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+  .radio{display:flex;gap:18px;margin-top:12px;font-size:13px}
+  .statusbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+  .statuschip{border-radius:999px;padding:7px 15px;font-size:12.5px;font-weight:700}
+  .st-off{background:#FDECEC;color:var(--red)}.st-on{background:#E2F8F1;color:#067A5B}
+  .verify{display:none;align-items:center;gap:10px;margin-top:14px;font-size:13.5px;font-weight:600;color:var(--ink)}
+  .verify.show{display:flex}
+  .usage{display:none;margin-top:14px}
+  .usage.show{display:block}
+
+  .reports-empty{padding:48px;text-align:center;color:var(--muted)}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#C9D4DE;border-radius:6px}
+  .dd-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .dd-chip{background:var(--chip);color:var(--teal);font-size:10.5px;font-weight:800;border-radius:999px;padding:4px 10px;letter-spacing:.03em}
+  .dd-crumbs{font-size:12.5px}
+  .dd-crumb{color:var(--teal);font-weight:700;cursor:pointer}
+  .dd-crumb:hover{text-decoration:underline}
+  .dd-sep{color:var(--muted);margin:0 6px}
+  .sql{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;background:#0B2B31;color:#9FE8DB;border-radius:8px;padding:12px 14px;white-space:pre-wrap;line-height:1.6;margin-top:10px;overflow:auto}
+  .logic-row{display:flex;gap:10px;font-size:12.5px;margin-top:7px;align-items:baseline}
+  .logic-row b{min-width:80px;color:var(--ink);flex-shrink:0}
+  .typebadge{font-size:10px;font-weight:800;border-radius:999px;padding:3px 9px;letter-spacing:.04em}
+  .tb-custom{background:var(--chip);color:var(--teal)}.tb-ai{background:#FBEFD8;color:#8A5A0B}
+  /* workflow agents */
+  .ag-row{display:flex;align-items:center;gap:14px;padding:14px 16px;border-bottom:1px solid #EEF2F6}
+  .ag-row:last-child{border-bottom:none}
+  .ag-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+  .ag-name{font-weight:700;color:var(--ink);font-size:13.5px}
+  .ag-meta{font-size:11.5px;color:var(--muted)}
+  .switch{width:46px;height:24px;border-radius:999px;background:#C3CDD8;position:relative;cursor:pointer;flex-shrink:0;transition:background .15s}
+  .switch.on{background:var(--mint)}
+  .switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch.on::after{left:25px}
+  .wf-grid{display:grid;grid-template-columns:400px 1fr;gap:16px;align-items:start}
+  @media(max-width:1050px){.wf-grid{grid-template-columns:1fr}}
+  .wf-step{padding:14px 16px;margin-bottom:12px}
+  .wf-step h4{font-size:12px;color:var(--ink);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .wf-step h4 .dot{width:10px;height:10px;border-radius:3px}
+  .wf-step select,.wf-step input[type=text],.wf-step input[type=number],.wf-step textarea{width:100%;border:1px solid var(--line);border-radius:7px;padding:8px 10px;font-size:12.5px;font-family:var(--font);margin-top:4px;background:#fff}
+  .wf-step textarea{resize:vertical;min-height:54px}
+  .wf-inline{display:flex;gap:8px}
+  .wf-inline>*{flex:1}
+  .chan{display:flex;align-items:center;gap:8px;background:var(--canvas);border-radius:7px;padding:7px 10px;font-size:12px;margin-top:6px}
+  .chan input{accent-color:var(--teal)}
+  .chan .st{margin-left:auto;font-size:10.5px;font-weight:700}
+  .chan.dis{opacity:.55}
+  .wf-node{background:#fff;border:1px solid var(--line);border-left:4px solid var(--teal);border-radius:8px;padding:9px 12px;font-size:12px;font-weight:600;color:var(--ink);position:relative;box-shadow:var(--shadow)}
+  .wf-node .cnt{position:absolute;right:-6px;top:-9px;background:var(--chip);color:var(--teal);font-size:9.5px;font-weight:800;border-radius:999px;padding:2px 8px}
+  .wf-node small{display:block;font-weight:400;color:var(--muted);font-size:10.5px;margin-top:2px}
+  .wf-line{width:2px;height:16px;background:#9DB8BF;margin:0 auto}
+  .wf-branches{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .wf-blabel{font-size:10px;font-weight:800;margin:4px 0;text-align:center}
+  .wf-canvas{padding:18px}
+  .msg-preview{background:#FBFDFE;border:1px dashed var(--line);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--slate);margin-top:8px}
+  .prov-row{display:flex;align-items:center;gap:12px;background:var(--canvas);border-radius:9px;padding:12px 14px;margin-top:10px}
+  .prov-row b{font-size:13px;color:var(--ink)}
+  .prov-row .sub{font-size:11px;color:var(--muted)}
+  .prov-row .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  @media print{.sidebar,.topbar,.chat,.actions,.askbar,.filters{display:none !important}.content{padding:0}}
+</style>
+</head>
+<body>
+
+<!-- ============ SCREEN: ERP LOGIN ============ -->
+<div class="screen active" id="s-login">
+  <div class="erp-login-wrap">
+    <div class="erp-login">
+      <div class="erp-logo"><div class="mark">M</div><b>MoveNext ERP</b></div>
+      <div class="erp-sub">School management platform · sign in to continue</div>
+      <div class="field"><label>School URL</label><input id="f-url" value="sunrisetrust.movenext.in"></div>
+      <div class="field"><label>Username</label><input id="f-user" value="director.mehta"></div>
+      <div class="field"><label>Password</label><input id="f-pass" type="password" value="demo1234"></div>
+      <button class="btn" onclick="erpLogin()">Sign in</button>
+      <div class="hint">Prototype — any credentials work. This is your existing ERP login.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SCREEN: ERP HOME ============ -->
+<div class="screen" id="s-erp">
+  <div class="erp-shell">
+    <nav class="erp-nav">
+      <div class="erp-logo"><div class="mark">M</div><b>MoveNext ERP</b></div>
+      <ul>
+        <li>🏠&nbsp; Dashboard</li>
+        <li>🎓&nbsp; Students</li>
+        <li>🧑‍🏫&nbsp; Staff</li>
+        <li>₹&nbsp;&nbsp; Fees</li>
+        <li>📝&nbsp; Examinations</li>
+        <li>🚌&nbsp; Transport</li>
+        <li>📚&nbsp; Library</li>
+        <li class="new" onclick="launchAnalytics()">📊&nbsp; Analytics <span class="tag">NEW</span></li>
+        <li>⚙️&nbsp; Settings</li>
+      </ul>
+    </nav>
+    <div class="erp-main">
+      <div class="erp-topbar">
+        <h2>Welcome back, Director Mehta</h2>
+        <span style="font-size:12.5px;color:#8A93A6">Sunrise Trust · AY 2026–27</span>
+      </div>
+      <div class="erp-cards">
+        <div class="erp-card"><b>3,912</b><span>Students · 3 schools</span></div>
+        <div class="erp-card"><b>284</b><span>Teaching staff</span></div>
+        <div class="erp-card"><b>17</b><span>Pending approvals</span></div>
+        <div class="erp-card"><b>₹1.21 Cr</b><span>Fees collected (Aug)</span></div>
+      </div>
+      <div class="erp-note">
+        👉 <b>Try the new module:</b> click <b>📊 Analytics</b> in the menu. It opens the analytics tool with your ERP identity —
+        no second login. Your role and school access travel with a secure 60-second launch token.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SCREEN: HANDOFF ============ -->
+<div class="screen" id="s-handoff">
+  <div class="handoff"><div class="box">
+    <div class="orbs">
+      <div class="orb erp-orb">M</div>
+      <div class="token">JWT</div>
+      <div class="orb ana-orb">📊</div>
+    </div>
+    <h3>Opening Analytics…</h3>
+    <p>Your ERP identity is being handed over securely.</p>
+    <div class="steps">
+      <div>✓ Launch token signed by ERP (60 s expiry)</div>
+      <div>✓ Signature verified · scope: Delhi, Noida, Gurgaon</div>
+      <div>✓ Analytics session issued — ERP not contacted again</div>
+    </div>
+  </div></div>
+</div>
+
+<!-- ============ SCREEN: ANALYTICS APP ============ -->
+<div class="screen" id="s-app">
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><div class="mark">📊</div><div><b>Analytics</b><span>Sunrise Trust</span></div></div>
+      <ul class="nav" id="nav">
+        <li data-page="home" class="active" onclick="go('home')">🏠&nbsp; Home</li>
+        <li data-page="group" onclick="go('group')">🌐&nbsp; Group Overview</li>
+        <li data-page="fees" onclick="go('fees')">₹&nbsp;&nbsp; Fee Collection</li>
+        <li data-page="attend" onclick="go('attend')">🗓️&nbsp; Attendance</li>
+        <li data-page="agents" onclick="go('agents')">⚡&nbsp; Agents</li>
+        <li data-page="ai" onclick="go('ai')">🤖&nbsp; Ask AI <span class="lock" id="navlock">🔒</span></li>
+        <li data-page="reports" onclick="go('reports')">💾&nbsp; My Reports</li>
+        <li data-page="settings" onclick="go('settings')">⚙️&nbsp; Settings</li>
+      </ul>
+      <div class="foot">Signed in via MoveNext ERP<br>Role: Director · read-only data</div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <div class="crumb" id="crumb">Home</div>
+        <div class="spacer"></div>
+        <div class="picker">
+          <button class="picker-btn" onclick="togglePicker(event)">🏫 <span id="pickerLabel">3 schools</span> ▾</button>
+          <div class="picker-menu" id="pickerMenu">
+            <label><input type="checkbox" value="delhi" checked onchange="pickerChange()"> Sunrise Delhi</label>
+            <label><input type="checkbox" value="noida" checked onchange="pickerChange()"> Sunrise Noida</label>
+            <label><input type="checkbox" value="ggn" checked onchange="pickerChange()"> Sunrise Gurgaon</label>
+            <div class="row">
+              <button class="btn btn-ghost" onclick="pickAll()">Select all</button>
+              <button class="btn btn-ghost" onclick="pickOne()">Only Delhi</button>
+            </div>
+          </div>
+        </div>
+        <div class="ay">AY 2026–27 ▾</div>
+        <div class="avatar">RM</div>
+      </div>
+
+      <div class="content" id="content"><!-- pages injected --></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= DATA (sample, per school) ================= */
+const SCHOOLS = {
+  delhi:{name:"Sunrise Delhi", boys:636, girls:612, teachers:96, tAtt:96.2, sAtt:93.4,
+    feeBilled:62.0, feeColl:54.2, months:[91.2,92.8,90.5,93.4,94.1],
+    classes:[16.2,17.8,18.4,19.1,21.6,23.4,22.2,23.3], defaulters:29, outstanding:7.8},
+  noida:{name:"Sunrise Noida", boys:702, girls:674, teachers:101, tAtt:94.8, sAtt:92.1,
+    feeBilled:68.5, feeColl:58.9, months:[90.4,91.9,89.8,92.2,93.0],
+    classes:[17.9,18.6,19.8,20.4,22.9,24.8,23.5,24.6], defaulters:34, outstanding:9.6},
+  ggn:{name:"Sunrise Gurgaon", boys:655, girls:633, teachers:87, tAtt:95.5, sAtt:92.6,
+    feeBilled:64.3, feeColl:56.1, months:[90.9,92.3,90.1,92.8,93.6],
+    classes:[16.8,18.1,18.9,19.7,22.1,24.0,22.8,23.9], defaulters:19, outstanding:6.7}
+};
+const CLASS_LABELS=["Cls 5","Cls 6","Cls 7","Cls 8","Cls 9","Cls 10","Cls 11","Cls 12"];
+const MONTH_LABELS=["Apr","May","Jun","Jul","Aug"];
+const DEFAULTER_ROWS=[
+  ["Aarav Sharma","10-C","Sunrise Gurgaon","₹22,300",71],
+  ["Diya Patel","10-A","Sunrise Delhi","₹18,500",62],
+  ["Vihaan Reddy","9-B","Sunrise Noida","₹16,900",58],
+  ["Ananya Gupta","10-C","Sunrise Noida","₹14,750",49],
+  ["Kabir Singh","9-A","Sunrise Delhi","₹12,000",45],
+  ["Ishita Verma","10-B","Sunrise Gurgaon","₹9,800",30]
+];
+
+/* ================= STATE ================= */
+const state = { sel:["delhi","noida","ggn"], ai:"not_configured", page:"home", savedReports:[], charts:[], editing:null, draft:null, draftR:null, viewIdx:null, editIdx:null, drills:{}, drillCfgs:{},
+  customReports:[
+    {t:"Monthly Fees — Drill-Down", d:"12 Aug 2026", scope:"Delhi · Noida · Gurgaon", base:"Fee Collection (predefined)", v:1,
+     cfg:{name:"Monthly Fees — Drill-Down", source:"fee_by_class", chart:"bar", classFrom:0, classTo:7, drill:true, l1c:"bar", l2c:"bar", l3c:"donut"}},
+    {t:"Senior Wing Fee Watch", d:"10 Aug 2026", scope:"Delhi · Noida · Gurgaon", base:"Fee Collection (predefined)", v:3,
+     cfg:{name:"Senior Wing Fee Watch", source:"fee_by_class", chart:"bar", classFrom:4, classTo:7}}
+  ],
+  channels:{
+    email:{on:true, name:"Email (SMTP)", ic:"✉️", sub:"smtp.sunrisetrust.edu.in · from: noreply@"},
+    sms:{on:true, name:"SMS (DLT)", ic:"💬", sub:"Provider: MSG91 · Sender ID: SUNRIS · 4 approved templates"},
+    wa:{on:true, name:"WhatsApp Business", ic:"📱", sub:"BSP: Gupshup · 6 approved templates · quality: HIGH"}
+  },
+  agents:[
+    {name:"Absence Alert — Students", on:true, runsWeek:6, lastRun:"today 10:30 ✓ 41 matched · 41 sent",
+     cfg:{schedule:"Every school day · 10:30", source:"students_absent_today", dedup:true,
+          cond:{on:true, field:"consecutive_days", op:">=", val:3},
+          tAct:{channels:["wa","sms"], staff:true, tmpl:"Dear parent, {{student.name}} ({{student.class}}) has been absent for {{days}} consecutive days. Please contact the school."},
+          fAct:{channels:["wa"], fallback:"sms", tmpl:"Dear parent, your ward {{student.name}} ({{student.class}}) is absent today."}}},
+    {name:"Fee Reminder — 30/60/90 days", on:true, runsWeek:1, lastRun:"Mon 9:00 ✓ 88 sent",
+     cfg:{schedule:"Every Monday · 9:00", source:"fees_overdue_30", dedup:true,
+          cond:{on:true, field:"days_overdue", op:">=", val:60},
+          tAct:{channels:["wa","email"], staff:false, tmpl:"Reminder: fee of {{fee.pending_amount}} for {{student.name}} is overdue by {{days}} days."},
+          fAct:{channels:["wa"], fallback:"", tmpl:"Gentle reminder: fee of {{fee.pending_amount}} for {{student.name}} is pending."}}},
+    {name:"Library Overdue Nudge", on:false, runsWeek:0, lastRun:"paused by admin",
+     cfg:{schedule:"Daily · 16:00", source:"library_overdue", dedup:true,
+          cond:{on:false, field:"", op:">=", val:0},
+          tAct:{channels:["sms"], staff:false, tmpl:""},
+          fAct:{channels:["sms"], fallback:"", tmpl:"{{student.name}} has a library book overdue. Kindly return it."}}}
+  ]
+};
+const ABSENT=[
+  {n:"Aarav Sharma", cls:"10-C", school:"ggn", phone:"98\u2022\u2022\u2022\u2022 2210", days:4},
+  {n:"Diya Patel", cls:"9-A", school:"delhi", phone:"98\u2022\u2022\u2022\u2022 8841", days:1},
+  {n:"Vihaan Reddy", cls:"7-B", school:"noida", phone:"97\u2022\u2022\u2022\u2022 1093", days:3},
+  {n:"Ananya Gupta", cls:"8-C", school:"noida", phone:"99\u2022\u2022\u2022\u2022 5512", days:1},
+  {n:"Kabir Singh", cls:"6-A", school:"delhi", phone:"98\u2022\u2022\u2022\u2022 7738", days:1},
+  {n:"Ishita Verma", cls:"9-B", school:"ggn", phone:"96\u2022\u2022\u2022\u2022 0284", days:2},
+  {n:"Reyansh Mehra", cls:"5-A", school:"delhi", phone:"98\u2022\u2022\u2022\u2022 6621", days:5},
+  {n:"Sara Khan", cls:"10-A", school:"noida", phone:"97\u2022\u2022\u2022\u2022 3307", days:1}
+];
+const SOURCES={students_absent_today:"Students absent today", fees_overdue_30:"Fees overdue > 30 days", library_overdue:"Library books overdue", low_attendance:"Attendance < 75% this month", exam_low_marks:"Exam marks < 40%"};
+const CHAN_LABEL={wa:"📱 WhatsApp", sms:"💬 SMS", email:"✉️ Email"};
+
+/* ================= DRILL-DOWN ENGINE (3 levels) ================= */
+const DD_MONTHS=["Apr-26","May-26","Jun-26","Jul-26","Aug-26"];
+const DD_MONTH_FEES={delhi:[11.8,11.2,7.9,11.4,11.9], noida:[12.8,12.1,8.7,12.4,12.9], ggn:[12.2,11.6,8.2,11.8,12.3]};
+const DD_FEETYPES=["Tuition","Transport","Examination","Activity","Library"];
+function ddL1(){return DD_MONTHS.map((_,m)=>+(state.sel.reduce((a,s)=>a+DD_MONTH_FEES[s][m],0)).toFixed(1));}
+function ddL2(m){return CLASS_LABELS.map((_,i)=>+(state.sel.reduce((a,s)=>{const cs=SCHOOLS[s].classes;const csum=cs.reduce((x,y)=>x+y,0);return a+cs[i]/csum*DD_MONTH_FEES[s][m];},0)).toFixed(2));}
+function ddL3(m,c){const total=ddL2(m)[c];const w=[58+(c%4)*2,16,9+(c%3),9,8-(c%3)];const sum=w.reduce((a,b)=>a+b,0);
+  return DD_FEETYPES.map((_,i)=>+(total*w[i]/sum).toFixed(2));}
+function renderDrill(prefix,cfg){
+  state.drillCfgs[prefix]=cfg;
+  const st=state.drills[prefix]||(state.drills[prefix]={stack:[],chart:null});
+  const wrap=document.getElementById(prefix+"-wrap"); if(!wrap)return;
+  const lvl=st.stack.length;
+  const meta=[{name:"Monthly collection (High)",hint:"click a month"},{name:"Class-wise (Mid)",hint:"click a class"},{name:"Fee-type-wise (Low)",hint:"deepest level"}][lvl];
+  let labels,data,chartType;
+  if(lvl===0){labels=DD_MONTHS;data=ddL1();chartType=cfg.l1c||"bar";}
+  else if(lvl===1){labels=CLASS_LABELS;data=ddL2(st.stack[0].i);chartType=cfg.l2c||"bar";}
+  else{labels=DD_FEETYPES;data=ddL3(st.stack[0].i,st.stack[1].i);chartType=cfg.l3c||"donut";}
+  const total=data.reduce((a,b)=>a+b,0);
+  const crumbs=['<span class="dd-crumb" onclick="ddReset(\''+prefix+'\')">'+(cfg.title||"Fee Collection")+'</span>']
+    .concat(st.stack.map((s2,idx)=>'<span class="dd-sep">▸</span><span class="dd-crumb" onclick="ddJump(\''+prefix+'\','+idx+')">'+s2.label+'</span>')).join("");
+  wrap.innerHTML=`
+    <div class="dd-bar">
+      <span class="dd-chip">⌄ DRILL · level ${lvl+1} of 3</span>
+      <div class="dd-crumbs">${crumbs}</div><span class="spacer"></span>
+      ${lvl>0?`<button class="chipbtn" onclick="ddBack('${prefix}')">← Back</button><button class="chipbtn" onclick="ddReset('${prefix}')">⟲ Reset</button>`:""}
+    </div>
+    <div style="font-size:11.5px;color:var(--muted);margin:4px 0 8px">${meta.name} — slice total <b style="color:var(--teal)">₹${total.toFixed(1)}L</b> · <i>${lvl<2?meta.hint+" to drill":meta.hint}</i></div>
+    <div class="chartbox"><canvas id="${prefix}-cv"></canvas></div>`;
+  if(st.chart){st.chart.destroy();state.charts=state.charts.filter(x=>x!==st.chart);}
+  const ctx=document.getElementById(prefix+"-cv");
+  const onClick=(e,els)=>{if(!els.length||lvl>=2)return;const i2=els[0].index;st.stack.push({i:i2,label:labels[i2]});renderDrill(prefix,cfg);};
+  const onHover=(e,els)=>{e.native.target.style.cursor=(els.length&&lvl<2)?"pointer":"default";};
+  let ch;
+  if(chartType==="donut")ch=new Chart(ctx,{type:"doughnut",data:{labels,datasets:[{data,backgroundColor:[TEAL,SEA,MINT,AMBER,"#7FB8C4"],borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,onClick,onHover,cutout:"60%",plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}}}});
+  else if(chartType==="line")ch=new Chart(ctx,{type:"line",data:{labels,datasets:[{label:"₹L",data,borderColor:TEAL,backgroundColor:TEAL,tension:.35,pointRadius:4,borderWidth:2.5}]},
+    options:{responsive:true,maintainAspectRatio:false,onClick,onHover,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:GRID}}}});
+  else ch=new Chart(ctx,{type:"bar",data:{labels,datasets:[{label:"₹L",data,backgroundColor:lvl===1?SEA:TEAL,borderRadius:5}]},
+    options:{responsive:true,maintainAspectRatio:false,onClick,onHover,plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:GRID,beginAtZero:true}}}});
+  st.chart=ch;state.charts.push(ch);
+}
+function ddBack(p){state.drills[p].stack.pop();renderDrill(p,state.drillCfgs[p]);}
+function ddReset(p){state.drills[p].stack=[];renderDrill(p,state.drillCfgs[p]);}
+function ddJump(p,idx){state.drills[p].stack=state.drills[p].stack.slice(0,idx+1);renderDrill(p,state.drillCfgs[p]);}
+const fmt = n => n.toLocaleString("en-IN");
+const lakh = n => "₹" + n.toFixed(1) + "L";
+const sum = k => state.sel.reduce((a,s)=>a+SCHOOLS[s][k],0);
+const avg = k => (state.sel.reduce((a,s)=>a+SCHOOLS[s][k],0)/state.sel.length);
+const selNames = () => state.sel.map(s=>SCHOOLS[s].name.replace("Sunrise ","")).join(" · ");
+
+/* ================= NAV / SCREENS ================= */
+function show(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active");}
+function erpLogin(){ show("s-erp"); }
+function launchAnalytics(){ show("s-handoff"); setTimeout(()=>{ show("s-app"); go("home"); }, 2300); }
+function toast(msg){const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._x);t._x=setTimeout(()=>t.classList.remove("show"),2600);}
+
+function go(page){
+  state.page=page;
+  document.querySelectorAll("#nav li").forEach(li=>li.classList.toggle("active",li.dataset.page===page));
+  const crumbs={home:"Home",group:"Group Overview",fees:"Fee Collection",attend:"Attendance",agents:"Workflow Agents",builder:"Agent Builder",ai:"Ask AI",reports:"My Reports",report:"Custom Report",reportEdit:"Edit Report",settings:"Settings · AI & Messaging"};
+  document.getElementById("crumb").textContent=crumbs[page];
+  state.charts.forEach(c=>c.destroy()); state.charts=[]; state.drills={}; state.drillCfgs={};
+  const el=document.getElementById("content");
+  el.innerHTML = PAGES[page]();
+  if(AFTER[page]) AFTER[page]();
+  el.scrollTop=0;
+}
+
+/* picker */
+function togglePicker(e){e.stopPropagation();document.getElementById("pickerMenu").classList.toggle("open");}
+document.addEventListener("click",()=>document.getElementById("pickerMenu").classList.remove("open"));
+document.getElementById("pickerMenu")?.addEventListener("click",e=>e.stopPropagation());
+function pickerChange(){
+  const boxes=[...document.querySelectorAll("#pickerMenu input")];
+  let sel=boxes.filter(b=>b.checked).map(b=>b.value);
+  if(!sel.length){boxes[0].checked=true;sel=["delhi"];}
+  state.sel=sel;
+  document.getElementById("pickerLabel").textContent = sel.length===3?"3 schools":sel.length===1?SCHOOLS[sel[0]].name.replace("Sunrise ",""):sel.length+" schools";
+  go(state.page);
+}
+function pickAll(){document.querySelectorAll("#pickerMenu input").forEach(b=>b.checked=true);pickerChange();}
+function pickOne(){document.querySelectorAll("#pickerMenu input").forEach(b=>b.checked=b.value==="delhi");pickerChange();}
+
+/* ================= CHART HELPERS ================= */
+Chart.defaults.font.family=getComputedStyle(document.body).fontFamily;
+Chart.defaults.color="#64748B";
+const GRID={color:"#EDF2F6"};
+function bar(ctx,labels,datasets,horizontal=false,max){
+  const c=new Chart(ctx,{type:"bar",data:{labels,datasets},options:{
+    indexAxis:horizontal?"y":"x",responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{display:datasets.length>1,position:"bottom",labels:{boxWidth:12,font:{size:11}}}},
+    scales:{x:{grid:horizontal?GRID:{display:false},max:horizontal?max:undefined},
+            y:{grid:horizontal?{display:false}:GRID,max:horizontal?undefined:max,beginAtZero:true}},
+    borderRadius:5}});
+  state.charts.push(c);return c;
+}
+function line(ctx,labels,datasets,min,max){
+  const c=new Chart(ctx,{type:"line",data:{labels,datasets:datasets.map(d=>({...d,tension:.35,pointRadius:3,borderWidth:2.5}))},
+    options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}},
+    scales:{x:{grid:{display:false}},y:{grid:GRID,min,max}}}});
+  state.charts.push(c);return c;
+}
+function donut(ctx,labels,values,colors){
+  const c=new Chart(ctx,{type:"doughnut",data:{labels,datasets:[{data:values,backgroundColor:colors,borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:"62%",
+    plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}}}});
+  state.charts.push(c);return c;
+}
+const TEAL="#028090",SEA="#00A896",MINT="#02C39A",AMBER="#F2A93B",INK="#032E36";
+
+/* ================= PAGES ================= */
+const PAGES={};
+const AFTER={};
+
+/* ---- HOME ---- */
+PAGES.home=()=>`
+  <h1 class="page-title">Good morning, Director Mehta ☀️</h1>
+  <div class="page-sub">Scope: ${selNames()} · data as of today, 9:40 AM</div>
+  <div class="askbar ${state.ai==='active'?'':'locked'}" onclick="${state.ai==='active'?"go('ai')":"toast('AI reports are locked — complete AI setup in Settings')"}">
+    <div class="bot">🤖</div>
+    <div class="ph">${state.ai==='active'
+      ? 'Ask anything about your schools… e.g. “school-wise strength, gender-wise”'
+      : '🔒 AI reports are locked — complete AI setup in Settings (predefined dashboards work now)'}</div>
+    <div class="go">${state.ai==='active'?'Ask AI':'Locked'}</div>
+  </div>
+  <div class="kpis">
+    <div class="card kpi"><b style="color:${TEAL}">${fmt(sum('boys')+sum('girls'))}</b><span>Students · ${state.sel.length} school${state.sel.length>1?'s':''}</span></div>
+    <div class="card kpi"><b style="color:${SEA}">${fmt(sum('teachers'))}</b><span>Teachers</span></div>
+    <div class="card kpi"><b style="color:${MINT}">${avg('sAtt').toFixed(1)}%<small class="up">▲ 0.6</small></b><span>Student attendance MTD</span></div>
+    <div class="card kpi"><b style="color:${AMBER}">${lakh(sum('outstanding'))}</b><span>Fees outstanding</span></div>
+  </div>
+  <div class="sect">Director dashboards</div>
+  <div class="gallery">
+    <div class="card dcard" onclick="go('group')"><div class="ic dir">🌐</div><div><b>Group Overview</b><span>Strength & gender across schools, staff, fees at a glance</span></div></div>
+    <div class="card dcard" onclick="go('attend')"><div class="ic dir">🗓️</div><div><b>Cross-School Attendance</b><span>Students & teachers, by school, with monthly trend</span></div></div>
+    <div class="card dcard" onclick="go('agents')"><div class="ic dir">⚡</div><div><b>Workflow Agents</b><span>Automate alerts: absence, fees, library — build your own flows</span></div></div>
+    <div class="card dcard" onclick="toast('School Comparison — included in build Phase 3 (demo)')"><div class="ic dir">⚖️</div><div><b>School Comparison</b><span>Any metric side-by-side across your schools</span></div></div>
+  </div>
+  <div class="sect">School dashboards</div>
+  <div class="gallery">
+    <div class="card dcard" onclick="go('fees')"><div class="ic">₹</div><div><b>Fee Collection</b><span>Collected vs due, class-wise, payment modes, defaulters</span></div></div>
+    <div class="card dcard" onclick="go('attend')"><div class="ic">✅</div><div><b>Attendance Analytics</b><span>Daily %, trends, chronic absentee list</span></div></div>
+    <div class="card dcard" onclick="toast('Exam Performance — demo card')"><div class="ic">🏅</div><div><b>Exam Performance</b><span>Term averages, subject distribution, toppers</span></div></div>
+    <div class="card dcard" onclick="toast('Enrollment — demo card')"><div class="ic">🎓</div><div><b>Enrollment Overview</b><span>Class mix, YoY growth, gender ratio</span></div></div>
+    <div class="card dcard" onclick="toast('Transport — demo card')"><div class="ic">🚌</div><div><b>Transport Analytics</b><span>Route ridership & capacity utilisation</span></div></div>
+    <div class="card dcard" onclick="toast('Library — demo card')"><div class="ic">📚</div><div><b>Library & Textbooks</b><span>Issues, overdues, low-stock alerts</span></div></div>
+  </div>`;
+
+/* ---- GROUP OVERVIEW ---- */
+PAGES.group=()=>`
+  <h1 class="page-title">Group Overview — Sunrise Trust</h1>
+  <div class="page-sub">${selNames()} · AY 2026–27 · answered from rollups in <b style="color:${SEA}">180 ms</b></div>
+  <div class="kpis">
+    <div class="card kpi"><b style="color:${TEAL}">${fmt(sum('boys')+sum('girls'))}</b><span>Students across schools</span></div>
+    <div class="card kpi"><b style="color:${SEA}">${fmt(sum('teachers'))}</b><span>Teachers</span></div>
+    <div class="card kpi"><b style="color:${MINT}">${avg('sAtt').toFixed(1)}%</b><span>Student attendance MTD</span></div>
+    <div class="card kpi"><b style="color:${AMBER}">${avg('tAtt').toFixed(1)}%</b><span>Teacher attendance MTD</span></div>
+  </div>
+  <div class="grid g2">
+    <div class="card panel"><h3>Student strength — school-wise & gender-wise</h3><div class="chartbox tall"><canvas id="c-strength"></canvas></div></div>
+    <div class="card panel"><h3>Teacher attendance MTD (%)</h3><div class="chartbox tall"><canvas id="c-tatt"></canvas></div></div>
+  </div>
+  <div style="height:16px"></div>
+  <div class="grid g2e">
+    <div class="card panel"><h3>Fees — billed vs collected (₹ Lakh, Apr–Aug)</h3><div class="chartbox"><canvas id="c-fees"></canvas></div></div>
+    <div class="card panel"><h3>Gender split — selected schools</h3><div class="chartbox"><canvas id="c-gender"></canvas></div></div>
+  </div>
+  <div class="actions" style="margin-top:16px">
+    <button class="btn btn-primary" onclick="toast('Branded PDF with school-scope header would download here (demo)')">⬇ Download PDF</button>
+    <button class="btn btn-secondary" onclick="${state.ai==='active'?"askFromDash()":"toast('Enable AI in Settings to ask about this data')"}">🤖 Ask AI about this data</button>
+  </div>`;
+AFTER.group=()=>{
+  const names=state.sel.map(s=>SCHOOLS[s].name.replace("Sunrise ",""));
+  bar(document.getElementById("c-strength"),names,[
+    {label:"Boys",data:state.sel.map(s=>SCHOOLS[s].boys),backgroundColor:TEAL},
+    {label:"Girls",data:state.sel.map(s=>SCHOOLS[s].girls),backgroundColor:AMBER}]);
+  bar(document.getElementById("c-tatt"),names,[{label:"%",data:state.sel.map(s=>SCHOOLS[s].tAtt),backgroundColor:SEA}],true,100);
+  bar(document.getElementById("c-fees"),names,[
+    {label:"Billed",data:state.sel.map(s=>SCHOOLS[s].feeBilled),backgroundColor:"#B9DDE2"},
+    {label:"Collected",data:state.sel.map(s=>SCHOOLS[s].feeColl),backgroundColor:TEAL}]);
+  donut(document.getElementById("c-gender"),["Boys","Girls"],[sum('boys'),sum('girls')],[TEAL,AMBER]);
+};
+
+/* ---- FEES ---- */
+PAGES.fees=()=>{
+  const collPct=Math.round(sum('feeColl')/sum('feeBilled')*100);
+  const rows=DEFAULTER_ROWS.filter(r=>state.sel.some(s=>r[2]===SCHOOLS[s].name));
+  return `
+  <h1 class="page-title">Fee Collection Summary</h1>
+  <div class="page-sub">${selNames()} · Apr–Aug 2026</div>
+  <div class="filters">
+    <button class="btn btn-ghost">AY 2026–27 ▾</button><button class="btn btn-ghost">All classes ▾</button>
+    <button class="btn btn-ghost">Apr–Aug ▾</button><span class="spacer"></span>
+    <button class="btn btn-ghost" onclick="toggleLogic('fee')">🧠 View logic</button>
+    <button class="btn btn-secondary" onclick="cloneReport({name:'Fee Collection',source:'fee_by_class',chart:'bar',classFrom:0,classTo:7}, 'Fee Collection (predefined)')">⧉ Clone & customize</button>
+    <button class="btn btn-primary" onclick="toast('PDF export queued (demo)')">⬇ PDF</button>
+  </div>
+  <div class="kpis">
+    <div class="card kpi"><b style="color:${INK}">${lakh(sum('feeBilled'))}</b><span>Billed YTD</span></div>
+    <div class="card kpi"><b style="color:${TEAL}">${lakh(sum('feeColl'))}<small class="up">${collPct}%</small></b><span>Collected</span></div>
+    <div class="card kpi"><b style="color:${AMBER}">${lakh(sum('outstanding'))}</b><span>Outstanding</span></div>
+    <div class="card kpi"><b style="color:#E05252">${sum('defaulters')}</b><span>Defaulters &gt; 30 days</span></div>
+  </div>
+  <div class="grid g2">
+    <div class="card panel"><h3>Fee collection — drill-down <span class="dd-chip" style="margin-left:6px">month → class → fee type</span></h3><div id="fee-dd-wrap"></div></div>
+    <div class="card panel"><h3>Payment mode split</h3><div class="chartbox tall"><canvas id="c-mode"></canvas></div></div>
+  </div>
+  <div style="height:16px"></div>
+  <div class="card panel">
+    <h3>Top defaulters <span style="font-weight:400;color:var(--muted);font-size:12px">· across selected schools</span></h3>
+    <table><thead><tr><th>Student</th><th>Class</th><th>School</th><th>Pending</th><th>Overdue</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td><b>${r[3]}</b></td>
+      <td><span class="pill ${r[4]>60?'bad':'warn'}">${r[4]} days</span></td></tr>`).join("")}</tbody></table>
+  </div>
+  ${logicPanel({name:'Fee Collection',source:'fee_by_class',chart:'bar',classFrom:0,classTo:7,drill:true},'fee')}`;
+};
+AFTER.fees=()=>{
+  renderDrill("fee-dd",{title:"Fee Collection",l1c:"bar",l2c:"bar",l3c:"donut"});
+  donut(document.getElementById("c-mode"),["UPI","Card","Net-banking","Cash"],[46,22,21,11],[TEAL,SEA,MINT,AMBER]);
+};
+
+/* ---- ATTENDANCE ---- */
+PAGES.attend=()=>`
+  <h1 class="page-title">Cross-School Attendance</h1>
+  <div class="page-sub">${selNames()} · students & teachers · AY 2026–27</div>
+  <div class="kpis">
+    <div class="card kpi"><b style="color:${TEAL}">${avg('sAtt').toFixed(1)}%</b><span>Student attendance MTD</span></div>
+    <div class="card kpi"><b style="color:${SEA}">${avg('tAtt').toFixed(1)}%</b><span>Teacher attendance MTD</span></div>
+    <div class="card kpi"><b style="color:${AMBER}">41</b><span>Students &lt; 75% (chronic)</span></div>
+    <div class="card kpi"><b style="color:${MINT}">Aug<small class="up">best</small></b><span>Best month this year</span></div>
+  </div>
+  <div class="card panel"><h3>Monthly student attendance trend (%) — by school</h3><div class="chartbox tall"><canvas id="c-trend"></canvas></div></div>
+  <div style="height:16px"></div>
+  <div class="grid g2e">
+    <div class="card panel"><h3>Teacher attendance by school (%)</h3><div class="chartbox"><canvas id="c-tatt2"></canvas></div></div>
+    <div class="card panel"><h3>Today at a glance</h3>
+      <table><thead><tr><th>School</th><th>Students present</th><th>Teachers present</th><th>Status</th></tr></thead><tbody>
+      ${state.sel.map(s=>{const d=SCHOOLS[s];return `<tr><td>${d.name}</td><td>${d.sAtt.toFixed(1)}%</td><td>${d.tAtt.toFixed(1)}%</td>
+        <td><span class="pill ${d.sAtt>=93?'ok':'warn'}">${d.sAtt>=93?'On track':'Watch'}</span></td></tr>`}).join("")}
+      </tbody></table>
+    </div>
+  </div>`;
+AFTER.attend=()=>{
+  const colors={delhi:TEAL,noida:AMBER,ggn:SEA};
+  line(document.getElementById("c-trend"),MONTH_LABELS,
+    state.sel.map(s=>({label:SCHOOLS[s].name.replace("Sunrise ",""),data:SCHOOLS[s].months,borderColor:colors[s],backgroundColor:colors[s]})),86,96);
+  bar(document.getElementById("c-tatt2"),state.sel.map(s=>SCHOOLS[s].name.replace("Sunrise ","")),
+    [{label:"%",data:state.sel.map(s=>SCHOOLS[s].tAtt),backgroundColor:SEA}],true,100);
+};
+
+/* ---- ASK AI ---- */
+PAGES.ai=()=>{
+  if(state.ai!=="active") return `
+    <div class="card locked-card">
+      <div class="lockic">🔒</div>
+      <h2>AI Reports are locked</h2>
+      <p>Connect your trust's Anthropic account to unlock natural-language reports for every school and user.</p>
+      <div class="ok-line">✓ Predefined dashboards are already available — no setup needed</div>
+      <button class="btn btn-primary" onclick="go('settings')">Go to AI Setup →</button>
+      <p style="margin-top:14px;font-size:12px">Not an admin? Ask your administrator to enable AI reports.</p>
+    </div>`;
+  return `
+  <div class="ai-wrap">
+    <div class="card chat">
+      <div class="msgs" id="msgs">
+        <div class="bubble ai">Hi Director Mehta! Ask me anything about <b>${selNames()}</b> — strength, fees, attendance, exams. I can only see the schools you've selected.</div>
+      </div>
+      <div class="chips" id="chips">
+        <button class="chipbtn" onclick="ask('Show gender-wise student strength for all my schools')">Gender-wise strength</button>
+        <button class="chipbtn" onclick="ask('Show fee defaulters across my schools')">Fee defaulters</button>
+        <button class="chipbtn" onclick="ask('Compare attendance across schools')">Attendance compare</button>
+      </div>
+      <div class="inputrow">
+        <input id="aiInput" placeholder="Type a question…" onkeydown="if(event.key==='Enter')ask()">
+        <button class="btn btn-primary" onclick="ask()">Send</button>
+      </div>
+    </div>
+    <div class="card canvas-panel" id="artCanvas">
+      <div class="canvas-empty"><div class="big">📈</div><b style="color:var(--ink)">Your report appears here</b>
+      <span style="font-size:12.5px;max-width:300px">Ask a question or tap a suggestion — charts, tables and a narrative stream in live.</span></div>
+    </div>
+  </div>`;
+};
+AFTER.ai=()=>{};
+
+function addMsg(cls,html){const m=document.getElementById("msgs");const d=document.createElement("div");d.className="bubble "+cls;d.innerHTML=html;m.appendChild(d);m.scrollTop=m.scrollHeight;return d;}
+function addStatus(text){const m=document.getElementById("msgs");const d=document.createElement("div");d.className="status pending";d.textContent=text;m.appendChild(d);m.scrollTop=m.scrollHeight;return d;}
+
+function ask(q){
+  const input=document.getElementById("aiInput");
+  q=q||input.value.trim(); if(!q)return; input.value="";
+  addMsg("user",q);
+  const s1=addStatus("Scope: "+selNames());
+  const kind=/default|fee|pending|due/i.test(q)?"def":/attend/i.test(q)?"att":"str";
+  const s2=addStatus(kind==="def"?"Fan-out: querying "+state.sel.length+" school replicas in parallel":"Answered from rollup store");
+  const s3=addStatus("Building chart");
+  setTimeout(()=>s1.classList.remove("pending"),400);
+  setTimeout(()=>s2.classList.remove("pending"),1000);
+  setTimeout(()=>{s3.classList.remove("pending");renderArtifact(kind,q);},1600);
+}
+function askFromDash(){go('ai');setTimeout(()=>ask('Explain the fee gap between my schools'),300);}
+
+function renderArtifact(kind,q){
+  const el=document.getElementById("artCanvas");
+  const names=state.sel.map(s=>SCHOOLS[s].name.replace("Sunrise ",""));
+  let title,sub,kpis,narr,tbl="",chartFn;
+  if(kind==="def"){
+    const rows=DEFAULTER_ROWS.filter(r=>state.sel.some(s=>r[2]===SCHOOLS[s].name));
+    title="Fee Defaulters — "+selNames();
+    sub=state.sel.length+" schools · fan-out across replicas · 1.8 s";
+    kpis=[[sum('defaulters'),"defaulters","#E05252"],[lakh(sum('outstanding')),"total pending",AMBER],["58 days","avg overdue",INK]];
+    narr=`Found <b>${sum('defaulters')} defaulters</b> with <b>${lakh(sum('outstanding'))}</b> pending across your selection. ${names[0]} carries the largest single dues. Consider reminders for the ${DEFAULTER_ROWS.filter(r=>r[4]>60).length} cases over 60 days first.`;
+    tbl=`<table><thead><tr><th>Student</th><th>Class</th><th>School</th><th>Pending</th><th>Overdue</th></tr></thead><tbody>
+      ${rows.slice(0,5).map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td><b>${r[3]}</b></td><td>${r[4]} d</td></tr>`).join("")}</tbody></table>`;
+    chartFn=()=>bar(document.getElementById("art-chart"),names,[{label:"Outstanding ₹L",data:state.sel.map(s=>SCHOOLS[s].outstanding),backgroundColor:AMBER}]);
+    addMsg("ai",`Found <b>${sum('defaulters')} defaulters</b> · <b>${lakh(sum('outstanding'))}</b> pending. Full report on the right →`);
+  } else if(kind==="att"){
+    title="Attendance Comparison — "+selNames();
+    sub="rollup store · 0.3 s";
+    kpis=[[avg('sAtt').toFixed(1)+"%","students MTD",TEAL],[avg('tAtt').toFixed(1)+"%","teachers MTD",SEA],["Aug","best month",MINT]];
+    narr=`Student attendance averages <b>${avg('sAtt').toFixed(1)}%</b> across your selection, trending up since June. Teacher attendance is healthy everywhere; ${names[state.sel.indexOf(state.sel.slice().sort((a,b)=>SCHOOLS[a].tAtt-SCHOOLS[b].tAtt)[0])]||names[0]} is the one to watch.`;
+    chartFn=()=>{const colors={delhi:TEAL,noida:AMBER,ggn:SEA};
+      line(document.getElementById("art-chart"),MONTH_LABELS,state.sel.map(s=>({label:SCHOOLS[s].name.replace("Sunrise ",""),data:SCHOOLS[s].months,borderColor:colors[s],backgroundColor:colors[s]})),86,96);};
+    addMsg("ai",`Attendance averages <b>${avg('sAtt').toFixed(1)}%</b> and is improving. Chart on the right →`);
+  } else {
+    title="Student Strength by School & Gender";
+    sub=state.sel.length+" schools · rollup store · 0.4 s";
+    const b=sum('boys'),g=sum('girls');
+    kpis=[[fmt(b+g),"total students",TEAL],[Math.round(b/(b+g)*100)+"%","boys",SEA],[Math.round(g/(b+g)*100)+"%","girls",AMBER]];
+    narr=`Your ${state.sel.length} school${state.sel.length>1?'s have':' has'} <b>${fmt(b+g)} students</b> — ${fmt(b)} boys and ${fmt(g)} girls. ${state.sel.length>1?names[state.sel.map(s=>SCHOOLS[s].boys+SCHOOLS[s].girls).indexOf(Math.max(...state.sel.map(s=>SCHOOLS[s].boys+SCHOOLS[s].girls)))]+" is the largest campus.":""} Gender balance is within 2% everywhere.`;
+    tbl=`<table><thead><tr><th>School</th><th>Boys</th><th>Girls</th><th>Total</th></tr></thead><tbody>
+      ${state.sel.map(s=>{const d=SCHOOLS[s];return `<tr><td>${d.name}</td><td>${fmt(d.boys)}</td><td>${fmt(d.girls)}</td><td><b>${fmt(d.boys+d.girls)}</b></td></tr>`}).join("")}</tbody></table>`;
+    chartFn=()=>bar(document.getElementById("art-chart"),names,[
+      {label:"Boys",data:state.sel.map(s=>SCHOOLS[s].boys),backgroundColor:TEAL},
+      {label:"Girls",data:state.sel.map(s=>SCHOOLS[s].girls),backgroundColor:AMBER}]);
+    addMsg("ai",`Your schools have <b>${fmt(b+g)} students</b> (${fmt(b)} boys · ${fmt(g)} girls). Breakdown on the right →`);
+  }
+  const kindCfg = kind==="def" ? {name:title,source:"outstanding_by_school",chart:"bar",classFrom:0,classTo:7}
+                : kind==="att" ? {name:title,source:"attendance_trend",chart:"line",classFrom:0,classTo:7}
+                : {name:title,source:"strength_by_school",chart:"bar",classFrom:0,classTo:7};
+  el.innerHTML=`
+    <div class="art-title">${title}</div><div class="art-sub">${sub}</div>
+    <div class="art-kpis">${kpis.map(k=>`<div class="k"><b style="color:${k[2]}">${k[0]}</b>${k[1]}</div>`).join("")}</div>
+    <div class="chartbox"><canvas id="art-chart"></canvas></div>
+    ${tbl?`<div style="margin-top:14px">${tbl}</div>`:""}
+    <div class="narr">🤖 ${narr}</div>
+    <div id="art-logic" style="display:none" class="card panel" >
+      <h3>🧠 Report logic — the SQL this answer ran</h3>
+      <div class="logic-row"><b>Scope</b><span>${selNames()} (from your token)</span></div>
+      <div class="sql">${genSQL(kindCfg)}</div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="toast('Branded PDF would download here (demo)')">⬇ PDF</button>
+      <button class="btn btn-mint" onclick="saveReport('${title.replace(/'/g,"")}')">💾 Save</button>
+      <button class="btn btn-ghost" onclick="const p=document.getElementById('art-logic');p.style.display=p.style.display==='none'?'block':'none'">🧠 Logic</button>
+      <button class="btn btn-secondary" onclick='cloneReport(${JSON.stringify(kindCfg)}, "AI report")'>⧉ Clone</button>
+      <button class="btn btn-ghost" onclick="toast('Refine: try “make it a pie chart” or “only Class 9–10” (demo)')">✎ Refine</button>
+    </div>`;
+  chartFn();
+}
+function saveReport(t){state.savedReports.push({t,d:new Date().toLocaleDateString("en-IN"),scope:selNames()});toast("Saved to My Reports — re-runs with fresh data anytime");}
+
+/* ---- WORKFLOW AGENTS: FLEET ---- */
+PAGES.agents=()=>{
+  const act=state.agents.filter(a=>a.on).length;
+  return `
+  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:4px">
+    <div style="flex:1"><h1 class="page-title">Workflow Agents</h1>
+    <div class="page-sub">Your school builds its own automations — unlimited agents · runs read replicas only, zero ERP load</div></div>
+    <button class="btn btn-primary" onclick="newAgent()">＋ Create agent</button>
+  </div>
+  <div class="kpis">
+    <div class="card kpi"><b style="color:${TEAL}">${act}</b><span>Active agents</span></div>
+    <div class="card kpi"><b style="color:${SEA}">${state.agents.reduce((a,x)=>a+x.runsWeek,0) * 7}</b><span>Runs this week</span></div>
+    <div class="card kpi"><b style="color:${MINT}">98.6%</b><span>Run success rate</span></div>
+    <div class="card kpi"><b style="color:${AMBER}">312 <small class="up">/ 2,000 cap</small></b><span>Messages today</span></div>
+  </div>
+  <div class="card">
+    ${state.agents.map((a,i)=>{
+      const ch=[...new Set([...(a.cfg.tAct.channels||[]),...(a.cfg.fAct.channels||[])])].map(c=>CHAN_LABEL[c].split(" ")[0]).join(" ");
+      return `<div class="ag-row">
+        <div class="ag-dot" style="background:${a.on?MINT:'#C3CDD8'}"></div>
+        <div style="flex:1;min-width:0">
+          <div class="ag-name">${a.name}</div>
+          <div class="ag-meta">${a.cfg.schedule} · ${ch} · last run: ${a.lastRun}</div>
+        </div>
+        <button class="chipbtn" onclick="editAgent(${i})">Edit flow</button>
+        <button class="chipbtn" onclick="toast('Runs & history — each run replays on the flowchart (demo)')">Runs</button>
+        <div class="switch ${a.on?'on':''}" onclick="toggleAgent(${i})"></div>
+      </div>`;}).join("")}
+  </div>
+  <div class="sect">Start from a template</div>
+  <div class="gallery">
+    ${[["🚸","Absence alert","WhatsApp parents of today's absentees"],["₹","Fee reminder","Aging-based nudges at 30/60/90 days"],["📉","Low attendance","Monthly alert when < 75%"],["🎂","Birthday wishes","Auto-greet students & staff"],["📚","Library overdue","Return reminders via SMS"],["🧑‍🏫","Teacher absent","Alert coordinator to arrange substitute"]]
+      .map(t=>`<div class="card dcard" onclick="newAgent('${t[1]}')"><div class="ic">${t[0]}</div><div><b>${t[1]}</b><span>${t[2]}</span></div></div>`).join("")}
+  </div>
+  <p style="font-size:11.5px;color:var(--muted);margin-top:16px">Guardrails on every agent: dedup (never double-message a parent for the same event) · quiet hours 8 PM–7 AM · daily cap · auto-pause on repeated failures · full per-node audit log.</p>`;
+};
+function toggleAgent(i){state.agents[i].on=!state.agents[i].on;toast(state.agents[i].on?"Agent activated — next run at its scheduled time":"Agent paused — no messages will be sent");go('agents');}
+function mkDraft(tpl){
+  return {name:tpl||"New agent", schedule:"Every school day · 10:30", source:"students_absent_today", dedup:true,
+    cond:{on:true, field:"consecutive_days", op:">=", val:3},
+    tAct:{channels:["wa","sms"], staff:true, tmpl:"Dear parent, {{student.name}} ({{student.class}}) has been absent for {{days}} consecutive days. Please contact the school office."},
+    fAct:{channels:["wa"], fallback:"sms", tmpl:"Dear parent, your ward {{student.name}} ({{student.class}}) is absent today."}};
+}
+function newAgent(tpl){
+  state.editing=null;
+  state.draft=mkDraft(tpl);
+  go('builder');
+}
+function editAgent(i){state.editing=i;state.draft=JSON.parse(JSON.stringify(state.agents[i].cfg));state.draft.name=state.agents[i].name;go('builder');}
+
+/* ---- WORKFLOW AGENTS: BUILDER ---- */
+function chanBoxes(act,who){
+  return ["wa","sms","email"].map(c=>{
+    const conn=state.channels[c].on, checked=state.draft[act].channels.includes(c);
+    return `<label class="chan ${conn?'':'dis'}">
+      <input type="checkbox" ${checked?'checked':''} ${conn?'':'disabled'} onchange="chanToggle('${act}','${c}',this.checked)">
+      ${CHAN_LABEL[c]}
+      <span class="st" style="color:${conn?'#067A5B':'var(--red)'}">${conn?(checked&&state.draft[act].channels[0]===c?'PRIMARY':'Connected'):'Connect in Settings'}</span>
+    </label>`;
+  }).join("");
+}
+function chanToggle(act,c,on){
+  const arr=state.draft[act].channels;
+  if(on&&!arr.includes(c))arr.push(c);
+  if(!on)state.draft[act].channels=arr.filter(x=>x!==c);
+  if(!state.draft[act].channels.length){state.draft[act].channels=[c];toast("At least one channel is required for a message step");}
+  go('builder');
+}
+function dset(path,val){ // tiny setter: "cond.val" etc.
+  const p=path.split("."); let o=state.draft;
+  while(p.length>1)o=o[p.shift()];
+  o[p[0]]=val;
+}
+PAGES.builder=()=>{
+  const d = state.draft || (state.draft = mkDraft());
+  const chIcons=a=>a.channels.map(c=>CHAN_LABEL[c].split(" ")[0]).join("");
+  return `
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+    <input type="text" value="${d.name}" onchange="dset('name',this.value)" style="font-size:17px;font-weight:700;color:var(--ink);border:none;background:transparent;border-bottom:2px dashed var(--line);padding:4px 2px;min-width:280px;font-family:var(--font)">
+    <span class="pill warn">Draft</span><span class="spacer"></span>
+    <button class="btn btn-ghost" onclick="testAgent()">▶ Test run (dry — sends nothing)</button>
+    <button class="btn btn-ghost" onclick="go('agents')">Cancel</button>
+    <button class="btn btn-primary" onclick="publishAgent()">🚀 ${state.editing===null?'Publish agent':'Publish changes'}</button>
+  </div>
+  <div class="wf-grid">
+    <div><!-- LEFT: step configuration -->
+      <div class="card wf-step"><h4><span class="dot" style="background:${MINT}"></span>TRIGGER — when does it run?</h4>
+        <div class="wf-inline">
+          <select onchange="dset('schedule',this.value)">
+            ${["Every school day · 10:30","Every day · 8:00","Every Monday · 9:00","1st of month · 9:00","Every hour (school hours)"].map(o=>`<option ${d.schedule===o?'selected':''}>${o}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="card wf-step"><h4><span class="dot" style="background:${TEAL}"></span>DATA — who does it apply to?</h4>
+        <select onchange="dset('source',this.value)">${Object.entries(SOURCES).map(([k,v])=>`<option value="${k}" ${d.source===k?'selected':''}>${v}</option>`).join("")}</select>
+        <label class="chan" style="margin-top:8px"><input type="checkbox" ${d.dedup?'checked':''} onchange="dset('dedup',this.checked)"> 🔁 Skip records already messaged today (dedup)</label>
+        <div style="font-size:11px;color:var(--sea);margin-top:6px">Live preview on replica: <b>${matchedNow().length} records match right now</b> in ${selNames()}</div>
+      </div>
+      <div class="card wf-step"><h4><span class="dot" style="background:${AMBER}"></span>CONDITION — branch the flow (if / else)</h4>
+        <label class="chan"><input type="checkbox" ${d.cond.on?'checked':''} onchange="dset('cond.on',this.checked);go('builder')"> ◇ Add an IF / ELSE branch</label>
+        ${d.cond.on?`<div class="wf-inline" style="margin-top:8px">
+          <select onchange="dset('cond.field',this.value)">${["consecutive_days","days_overdue","attendance_percent","pending_amount"].map(f=>`<option ${d.cond.field===f?'selected':''}>${f}</option>`).join("")}</select>
+          <select style="max-width:70px" onchange="dset('cond.op',this.value)">${[">=","<=","=",">","<"].map(o=>`<option ${d.cond.op===o?'selected':''}>${o}</option>`).join("")}</select>
+          <input type="number" style="max-width:80px" value="${d.cond.val}" onchange="dset('cond.val',Number(this.value))">
+        </div>`:""}
+      </div>
+      ${d.cond.on?`<div class="card wf-step" style="border-left:4px solid #067A5B"><h4><span class="dot" style="background:#067A5B"></span>ACTION — ✓ TRUE branch</h4>
+        ${chanBoxes('tAct')}
+        <label class="chan"><input type="checkbox" ${d.tAct.staff?'checked':''} onchange="dset('tAct.staff',this.checked)"> 👤 Also notify class teacher</label>
+        <textarea onchange="dset('tAct.tmpl',this.value)">${d.tAct.tmpl}</textarea>
+        <div style="font-size:10.5px;color:var(--teal);margin-top:4px">Variables: {{student.name}} · {{student.class}} · {{parent.phone}} · {{days}}</div>
+      </div>`:""}
+      <div class="card wf-step" style="border-left:4px solid ${d.cond.on?'var(--red)':'var(--teal)'}"><h4><span class="dot" style="background:${d.cond.on?'#E05252':TEAL}"></span>ACTION — ${d.cond.on?'✗ FALSE branch':'for every matched record'}</h4>
+        ${chanBoxes('fAct')}
+        <div class="wf-inline" style="margin-top:6px;align-items:center">
+          <span style="flex:0 0 auto;font-size:12px">If delivery fails, fall back to:</span>
+          <select onchange="dset('fAct.fallback',this.value)">${[["","No fallback"],["sms","💬 SMS"],["email","✉️ Email"]].map(([v,l])=>`<option value="${v}" ${d.fAct.fallback===v?'selected':''}>${l}</option>`).join("")}</select>
+        </div>
+        <textarea onchange="dset('fAct.tmpl',this.value)">${d.fAct.tmpl}</textarea>
+        <div style="font-size:10.5px;color:var(--teal);margin-top:4px">Variables: {{student.name}} · {{student.class}} · {{parent.phone}}</div>
+      </div>
+      <div class="card wf-step" style="background:var(--chip);border-color:var(--sea)"><h4>🤖 Describe your workflow (AI drafts the flow)</h4>
+        <div class="wf-inline"><input type="text" id="aiWf" placeholder="e.g. if fee pending > 60 days, WhatsApp parent every Monday…">
+        <button class="btn btn-primary" style="flex:0 0 auto" onclick="aiDraft()">Draft it</button></div>
+      </div>
+    </div>
+    <div><!-- RIGHT: flowchart preview + test results -->
+      <div class="card wf-canvas">
+        <h3 style="font-size:13px;margin-bottom:14px">Flow preview <span style="font-weight:400;color:var(--muted);font-size:11px">· updates live as you configure</span></h3>
+        <div style="max-width:420px;margin:0 auto">
+          <div class="wf-node" style="border-left-color:${MINT}">⏰ ${d.schedule}</div>
+          <div class="wf-line"></div>
+          <div class="wf-node" id="n-fetch">🔍 ${SOURCES[d.source]}<small>runs on read replica · ${selNames()}</small></div>
+          ${d.dedup?`<div class="wf-line"></div><div class="wf-node" style="border-left-color:${SEA}">🔁 Skip if already notified today</div>`:""}
+          ${d.cond.on?`
+          <div class="wf-line"></div>
+          <div class="wf-node" style="border-left-color:${AMBER}" id="n-cond">◇ ${d.cond.field} ${d.cond.op} ${d.cond.val} ?</div>
+          <div class="wf-line"></div>
+          <div class="wf-branches">
+            <div><div class="wf-blabel" style="color:#067A5B">✓ TRUE</div>
+              <div class="wf-node" style="border-left-color:#067A5B" id="n-true">${d.tAct.channels.map(c=>CHAN_LABEL[c].split(" ")[0]).join("")} Send message${d.tAct.staff?'<small>👤 + notify class teacher</small>':''}</div>
+              <div class="wf-line"></div><div class="wf-node" style="border-left-color:#6B7C86">● End</div></div>
+            <div><div class="wf-blabel" style="color:var(--red)">✗ FALSE</div>
+              <div class="wf-node" style="border-left-color:${TEAL}" id="n-false">${d.fAct.channels.map(c=>CHAN_LABEL[c].split(" ")[0]).join("")} Send message${d.fAct.fallback?'<small>◇ failed? → '+CHAN_LABEL[d.fAct.fallback]+' fallback</small>':''}</div>
+              <div class="wf-line"></div><div class="wf-node" style="border-left-color:#6B7C86">● End</div></div>
+          </div>`
+          :`<div class="wf-line"></div>
+            <div class="wf-node" style="border-left-color:${TEAL}" id="n-false">${d.fAct.channels.map(c=>CHAN_LABEL[c].split(" ")[0]).join("")} Send message${d.fAct.fallback?'<small>◇ failed? → '+CHAN_LABEL[d.fAct.fallback]+' fallback</small>':''}</div>
+            <div class="wf-line"></div><div class="wf-node" style="border-left-color:#6B7C86">● End</div>`}
+        </div>
+      </div>
+      <div id="testout"></div>
+    </div>
+  </div>`;
+};
+function matchedNow(){return ABSENT.filter(r=>state.sel.includes(r.school));}
+function render(t,r){return t.replace("{{student.name}}",r.n).replace("{{student.class}}",r.cls).replace("{{parent.phone}}",r.phone).replace("{{days}}",r.days).replace("{{fee.pending_amount}}","₹12,400");}
+function testAgent(){
+  const d=state.draft, rows=matchedNow();
+  const tRows=d.cond.on?rows.filter(r=>{const v=r.days;return d.cond.op===">="?v>=d.cond.val:d.cond.op==="<="?v<=d.cond.val:d.cond.op===">"?v>d.cond.val:d.cond.op==="<"?v<d.cond.val:v===d.cond.val;}):[];
+  const fRows=d.cond.on?rows.filter(r=>!tRows.includes(r)):rows;
+  const badge=(id,txt)=>{const n=document.getElementById(id);if(n&&!n.querySelector(".cnt")){const b=document.createElement("span");b.className="cnt";b.textContent=txt;n.appendChild(b);}};
+  badge("n-fetch",rows.length+" rows");
+  if(d.cond.on){badge("n-cond",tRows.length+" ✓ / "+fRows.length+" ✗");badge("n-true",tRows.length+" msgs");}
+  badge("n-false",fRows.length+" msgs");
+  const prev=(r,act)=>`<div class="msg-preview"><b>${act.channels.map(c=>CHAN_LABEL[c]).join(" + ")}</b> → ${r.phone} (${r.n}, ${SCHOOLS[r.school].name})<br>“${render(act.tmpl,r)}”</div>`;
+  document.getElementById("testout").innerHTML=`
+    <div class="card panel" style="margin-top:16px">
+      <h3>✅ Dry run complete — nothing was sent</h3>
+      <div style="font-size:12.5px;color:var(--slate);margin-bottom:6px">
+        <b>${rows.length}</b> records matched in ${selNames()}${d.cond.on?` · <b style="color:#067A5B">${tRows.length}</b> took the TRUE branch · <b style="color:var(--red)">${fRows.length}</b> took FALSE`:""}.
+        Quiet hours & daily caps verified ✓ · dedup keys generated ✓
+      </div>
+      ${d.cond.on&&tRows[0]?prev(tRows[0],d.tAct):""}
+      ${fRows[0]?prev(fRows[0],d.fAct):""}
+      ${fRows[1]?prev(fRows[1],d.fAct):""}
+      <div class="actions"><button class="btn btn-ghost" onclick="toast('All test messages redirected to YOUR phone/email (demo)')">Send test to my phone instead</button></div>
+    </div>`;
+  toast("Dry run: "+rows.length+" records evaluated, 0 messages sent");
+}
+function aiDraft(){
+  const q=document.getElementById("aiWf").value.trim();
+  if(state.ai!=="active"){toast("AI drafting needs the trust's AI key — enable it in Settings");return;}
+  if(!q){toast("Describe the workflow first, e.g. “if fee pending > 60 days, WhatsApp parent”");return;}
+  const d=state.draft;
+  if(/fee|pending|due/i.test(q)){d.name="Fee Follow-up (AI draft)";d.source="fees_overdue_30";d.cond={on:true,field:"days_overdue",op:">=",val:60};}
+  else if(/attend|absent/i.test(q)){d.name="Attendance Watch (AI draft)";d.source="students_absent_today";d.cond={on:true,field:"consecutive_days",op:">=",val:3};}
+  if(/whatsapp/i.test(q)&&!d.fAct.channels.includes("wa"))d.fAct.channels.push("wa");
+  if(/sms/i.test(q)&&!d.fAct.channels.includes("sms"))d.fAct.channels.push("sms");
+  go('builder');toast("AI drafted the flow from your description — review and publish");
+}
+function publishAgent(){
+  const d=state.draft;
+  const usesDisconnected=[...d.tAct.channels,...d.fAct.channels].some(c=>!state.channels[c].on);
+  if(usesDisconnected){toast("A message step uses a channel that isn't connected — fix in Settings › Messaging");return;}
+  if(state.editing!==null){const a=state.agents[state.editing];a.name=d.name;a.cfg=d;toast("Published new version — running agents switch at the next tick");}
+  else{state.agents.unshift({name:d.name,on:true,runsWeek:0,lastRun:"— will run at "+d.schedule.split("·")[1].trim(),cfg:d});toast("Agent published & active — dedup, quiet hours and caps applied automatically");}
+  state.editing=null;state.draft=null;go('agents');
+}
+
+
+/* ---- CUSTOM REPORTS: definitions, logic, clone, edit ---- */
+const RSOURCES={
+  fee_by_class:{label:"Fees — collection by class", charts:["bar","line","donut"], classFilter:true},
+  outstanding_by_school:{label:"Fees — outstanding by school", charts:["bar","donut"], classFilter:false},
+  strength_by_school:{label:"Students — strength by school & gender", charts:["bar","donut"], classFilter:false},
+  attendance_trend:{label:"Attendance — monthly trend by school", charts:["line"], classFilter:false}
+};
+function genSQL(cfg){
+  const scope="school_id IN ("+state.sel.map(s=>"'"+s+"'").join(", ")+")";
+  if(cfg.drill){
+    return "-- LEVEL 1 (High): monthly collection\nSELECT month, SUM(amount_paid) AS collected\nFROM fee_payments\nWHERE ay='2026-27' AND "+scope+"\nGROUP BY month ORDER BY month;\n\n-- LEVEL 2 (Mid): class-wise for the CLICKED month (bound parameter)\nSELECT class, SUM(amount_paid) AS collected\nFROM fee_payments\nWHERE ay='2026-27' AND "+scope+"\n  AND month = :clicked_month\nGROUP BY class ORDER BY class;\n\n-- LEVEL 3 (Low): fee-type for the CLICKED class\nSELECT fee_type, SUM(amount_paid) AS collected\nFROM fee_payments\nWHERE ay='2026-27' AND "+scope+"\n  AND month = :clicked_month AND class = :clicked_class\nGROUP BY fee_type ORDER BY collected DESC;";
+  }
+  switch(cfg.source){
+    case "fee_by_class": return "SELECT class, SUM(amount_paid) AS collected\nFROM fee_payments\nWHERE ay = '2026-27'\n  AND "+scope+"\n  AND class BETWEEN "+(cfg.classFrom+5)+" AND "+(cfg.classTo+5)+"\nGROUP BY class ORDER BY class;";
+    case "outstanding_by_school": return "SELECT school_id, SUM(pending_amount) AS outstanding\nFROM fee_dues\nWHERE ay = '2026-27' AND pending_amount > 0\n  AND "+scope+"\nGROUP BY school_id ORDER BY outstanding DESC;";
+    case "strength_by_school": return "SELECT school_id, gender, COUNT(*) AS students\nFROM students\nWHERE status = 'active'\n  AND "+scope+"\nGROUP BY school_id, gender;";
+    case "attendance_trend": return "SELECT school_id, MONTH(att_date) AS month,\n       ROUND(AVG(present)*100, 1) AS attendance_pct\nFROM attendance_daily\nWHERE ay = '2026-27'\n  AND "+scope+"\nGROUP BY school_id, month ORDER BY month;";
+  }
+}
+function logicPanel(cfg, idPrefix){
+  const src=RSOURCES[cfg.source];
+  const filters=(src.classFilter?("Class "+CLASS_LABELS[cfg.classFrom].replace("Cls ","")+"–"+CLASS_LABELS[cfg.classTo].replace("Cls ","")+" · "):"")+"AY 2026–27";
+  return `<div class="card panel" id="${idPrefix}-logic" style="display:none;margin-top:16px">
+    <h3>🧠 Report logic — how this is calculated</h3>
+    <div class="logic-row"><b>Source</b><span>${src.label}</span></div>
+    <div class="logic-row"><b>Scope</b><span>${selNames()} (injected from your login token — cannot be widened)</span></div>
+    <div class="logic-row"><b>Filters</b><span>${filters}</span></div>
+    <div class="logic-row"><b>Chart</b><span>${cfg.chart} · runs on read replica · SELECT-only validated</span></div>
+    <div class="sql">${genSQL(cfg)}</div>
+    <p style="font-size:11px;color:var(--muted);margin-top:8px">This panel appears on every report — predefined, AI-generated and custom — and can be printed as a PDF appendix.</p>
+  </div>`;
+}
+function toggleLogic(idPrefix){const p=document.getElementById(idPrefix+"-logic");p.style.display=p.style.display==="none"?"block":"none";}
+function reportData(cfg){
+  const names=state.sel.map(s=>SCHOOLS[s].name.replace("Sunrise ",""));
+  switch(cfg.source){
+    case "fee_by_class":{
+      const labels=CLASS_LABELS.slice(cfg.classFrom,cfg.classTo+1);
+      const data=labels.map((_,i)=>+(state.sel.reduce((a,s)=>a+SCHOOLS[s].classes[cfg.classFrom+i],0)).toFixed(1));
+      return {labels,sets:[{label:"Collected ₹L",data,backgroundColor:TEAL,borderColor:TEAL}]};}
+    case "outstanding_by_school":
+      return {labels:names,sets:[{label:"Outstanding ₹L",data:state.sel.map(s=>SCHOOLS[s].outstanding),backgroundColor:AMBER,borderColor:AMBER}]};
+    case "strength_by_school":
+      return {labels:names,sets:[{label:"Boys",data:state.sel.map(s=>SCHOOLS[s].boys),backgroundColor:TEAL},{label:"Girls",data:state.sel.map(s=>SCHOOLS[s].girls),backgroundColor:AMBER}]};
+    case "attendance_trend":{
+      const colors={delhi:TEAL,noida:AMBER,ggn:SEA};
+      return {labels:MONTH_LABELS,sets:state.sel.map(s=>({label:SCHOOLS[s].name.replace("Sunrise ",""),data:SCHOOLS[s].months,borderColor:colors[s],backgroundColor:colors[s]}))};}
+  }
+}
+function drawReport(cfg, canvasId){
+  const d=reportData(cfg), ctx=document.getElementById(canvasId);
+  if(cfg.chart==="line") line(ctx,d.labels,d.sets, cfg.source==="attendance_trend"?86:undefined, cfg.source==="attendance_trend"?96:undefined);
+  else if(cfg.chart==="donut"){
+    const vals=d.sets.length>1?d.labels.map((_,i)=>d.sets.reduce((a,s2)=>a+s2.data[i],0)):d.sets[0].data;
+    donut(ctx,d.labels,vals,[TEAL,SEA,MINT,AMBER,"#7FB8C4","#B27E22","#557E86","#9DB8BF"]);
+  } else bar(ctx,d.labels,d.sets);
+}
+function cloneReport(cfg, base){
+  state.editIdx=null;
+  state.draftR=Object.assign({}, cfg, {name:(cfg.name||base)+" (my copy)", base:base||cfg.name});
+  go('reportEdit'); toast("Cloned — the original stays untouched; edit and save under your own name");
+}
+function viewReport(i){state.viewIdx=i;go('report');}
+function editReport(i){state.editIdx=i;state.draftR=Object.assign({},state.customReports[i].cfg,{base:state.customReports[i].base});go('reportEdit');}
+function saveCustom(){
+  const d=state.draftR, entry={t:d.name, d:new Date().toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}), scope:selNames(), base:d.base||"—", cfg:{name:d.name,source:d.source,chart:d.chart,classFrom:d.classFrom??4,classTo:d.classTo??7,drill:!!d.drill,l1c:d.l1c,l2c:d.l2c,l3c:d.l3c}};
+  if(state.editIdx!==null){entry.v=(state.customReports[state.editIdx].v||1)+1;state.customReports[state.editIdx]=entry;toast("Saved as version "+entry.v+" — one-click rollback available");}
+  else {entry.v=1;state.customReports.unshift(entry);toast("Saved to My Reports — re-runs with fresh data on every open");}
+  state.draftR=null;state.editIdx=null;go('reports');
+}
+
+/* ---- CUSTOM REPORT: VIEW ---- */
+PAGES.report=()=>{
+  const r=state.customReports[state.viewIdx]; if(!r)return PAGES.reports();
+  return `
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <div style="flex:1"><h1 class="page-title">${r.t}</h1>
+    <div class="page-sub">Custom report · v${r.v} · cloned from ${r.base} · ${r.scope} · re-run just now with fresh data</div></div>
+    <button class="btn btn-ghost" onclick="toggleLogic('vr')">🧠 View logic</button>
+    <button class="btn btn-secondary" onclick="cloneReport(state.customReports[state.viewIdx].cfg, state.customReports[state.viewIdx].t)">⧉ Clone</button>
+    <button class="btn btn-secondary" onclick="editReport(state.viewIdx)">✎ Edit</button>
+    <button class="btn btn-primary" onclick="toast('PDF with logic appendix would download (demo)')">⬇ PDF</button>
+  </div>
+  <div class="card panel" style="margin-top:14px">${r.cfg.drill?'<h3>Drill-down report <span class="dd-chip" style="margin-left:6px">month → class → fee type</span></h3><div id="vr-dd-wrap"></div>':'<div class="chartbox tall"><canvas id="vr-chart"></canvas></div>'}</div>
+  ${logicPanel(r.cfg,'vr')}`;
+};
+AFTER.report=()=>{const r=state.customReports[state.viewIdx];if(!r)return;
+  if(r.cfg.drill)renderDrill("vr-dd",{title:r.t,l1c:r.cfg.l1c,l2c:r.cfg.l2c,l3c:r.cfg.l3c});
+  else drawReport(r.cfg,"vr-chart");};
+
+/* ---- CUSTOM REPORT: EDIT (logic always on display) ---- */
+PAGES.reportEdit=()=>{
+  const d=state.draftR||(state.draftR={name:"New custom report",source:"fee_by_class",chart:"bar",classFrom:4,classTo:7,base:"—"});
+  const src=RSOURCES[d.source];
+  return `
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+    <input type="text" value="${d.name}" onchange="state.draftR.name=this.value" style="font-size:17px;font-weight:700;color:var(--ink);border:none;background:transparent;border-bottom:2px dashed var(--line);padding:4px 2px;min-width:300px;font-family:var(--font)">
+    <span class="pill warn">${state.editIdx!==null?'Editing v'+(state.customReports[state.editIdx].v||1):'New clone'}</span>
+    <span style="font-size:11.5px;color:var(--muted)">cloned from: ${d.base}</span><span class="spacer"></span>
+    <button class="btn btn-ghost" onclick="state.draftR=null;state.editIdx=null;go('reports')">Cancel</button>
+    <button class="btn btn-primary" onclick="saveCustom()">💾 Save as my report</button>
+  </div>
+  <div class="wf-grid">
+    <div>
+      <div class="card wf-step"><h4><span class="dot" style="background:${TEAL}"></span>REPORT LOGIC — visual editor</h4>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Data source</div>
+        <select onchange="rset('source',this.value)">${Object.entries(RSOURCES).map(([k,v])=>`<option value="${k}" ${d.source===k?'selected':''}>${v.label}</option>`).join("")}</select>
+        ${src.classFilter?`<div style="font-size:11px;color:var(--muted);margin:10px 0 2px">Filter — class range</div>
+        <div class="wf-inline">
+          <select onchange="rset('classFrom',+this.value)">${CLASS_LABELS.map((c,i)=>`<option value="${i}" ${d.classFrom===i?'selected':''}>${c}</option>`).join("")}</select>
+          <select onchange="rset('classTo',+this.value)">${CLASS_LABELS.map((c,i)=>`<option value="${i}" ${d.classTo===i?'selected':''}>${c}</option>`).join("")}</select>
+        </div>`:""}
+        <div style="font-size:11px;color:var(--muted);margin:10px 0 4px">Report type</div>
+        <div class="wf-inline">
+          <label class="chan" style="margin-top:0"><input type="radio" name="rt" ${!d.drill?'checked':''} onchange="rset('drill',false)"> Simple report</label>
+          <label class="chan ${d.source==='fee_by_class'?'':'dis'}" style="margin-top:0"><input type="radio" name="rt" ${d.drill?'checked':''} ${d.source==='fee_by_class'?'':'disabled'} onchange="rset('drill',true)"> ⌄ Drill-down (3 levels)</label>
+        </div>
+        ${d.source!=='fee_by_class'?'<div style="font-size:10px;color:var(--muted);margin-top:4px">Drill paths for this source arrive with the hierarchy catalog — Fees is enabled in this demo.</div>':''}
+        ${d.drill?`
+        <div style="font-size:11px;color:var(--muted);margin:10px 0 2px">Drill path (hierarchy catalog — clicked values become bound filters)</div>
+        <div class="wf-inline" style="margin-top:4px"><span style="flex:0 0 92px;font-size:12px;font-weight:700;color:#067A5B">L1 · High</span>
+          <select disabled><option>Month</option></select>
+          <select onchange="rset('l1c',this.value)">${["bar","line"].map(c=>`<option ${d.l1c===c?'selected':''}>${c}</option>`).join("")}</select></div>
+        <div class="wf-inline" style="margin-top:6px"><span style="flex:0 0 92px;font-size:12px;font-weight:700;color:var(--teal)">L2 · Mid</span>
+          <select disabled><option>Class</option></select>
+          <select onchange="rset('l2c',this.value)">${["bar","line"].map(c=>`<option ${d.l2c===c?'selected':''}>${c}</option>`).join("")}</select></div>
+        <div class="wf-inline" style="margin-top:6px"><span style="flex:0 0 92px;font-size:12px;font-weight:700;color:#8A5A0B">L3 · Low</span>
+          <select disabled><option>Fee type</option></select>
+          <select onchange="rset('l3c',this.value)">${["donut","bar"].map(c=>`<option ${d.l3c===c?'selected':''}>${c}</option>`).join("")}</select></div>`
+        :`<div style="font-size:11px;color:var(--muted);margin:10px 0 4px">Chart type</div>
+        <div class="wf-inline">${src.charts.map(c=>`<label class="chan" style="margin-top:0"><input type="radio" name="ct" ${d.chart===c?'checked':''} onchange="rset('chart','${c}')"> ${c==="bar"?"📊 Bar":c==="line"?"📈 Line":"🍩 Donut"}</label>`).join("")}</div>`}
+        <label class="chan" style="margin-top:10px"><input type="checkbox" checked disabled> Scope: ${selNames()} — injected from your token, not editable</label>
+      </div>
+      <div class="card wf-step"><h4><span class="dot" style="background:#0B2B31"></span>GENERATED SQL — regenerates live as you edit</h4>
+        <div class="sql">${genSQL(d)}</div>
+        <div style="font-size:10.5px;color:var(--muted);margin-top:6px">SELECT-only · AST-validated · runs on read replicas · row & time capped. Advanced users can unlock and hand-edit (same guardrails).</div>
+      </div>
+      <div class="card wf-step" style="background:var(--chip);border-color:var(--sea)"><h4>✨ Modify with AI</h4>
+        <div class="wf-inline"><input type="text" id="aiRep" placeholder="e.g. make it a donut of classes 9–12 only">
+        <button class="btn btn-primary" style="flex:0 0 auto" onclick="aiEditReport()">Apply</button></div>
+      </div>
+    </div>
+    <div>
+      <div class="card panel"><h3>Live preview <span style="font-weight:400;color:var(--muted);font-size:11px">· sample data · ${selNames()}${d.drill?' · <b style="color:var(--teal)">click through all 3 levels</b>':''}</span></h3>
+      ${d.drill?'<div id="re-dd-wrap"></div>':'<div class="chartbox tall"><canvas id="re-chart"></canvas></div>'}</div>
+    </div>
+  </div>`;
+};
+AFTER.reportEdit=()=>{const d=state.draftR;if(!d)return;
+  if(d.drill)renderDrill("re-dd",{title:d.name,l1c:d.l1c,l2c:d.l2c,l3c:d.l3c});
+  else drawReport(d,"re-chart");};
+function rset(k,v){state.draftR[k]=v;
+  if(k==='drill'&&v){const d=state.draftR;d.l1c=d.l1c||'bar';d.l2c=d.l2c||'bar';d.l3c=d.l3c||'donut';}
+  if(k==='source'&&v!=='fee_by_class')state.draftR.drill=false;
+  go('reportEdit');}
+function aiEditReport(){
+  if(state.ai!=="active"){toast("AI editing needs the trust's AI key — enable it in Settings");return;}
+  const q=(document.getElementById("aiRep").value||"").toLowerCase(); const d=state.draftR;
+  if(!q){toast("Describe the change first");return;}
+  if(q.includes("donut")||q.includes("pie"))d.chart="donut";
+  if(q.includes("line")||q.includes("trend"))d.chart=RSOURCES[d.source].charts.includes("line")?"line":d.chart;
+  if(q.includes("bar"))d.chart="bar";
+  const m=q.match(/(\d+)\s*(?:–|-|to)\s*(\d+)/); if(m&&RSOURCES[d.source].classFilter){d.classFrom=Math.max(0,+m[1]-5);d.classTo=Math.min(7,+m[2]-5);}
+  if(q.includes("attendance"))d.source="attendance_trend",d.chart="line";
+  if(q.includes("strength")||q.includes("gender"))d.source="strength_by_school",d.chart=RSOURCES[d.source].charts.includes(d.chart)?d.chart:"bar";
+  if(q.includes("outstanding")||q.includes("pending"))d.source="outstanding_by_school",d.chart=RSOURCES[d.source].charts.includes(d.chart)?d.chart:"bar";
+  go('reportEdit'); toast("AI updated the report definition — the logic panel and SQL show exactly what changed");
+}
+
+PAGES.reports=()=>`
+  <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:4px">
+    <div style="flex:1"><h1 class="page-title">My Reports</h1>
+    <div class="page-sub">Custom reports (clones you own — logic always visible) and saved AI snapshots · all re-run with fresh data</div></div>
+    <button class="btn btn-primary" onclick="state.editIdx=null;state.draftR=null;go('reportEdit')">＋ New custom report</button>
+  </div>
+  <div class="card panel"><h3>Custom reports</h3>
+  ${state.customReports.length?`<table>
+    <thead><tr><th>Report</th><th>Cloned from</th><th>Scope</th><th>Version</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+    ${state.customReports.map((r,i)=>`<tr><td><b>${r.t}</b> <span class="typebadge tb-custom">CUSTOM</span></td><td>${r.base}</td><td>${r.scope}</td><td>v${r.v} · ${r.d}</td>
+      <td style="text-align:right"><button class="chipbtn" onclick="viewReport(${i})">View</button>
+      <button class="chipbtn" onclick="editReport(${i})">Edit</button>
+      <button class="chipbtn" onclick="cloneReport(state.customReports[${i}].cfg, state.customReports[${i}].t)">⧉ Clone</button>
+      <button class="chipbtn" onclick="toast('PDF with logic appendix (demo)')">PDF</button></td></tr>`).join("")}
+    </tbody></table>`:`<div style="font-size:13px;color:var(--muted)">No custom reports yet — open any dashboard or AI report and tap <b>⧉ Clone</b>.</div>`}
+  </div>
+  <div class="card panel" style="margin-top:16px"><h3>AI report snapshots</h3>
+  ${state.savedReports.length?`<table>
+    <thead><tr><th>Report</th><th>School scope</th><th>Saved</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+    ${state.savedReports.map((r,i)=>`<tr><td><b>${r.t}</b> <span class="typebadge tb-ai">AI</span></td><td>${r.scope}</td><td>${r.d}</td>
+      <td style="text-align:right"><button class="chipbtn" onclick="go('ai')">Re-run</button>
+      <button class="chipbtn" onclick="toast('PDF (demo)')">PDF</button></td></tr>`).join("")}
+    </tbody></table>`:`<div style="font-size:13px;color:var(--muted)">Ask the AI a question, then tap “Save report” — it appears here, and can be cloned into a custom report from its artifact.</div>`}
+  </div>`;
+
+/* ---- SETTINGS ---- */
+PAGES.settings=()=>`
+  <div class="wiz">
+  <div class="statusbar">
+    <div><h1 class="page-title">AI Configuration — Sunrise Trust</h1>
+    <div class="page-sub" style="margin:0">One key unlocks AI reports for all ${Object.keys(SCHOOLS).length} schools & every user</div></div>
+    <div class="statuschip ${state.ai==='active'?'st-on':'st-off'}" id="stchip">${state.ai==='active'?'● Active':'● Not configured'}</div>
+  </div>
+
+  <div class="card steprow"><div class="n" style="background:${TEAL}">1</div><div class="body">
+    <h3>Create the trust's Anthropic account</h3>
+    <p><b style="color:${TEAL}">console.anthropic.com</b> → sign up free → <b>Billing</b>: add a card or prepaid credits
+    (even $5 ≈ hundreds of reports) → <b>API Keys</b> → Create Key → copy it — it's shown only once and starts with <code>sk-ant-…</code></p>
+    <div class="keyrow"><button class="btn btn-secondary" onclick="toast('Would open console.anthropic.com in a new tab')">Open Anthropic Console ↗</button>
+    <button class="btn btn-ghost" onclick="toast('Illustrated one-page setup guide (PDF) — demo')">📄 PDF guide</button></div>
+  </div></div>
+
+  <div class="card steprow"><div class="n" style="background:${SEA}">2</div><div class="body">
+    <h3>Connect the key to this dashboard</h3>
+    <div class="keyrow">
+      <input id="apikey" placeholder="sk-ant-…" value="${state.ai==='active'?'sk-ant-••••••••••••••••1G4a':''}" ${state.ai==='active'?'disabled':''}>
+      <button class="btn btn-primary" id="testbtn" onclick="testKey()" ${state.ai==='active'?'disabled':''}>Test & Save Connection</button>
+    </div>
+    <div class="radio">
+      <label><input type="radio" name="model" checked> Economical — Haiku</label>
+      <label><input type="radio" name="model"> Best quality — Sonnet</label>
+      <label style="margin-left:auto">Monthly cap <input style="width:70px;border:1px solid var(--line);border-radius:6px;padding:4px 8px" value="1500"> queries</label>
+    </div>
+    <div class="verify" id="verify"><span style="font-size:20px">✅</span> Key valid · model reachable · <b style="color:#067A5B">AI Reports UNLOCKED for all schools & users 🎉</b></div>
+  </div></div>
+
+  <div class="card steprow"><div class="n" style="background:${MINT}">3</div><div class="body">
+    <h3>Usage & control ${state.ai!=='active'?'<span style="font-weight:400;color:var(--muted)">· appears after activation</span>':''}</h3>
+    <div class="usage ${state.ai==='active'?'show':''}">
+      <table><thead><tr><th>School</th><th>AI queries this month</th><th>Est. cost</th></tr></thead><tbody>
+        <tr><td>Sunrise Delhi</td><td>48</td><td>₹96</td></tr>
+        <tr><td>Sunrise Noida</td><td>61</td><td>₹122</td></tr>
+        <tr><td>Sunrise Gurgaon</td><td>23</td><td>₹46</td></tr>
+      </tbody></table>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn btn-ghost" onclick="toast('Key replacement flow (demo)')">Replace key</button>
+        <button class="btn btn-ghost" onclick="disableAI()">Disable AI</button>
+      </div>
+    </div>
+    ${state.ai!=='active'?'<p>Once active: per-school usage meter, estimated cost, replace-key and disable controls. If the key is revoked or credit runs out, chat auto-locks with a fix-it banner — dashboards keep working.</p>':''}
+  </div></div>
+
+  <p style="font-size:11.5px;color:var(--muted)">Key stored AES-256 encrypted · masked after save · never logged · revocable anytime from the Anthropic Console.</p>
+
+  <div class="statusbar" style="margin-top:30px">
+    <div><h1 class="page-title" style="font-size:18px">Messaging Channels — configured by your school</h1>
+    <div class="page-sub" style="margin:0">Workflow-agent message steps can only use channels connected here</div></div>
+  </div>
+  <div class="card" style="padding:16px 18px">
+    ${Object.entries(state.channels).map(([k,c])=>`
+      <div class="prov-row">
+        <span style="font-size:18px">${c.ic}</span>
+        <div><b>${c.name}</b><div class="sub">${c.sub}</div></div>
+        <div class="right">
+          <span class="pill ${c.on?'ok':'bad'}">${c.on?'● Connected':'Not connected'}</span>
+          <button class="btn ${c.on?'btn-ghost':'btn-primary'}" onclick="toggleChannel('${k}')">${c.on?'Disconnect':'Connect'}</button>
+        </div>
+      </div>`).join("")}
+    <p style="font-size:11.5px;color:var(--muted);margin-top:12px">India compliance: SMS requires DLT-registered sender & approved templates; WhatsApp requires BSP/WABA-approved templates. Manage them in the <b>Template Manager</b> — message steps pick from approved templates only.</p>
+  </div>
+  </div>`;
+
+function toggleChannel(k){
+  const c=state.channels[k];
+  if(c.on){c.on=false;toast(c.name+" disconnected — agent steps using it are flagged until reconnected or edited");}
+  else{c.on=true;toast(c.name+" connected — now selectable in every message step");}
+  go('settings');
+}
+
+function testKey(){
+  const k=document.getElementById("apikey").value.trim();
+  if(!k.startsWith("sk-ant-")||k.length<12){toast("Enter a key starting with sk-ant-  (any demo value works, e.g. sk-ant-demo12345)");return;}
+  const btn=document.getElementById("testbtn");btn.disabled=true;btn.textContent="Testing…";
+  setTimeout(()=>{
+    state.ai="active";
+    document.getElementById("verify").classList.add("show");
+    document.getElementById("stchip").className="statuschip st-on";
+    document.getElementById("stchip").textContent="● Active";
+    document.getElementById("navlock").textContent="";
+    toast("AI unlocked for every user — pushed live over WebSocket, no re-login");
+    setTimeout(()=>go('settings'),900);
+  },1400);
+}
+function disableAI(){state.ai="not_configured";document.getElementById("navlock").textContent="🔒";toast("AI disabled — chat locked, dashboards unaffected");go('settings');}
+</script>
+</body>
+</html>

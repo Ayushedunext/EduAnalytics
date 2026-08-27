@@ -76,6 +76,32 @@ describe('a cache entry can only be reached by an identical request', () => {
   it('is namespaced and versioned, so a value-shape change cannot be misread', () => {
     // The prefix carries the version: bump it and every old entry becomes
     // unreachable rather than being deserialised by code that expects more.
-    expect(cacheKey(BASE)).toMatch(/^sap:v1:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v2 since entries began carrying their write time alongside the value, so
+    // staleness is answerable on read (cache/result-cache.ts). A v1 entry is a
+    // bare value and would deserialise as an envelope with no `t` at all.
+    expect(cacheKey(BASE)).toMatch(/^sap:v2:report:fee-defaulters:[0-9a-f]{32}$/);
+  });
+
+  /**
+   * [MANDATORY] A partial fetch must not share a key with the full report.
+   *
+   * Home's preview cards ask for one of a report's queries rather than all of
+   * them (services/dashboards.ts, `queryKeys`). If that answer landed on the
+   * full dashboard's key, opening the dashboard would serve a report with one
+   * panel and the rest silently missing -- a page that looks finished and is
+   * not, which is the failure mode §10 singles out as the worst here. The
+   * separation is structural: they cannot name the same key.
+   */
+  it('[MANDATORY] separates a one-query preview from the full report', () => {
+    const full = cacheKey(BASE);
+    const preview = cacheKey({ ...BASE, kind: 'report:fee-defaulters:q=aging' });
+    expect(preview).not.toBe(full);
+  });
+
+  it('separates previews of different queries from the same report', () => {
+    const aging = cacheKey({ ...BASE, kind: 'report:fee-defaulters:q=aging' });
+    const byClass = cacheKey({ ...BASE, kind: 'report:fee-defaulters:q=by_class' });
+    expect(aging).not.toBe(byClass);
   });
 });

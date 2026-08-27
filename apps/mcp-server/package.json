@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "probe": "tsx scripts/probe.ts"
+    "probe": "tsx scripts/probe.ts",
+    "bench:fee-index": "tsx scripts/bench-fee-index.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

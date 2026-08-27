@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ApiFailure,
   getHome,
-  getHomePreviews,
+  getHomePreview,
   getSession,
   type HomePreview,
   type HomeResponse,
@@ -47,12 +47,18 @@ export function App(): JSX.Element {
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
   /**
-   * Home's dashboard-preview cards. Fetched as a second, slower call once
-   * `home.academic_year` is known (services/home.ts, buildHomePreviews) so the
-   * KPI strip above never waits on it -- `null` means "not loaded yet",
-   * distinct from `[]` which means the call resolved with nothing to preview.
+   * Home's dashboard-preview cards, keyed by dashboard id and filled in one at
+   * a time as each card's own request resolves (api/client.ts,
+   * `getHomePreview`).
+   *
+   * A MAP rather than an array because the cards no longer arrive together: an
+   * id is absent while its request is in flight, which is exactly what
+   * Home.tsx's `PreviewCard` already renders as a skeleton, and present the
+   * moment that one dashboard is ready. The previous single-array-or-null shape
+   * could only say "none of them yet" or "all of them", which is what made the
+   * fastest card wait for the slowest.
    */
-  const [previews, setPreviews] = useState<HomePreview[] | null>(null);
+  const [previews, setPreviews] = useState<Record<string, HomePreview>>({});
   const [previewsLoading, setPreviewsLoading] = useState(false);
   /**
    * Navigation is a single piece of state, not a router.
@@ -104,7 +110,7 @@ export function App(): JSX.Element {
     setHomeError(null);
     // A fresh school selection invalidates the previous previews immediately
     // rather than leaving last scope's cards on screen while new ones load.
-    setPreviews(null);
+    setPreviews({});
     getHome(schoolIds)
       .then((data) => { setHome(data); })
       .catch((err: unknown) => {
@@ -131,20 +137,41 @@ export function App(): JSX.Element {
    */
   useEffect(() => {
     if (home === null || home.academic_year === null || selected.length === 0) return;
+    const academicYear = home.academic_year;
+    /**
+     * The cards the SERVER says are previewable. Read off the `/api/home`
+     * response rather than listed here, so the SPA never asks for a dashboard
+     * the catalog considers `coming` or `blocked` -- that status is the
+     * server's verdict (services/home.ts) and this screen only renders it.
+     */
+    const ids = home.dashboards.filter((c) => c.status === 'available').map((c) => c.id);
+    if (ids.length === 0) return;
+
     let cancelled = false;
     setPreviewsLoading(true);
-    getHomePreviews(selected, home.academic_year)
-      .then((data) => {
+
+    /**
+     * All of them at once, each committed as IT resolves rather than when the
+     * batch does -- that is the whole change. `allSettled` is only here to know
+     * when the last one finished, for the "loading previews…" label; every card
+     * is already on screen by that point.
+     *
+     * A rejected card is deliberately left ABSENT from the map rather than
+     * written in as a failure: the server answers 200 with `status: 'blocked'`
+     * and a reason for a dashboard that cannot be previewed (routes/home.ts),
+     * so a rejection here means the REQUEST failed -- a dropped connection, an
+     * expired session -- which the card cannot explain and must not invent a
+     * reason for. It stays a skeleton, and `homeError` is where a real page
+     * failure is said. Previews are a bonus on top of the KPI strip.
+     */
+    void Promise.allSettled(
+      ids.map(async (id) => {
+        const preview = await getHomePreview(selected, academicYear, id);
         if (cancelled) return;
-        setPreviews(data.previews);
-      })
-      .catch(() => {
-        // Previews are a bonus on top of the KPI strip, not a page-blocking
-        // fetch -- a failure here leaves the section empty rather than
-        // raising a second banner beside `homeError`.
-        if (!cancelled) setPreviews([]);
-      })
-      .finally(() => { if (!cancelled) setPreviewsLoading(false); });
+        setPreviews((prev) => ({ ...prev, [id]: preview }));
+      }),
+    ).finally(() => { if (!cancelled) setPreviewsLoading(false); });
+
     return () => { cancelled = true; };
   }, [home, selected]);
 

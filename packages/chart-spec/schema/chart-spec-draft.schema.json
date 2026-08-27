@@ -83,9 +83,6 @@
                     "type": "string",
                     "minLength": 1
                   },
-                  "drillable": {
-                    "type": "boolean"
-                  },
                   "type": {
                     "type": "string",
                     "const": "bar"
@@ -121,9 +118,6 @@
                   "query_ref": {
                     "type": "string",
                     "minLength": 1
-                  },
-                  "drillable": {
-                    "type": "boolean"
                   },
                   "type": {
                     "type": "string",
@@ -168,9 +162,6 @@
                   "query_ref": {
                     "type": "string",
                     "minLength": 1
-                  },
-                  "drillable": {
-                    "type": "boolean"
                   }
                 },
                 "required": [

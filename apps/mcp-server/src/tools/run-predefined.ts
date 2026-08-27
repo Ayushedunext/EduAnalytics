@@ -232,9 +232,16 @@ async function runForSchool(
    * `run_predefined`, so a single-widget clone pays for one query's cost, not
    * the full dashboard's. `runPredefined` above already proved every key in
    * `queryKeys` names a real query, so an empty result here is unreachable.
+   *
+   * With no `query_keys`, a `drill_only` level is left out (reports/catalog.ts):
+   * the caller asked for the dashboard, and a drill level is a panel that does
+   * not exist until someone clicks. Naming one explicitly still runs it — the
+   * flag decides what a DEFAULT run includes, never what a caller may ask for.
    */
   const selectedQueries =
-    queryKeys === undefined ? report.queries : report.queries.filter((q) => queryKeys.includes(q.key));
+    queryKeys === undefined
+      ? report.queries.filter((q) => q.drill_only !== true)
+      : report.queries.filter((q) => queryKeys.includes(q.key));
 
   /**
    * A report's queries run concurrently, bounded by the school's pool size.
@@ -268,6 +275,7 @@ async function runForSchool(
     description: string;
     sql: string;
     variants?: Readonly<Record<string, string>>;
+    drill_only?: boolean;
   }): Promise<QueryOutput> {
     if (catalog === undefined) throw new Error('unreachable: catalog checked above');
 

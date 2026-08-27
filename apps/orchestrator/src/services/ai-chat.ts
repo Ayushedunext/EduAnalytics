@@ -420,7 +420,6 @@ export function hydrateWidget(
         x: widget.x,
         y: widget.y,
         data: rows,
-        ...(widget.drillable === undefined ? {} : { drillable: widget.drillable }),
       };
     case 'line':
       return {
@@ -431,7 +430,6 @@ export function hydrateWidget(
         y: widget.y,
         data: rows,
         ...(widget.series === undefined ? {} : { series: widget.series }),
-        ...(widget.drillable === undefined ? {} : { drillable: widget.drillable }),
       };
     case 'donut':
       return {
@@ -441,7 +439,6 @@ export function hydrateWidget(
         label_field: widget.label_field,
         value_field: widget.value_field,
         data: rows,
-        ...(widget.drillable === undefined ? {} : { drillable: widget.drillable }),
       };
     case 'table':
       return {

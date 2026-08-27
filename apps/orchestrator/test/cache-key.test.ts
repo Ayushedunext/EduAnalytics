@@ -80,7 +80,14 @@ describe('a cache entry can only be reached by an identical request', () => {
     // v2 since entries began carrying their write time alongside the value, so
     // staleness is answerable on read (cache/result-cache.ts). A v1 entry is a
     // bare value and would deserialise as an envelope with no `t` at all.
-    expect(cacheKey(BASE)).toMatch(/^sap:v2:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v3 since Fee Collection gained a widget: the key was unchanged, so a warm
+    // cache went on serving the pre-change dashboard for the whole TTL. Found
+    // by running it, not by reasoning about it — which is why the assertion is
+    // written against a LITERAL prefix. A regex that accepted any version would
+    // pass whether or not anyone remembered to bump it, and this is precisely
+    // the rule nobody remembers.
+    expect(cacheKey(BASE)).toMatch(/^sap:v3:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

@@ -26,6 +26,7 @@ const spec: ChartSpec = {
       y: 'paid',
       data: [{ fee_month: 'Apr', paid: 1200000 }],
       drillable: true,
+      drill_dim: 'month',
     },
     {
       id: 't1',

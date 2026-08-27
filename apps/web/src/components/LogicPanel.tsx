@@ -20,7 +20,18 @@ interface ReportForLogic {
   spec: { meta: { served_from: 'cache' | 'rollup' | 'replica' } };
 }
 
-export function LogicPanel({ report }: { report: ReportForLogic }): JSX.Element {
+export function LogicPanel({
+  report,
+  activeQueryKey,
+}: {
+  report: ReportForLogic;
+  /**
+   * docs/06 §4.4: a drill report "shows all level SQLs with the active one
+   * highlighted". The caller decides which one is active because it owns the
+   * drill state (DashboardPage.tsx); this panel only knows how to mark it.
+   */
+  activeQueryKey?: string | undefined;
+}): JSX.Element {
   const { logic } = report;
   return (
     <section className="card logicPanel" aria-label="Report logic">
@@ -46,9 +57,13 @@ export function LogicPanel({ report }: { report: ReportForLogic }): JSX.Element 
 
       <h4 className="logicSqlHeading">Generated SQL</h4>
       {logic.queries.map((query) => (
-        <div key={query.key} className="logicQuery">
+        <div
+          key={query.key}
+          className={`logicQuery${query.key === activeQueryKey ? ' logicQuery--active' : ''}`}
+        >
           <div className="logicQueryTitle">
             {query.key} — {query.description}
+            {query.key === activeQueryKey && <span className="logicQueryFlag">active level</span>}
           </div>
           {/* Rendered as text, never as markup (§4). */}
           <pre className="logicSql">{query.sql}</pre>

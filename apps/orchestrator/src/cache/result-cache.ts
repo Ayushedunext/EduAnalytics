@@ -119,6 +119,14 @@ async function connect(): Promise<void> {
  * The prefix carries a VERSION. When the shape of a cached value changes, that
  * digit changes and every old entry becomes unreachable rather than being
  * deserialised into the new code's expectations.
+ *
+ * v2 -> v3 (2026-08-27): Fee Collection gained a widget (`bar-school`, the
+ * drill-down entry point). Nothing about the KEY changed — same report, same
+ * filters, same school set — so a warm cache kept answering with the
+ * pre-change dashboard, correctly by its own rules and wrongly by any other
+ * measure, for the whole TTL. That is what this version digit is for: adding a
+ * widget IS a change to the shape of a cached value, even though no type
+ * changed and nothing failed to deserialise.
  */
 export function cacheKey(parts: {
   kind: string;
@@ -133,7 +141,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v2:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v3:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

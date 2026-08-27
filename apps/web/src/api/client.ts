@@ -269,9 +269,36 @@ export interface CustomReportSummary {
   name: string;
   source_kind: 'predefined_clone' | 'ai_saved';
   base_report_id: string | null;
+  /** The base dashboard's display title, resolved server-side; null for AI-saved reports. */
+  base_report_title: string | null;
+  /** Resolved names, not ids — the Scope column shows these verbatim. */
+  school_scope: { school_id: string; school_name: string }[];
+  current_version: number;
   shared_flag: 'private' | 'school' | 'trust';
   is_owner: boolean;
   updated_at: string;
+}
+
+/** One thing a new custom report can be built from ("＋ New custom report", docs/06 §3). */
+export interface ReportSource {
+  report_id: string;
+  title: string;
+  blurb: string;
+  icon: string;
+  group: 'director' | 'school';
+  filters: { academic_year: boolean; as_of: boolean };
+}
+
+export function listReportSources(): Promise<{ sources: ReportSource[] }> {
+  return request<{ sources: ReportSource[] }>('/api/reports/sources');
+}
+
+/** "⧉ Clone" on a My Reports row — a private copy of a report you can already see. */
+export function duplicateReport(id: string, name: string): Promise<CustomReportResponse> {
+  return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/duplicate`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
 }
 
 /**

@@ -745,6 +745,102 @@ body {
 .specTable tbody tr:hover td { background: var(--color-surface-sunken); }
 .specTable td:first-child, .specTable th:first-child { color: var(--color-text-primary); font-weight: 500; }
 
+/* ---------- My Reports (docs/06 §3, docs/10 §3) ---------- */
+
+.reportsHead { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
+.reportsHead .page-sub { margin-bottom: 0; }
+.reportsHead .btn { flex: 0 0 auto; white-space: nowrap; }
+
+.reportsPanel { padding: 18px 20px; }
+.reportsPanelHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.reportsPanelTitle {
+  font-size: 14.5px; font-weight: 600; color: var(--color-text-primary);
+  letter-spacing: -0.005em; margin-bottom: 14px;
+}
+.reportsPanelHead .reportsPanelTitle { margin-bottom: 10px; }
+.reportsPanelClose {
+  background: none; border: none; color: var(--color-text-muted); font-size: 14px;
+  cursor: pointer; padding: 2px 4px; line-height: 1;
+}
+.reportsPanelClose:hover { color: var(--color-text-primary); }
+
+.reportsEmpty { font-size: 13px; color: var(--color-text-muted); line-height: 1.6; margin: 0 0 4px; }
+.reportsMuted { color: var(--color-text-muted); }
+
+/* Same scroll-inside-the-panel rule `.specTableWrap` uses: a wide row must not
+   widen the page (docs/10 §2's one scrolling content pane). */
+.reportsTableWrap { overflow-x: auto; }
+.reportsTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.reportsTable th {
+  background: var(--color-surface-sunken); text-align: left; padding: 10px 13px;
+  color: var(--color-text-secondary); font-size: 11.5px; font-weight: 700;
+  letter-spacing: 0.02em; text-transform: uppercase; border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+.reportsTable td {
+  padding: 11px 13px; border-bottom: 1px solid #eef2f6;
+  color: var(--color-text-secondary); vertical-align: top;
+}
+.reportsTable tr:last-child td { border-bottom: none; }
+.reportsTable tbody tr { transition: background-color 0.1s ease; }
+.reportsTable tbody tr:hover td { background: var(--color-surface-sunken); }
+.reportsTable td b { color: var(--color-text-primary); font-weight: 600; }
+.reportsTable .ta-right { text-align: right; }
+.reportsRowMeta { font-size: 11.5px; color: var(--color-text-muted); margin-top: 3px; }
+.reportsRowMeta .dot { margin: 0 5px; opacity: 0.55; }
+
+/* The action buttons are one unit and must not reflow into a second line — a
+   row whose height depends on how many actions it has makes the table
+   impossible to scan. `.nowrap` marks the other short columns (a dashboard
+   title, a date); scope and the report name are left to wrap, since both can
+   be genuinely long and forcing them would just widen the table instead. */
+.reportsTable td:last-child,
+.reportsTable .nowrap { white-space: nowrap; }
+.reportsActions { display: flex; gap: 7px; flex-wrap: nowrap; justify-content: flex-end; align-items: center; }
+.reportsActions .chipbtn { padding: 5px 10px; font-size: 11.5px; white-space: nowrap; }
+
+/* The type badge — CUSTOM vs AI, the one thing that says where a row came from
+   once the two tables are read side by side. */
+.typebadge {
+  display: inline-block; font-size: 9.5px; font-weight: 800; border-radius: var(--radius-pill);
+  padding: 2px 8px; letter-spacing: 0.06em; vertical-align: 1px;
+}
+.tb-custom { background: var(--color-primary-soft); color: var(--color-primary-dark); }
+.tb-ai { background: var(--color-warning-soft); color: #8a5a0b; }
+
+.newReportPanel { border-color: var(--color-info); }
+.sourceGrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px; margin-top: 12px;
+}
+.sourceCard {
+  display: flex; gap: 11px; align-items: flex-start; text-align: left;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); padding: 13px 14px; cursor: pointer;
+  font-family: var(--font-sans); transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.1s ease;
+}
+.sourceCard:hover {
+  border-color: var(--color-primary); box-shadow: var(--shadow-card); transform: translateY(-1px);
+}
+.sourceCardIcon {
+  width: 34px; height: 34px; border-radius: var(--radius-sm); flex-shrink: 0;
+  background: var(--color-primary-soft); display: flex; align-items: center;
+  justify-content: center; font-size: 16px;
+}
+.sourceCard b { display: block; font-size: 13.5px; color: var(--color-text-primary); font-weight: 600; }
+.sourceCardBlurb {
+  display: block; font-size: 11.5px; color: var(--color-text-muted); line-height: 1.45; margin-top: 2px;
+}
+
+.sourcePicked {
+  display: flex; gap: 11px; align-items: center;
+  background: var(--color-surface-sunken); border-radius: var(--radius-card); padding: 11px 13px;
+}
+.sourcePicked .chipbtn { margin-left: auto; flex-shrink: 0; }
+
+.newReportFields { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.newReportFields .widgetCloneField { flex: 1 1 200px; }
+
 /* ---------- chart tooltip (packages/chart-spec ChartTooltip) ---------- */
 
 .specTooltip {

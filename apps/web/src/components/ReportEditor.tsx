@@ -41,15 +41,22 @@ interface Props {
   session: SessionResponse;
   id: string;
   schoolIds: readonly string[];
+  /** My Reports' ✎ Edit lands here with the editor already open; its View does not. */
+  startEditing?: boolean;
   onBack: () => void;
   onDeleted: () => void;
 }
 
-export function ReportEditor({ session, id, schoolIds, onBack, onDeleted }: Props): JSX.Element {
+export function ReportEditor({ session, id, schoolIds, startEditing = false, onBack, onDeleted }: Props): JSX.Element {
   const [report, setReport] = useState<CustomReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showLogic, setShowLogic] = useState(false);
-  const [editing, setEditing] = useState(false);
+  /**
+   * Only a seed. The editor is still owner-gated by the toggle below, and by
+   * the server on every write — arriving with `startEditing` set opens a panel,
+   * it does not grant anything.
+   */
+  const [editing, setEditing] = useState(startEditing);
   const [askAiWidget, setAskAiWidget] = useState<{ id: string; title: string } | null>(null);
   const [showVersions, setShowVersions] = useState(false);
 

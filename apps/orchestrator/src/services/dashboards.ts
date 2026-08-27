@@ -106,7 +106,7 @@ export function isDashboardId(value: string): value is DashboardId {
  * Keyed by report id so adding a report is a table entry, not a new branch
  * (docs/11 §1: the catalog is data, not screens).
  */
-const REPORT_FILTERS: Record<
+export const REPORT_FILTERS: Record<
   DashboardId,
   { academicYear: boolean; asOf: boolean; dateWindow: boolean }
 > = {

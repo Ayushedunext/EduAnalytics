@@ -70,7 +70,8 @@ export function App(): JSX.Element {
     | { kind: 'settings' }
     | { kind: 'ask'; seedQuestion?: string }
     | { kind: 'my-reports' }
-    | { kind: 'report-edit'; id: string }
+    /** `edit` opens the editor already expanded — My Reports' ✎ Edit action, versus its View. */
+    | { kind: 'report-edit'; id: string; edit?: boolean }
   >({ kind: 'home' });
 
   useEffect(() => {
@@ -282,12 +283,18 @@ export function App(): JSX.Element {
             onCloned={(id) => { setRoute({ kind: 'report-edit', id }); }}
           />
         ) : route.kind === 'my-reports' ? (
-          <MyReports onOpen={(id) => { setRoute({ kind: 'report-edit', id }); }} />
+          <MyReports
+            schoolIds={selected}
+            academicYear={home?.academic_year ?? null}
+            onOpen={(id) => { setRoute({ kind: 'report-edit', id }); }}
+            onEdit={(id) => { setRoute({ kind: 'report-edit', id, edit: true }); }}
+          />
         ) : route.kind === 'report-edit' ? (
           <ReportEditor
             session={state.session}
             id={route.id}
             schoolIds={selected}
+            startEditing={route.edit === true}
             onBack={() => { setRoute({ kind: 'my-reports' }); }}
             onDeleted={() => { setRoute({ kind: 'my-reports' }); }}
           />

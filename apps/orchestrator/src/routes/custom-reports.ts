@@ -26,7 +26,9 @@ import {
   applyRefinement,
   cloneReport,
   deleteReport,
+  duplicateReport,
   listMyReports,
+  listReportSources,
   listReportVersions,
   rollbackReport,
   saveAiReport,
@@ -58,6 +60,21 @@ customReportsRouter.get('/api/reports', (req: Request, res: Response, next: Next
   void (async () => {
     const session = sessionOf(req);
     res.json({ reports: await listMyReports(session) });
+  })().catch(next);
+});
+
+/**
+ * What a new custom report can be built from ("＋ New custom report", docs/06
+ * §3). Registered BEFORE `/api/reports/:id` on purpose: Express matches in
+ * declaration order, and the parameterised route would otherwise swallow
+ * `sources` as a report id and 404 it.
+ */
+customReportsRouter.get('/api/reports/sources', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    // Called for its throw: an unauthenticated caller gets the same refusal
+    // here as on every other route, before any catalog is disclosed.
+    sessionOf(req);
+    res.json({ sources: listReportSources() });
   })().catch(next);
 });
 
@@ -135,6 +152,33 @@ customReportsRouter.get('/api/reports/:id', (req: Request, res: Response, next: 
 
     const view = await viewReport({ session, correlationId: req.correlationId, id, requestedSchoolIds: schoolIds });
     res.json(view);
+  })().catch(next);
+});
+
+const duplicateBodySchema = z.object({ name: z.string().min(1).max(255) });
+
+/**
+ * "⧉ Clone" on a row of My Reports — a private copy of a report you can
+ * already see. `POST /api/reports/clone` is the other, unrelated door: that
+ * one clones a PREDEFINED dashboard by its catalog id and refuses anything
+ * else, which is why duplicating a custom report needs its own route rather
+ * than a looser check on that one.
+ */
+customReportsRouter.post('/api/reports/:id/duplicate', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const session = sessionOf(req);
+    const id = req.params['id'];
+    if (typeof id !== 'string' || id === '') badRequest('A report id is required.', req.correlationId);
+    const parsed = duplicateBodySchema.safeParse(req.body);
+    if (!parsed.success) badRequest('A name is required for the copy.', req.correlationId);
+
+    const view = await duplicateReport({
+      session,
+      correlationId: req.correlationId,
+      id,
+      name: parsed.data.name,
+    });
+    res.status(201).json(view);
   })().catch(next);
 });
 

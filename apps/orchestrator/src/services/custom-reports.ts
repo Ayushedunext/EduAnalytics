@@ -51,6 +51,7 @@ import { auditSink } from '../db/audit.js';
 import {
   BUILDERS,
   Merged,
+  REPORT_FILTERS,
   WIDGET_BUCKET_OPTIONS,
   WIDGET_QUERY_KEYS,
   isDashboardId,
@@ -59,6 +60,7 @@ import {
   type PredefinedResult,
   type ReportLogic,
 } from './dashboards.js';
+import { DASHBOARDS } from './home.js';
 import { hydrate, buildAskAiLogic } from './ai-chat.js';
 import type { CachedResult } from './ai-tools.js';
 import {
@@ -201,9 +203,43 @@ export interface CustomReportSummary {
   readonly name: string;
   readonly source_kind: ReportDefinitionRow['source_kind'];
   readonly base_report_id: string | null;
+  /**
+   * The base dashboard's DISPLAY title ("Fee Collection"), resolved from the
+   * one catalog Home renders from. Sent instead of leaving the SPA to
+   * title-case `base_report_id` itself: an id is not a name, and a client that
+   * invents one drifts from the catalog the moment a title is reworded
+   * (CODING_GUIDELINES §8). `null` for AI-saved reports, which clone nothing.
+   */
+  readonly base_report_title: string | null;
+  /** Resolved names, not ids — the My Reports list shows a Scope column (docs/06 §3). */
+  readonly school_scope: readonly { school_id: string; school_name: string }[];
+  readonly current_version: number;
   readonly shared_flag: ReportDefinitionRow['shared_flag'];
   readonly is_owner: boolean;
   readonly updated_at: string;
+}
+
+/**
+ * One thing a NEW custom report can be built from (docs/06 §3's "＋ New custom
+ * report"). Deliberately the same predefined dashboards Home already lists,
+ * not a second catalog of hand-written source SQL: the real query knowledge
+ * lives in the MCP report catalog and the `dashboards.ts` builders, and a
+ * parallel table of sources would be that knowledge copied — free to drift,
+ * and drifting silently (CODING_GUIDELINES §1).
+ *
+ * Creating from one of these therefore goes through the SAME `cloneReport`
+ * path the dashboard "⧉ Clone & customise" button uses, including its
+ * run-once-before-persisting check. "From scratch" here means "without having
+ * to go and find the dashboard first", not "by a second mechanism".
+ */
+export interface ReportSource {
+  readonly report_id: string;
+  readonly title: string;
+  readonly blurb: string;
+  readonly icon: string;
+  readonly group: 'director' | 'school';
+  /** Which filters this source declares — the create form offers exactly these (REPORT_FILTERS). */
+  readonly filters: { readonly academic_year: boolean; readonly as_of: boolean };
 }
 
 export interface CustomReportView {
@@ -422,15 +458,132 @@ async function runRawSqlMode(args: {
 
 export async function listMyReports(session: SessionClaims): Promise<CustomReportSummary[]> {
   const rows = await listReportDefinitions({ orgId: session.org_id, ownerSub: session.sub });
-  return rows.map((r) => ({
+
+  /**
+   * Scope names come from the registry, and the registry is cached in-process
+   * (db/registry.ts), so this is one lookup for the whole list rather than a
+   * query per row. A stored `school_scope` id with no registry row — a school
+   * decommissioned since the report was saved — simply drops out of the
+   * resolved list, the same degradation `schoolNames` applies everywhere else
+   * (docs/02 §6: the session degrades for that school, it does not fail).
+   */
+  const scopes = await Promise.all(rows.map((r) => schoolNames(r.school_scope)));
+
+  return rows.map((r, i) => ({
     id: r.id,
     name: r.name,
     source_kind: r.source_kind,
     base_report_id: r.base_report_id,
+    base_report_title: r.base_report_id === null ? null : dashboardTitle(r.base_report_id),
+    school_scope: scopes[i] ?? [],
+    current_version: r.current_version,
     shared_flag: r.shared_flag,
     is_owner: r.owner_sub === session.sub,
     updated_at: r.updated_at,
   }));
+}
+
+/**
+ * The base dashboard's display title, from the catalog Home renders.
+ *
+ * Falls back to the raw id rather than a prettified guess: an id on screen is
+ * a worse label and a TRUE one, and it is the visible symptom of a report
+ * whose base has been retired from the catalog — which is worth seeing
+ * (CODING_GUIDELINES §8).
+ */
+function dashboardTitle(baseReportId: string): string {
+  return DASHBOARDS.find((d) => d.id === baseReportId)?.title ?? baseReportId;
+}
+
+/**
+ * What a new custom report can be built from — the `available` dashboards,
+ * with the filters each one declares.
+ *
+ * No session gating here beyond what the catalog itself says, and that is not
+ * an oversight: this list only names sources. Whether THIS session may
+ * actually read one is decided when it runs, by `cloneReport` → the MCP
+ * layer's own permission and scope checks (Invariant 2), which is the check
+ * that has to hold anyway. Filtering the menu as well would be a second,
+ * weaker copy of it.
+ */
+export function listReportSources(): ReportSource[] {
+  return DASHBOARDS.filter((d) => d.status === 'available' && isDashboardId(d.id)).map((d) => {
+    const filters = REPORT_FILTERS[d.id as DashboardId];
+    return {
+      report_id: d.id,
+      title: d.title,
+      blurb: d.blurb,
+      icon: d.icon,
+      group: d.group,
+      filters: { academic_year: filters.academicYear, as_of: filters.asOf },
+    };
+  });
+}
+
+/**
+ * "⧉ Clone" on a row of My Reports — duplicate a custom report the viewer can
+ * already see, as a private copy they own.
+ *
+ * Distinct from `cloneReport` above, which clones a PREDEFINED dashboard and
+ * refuses anything else. This one copies a stored definition verbatim
+ * (`def_json`, `sql_text`, `school_scope`, and the `source_kind`/
+ * `base_report_id` lineage), so the copy keeps executing by exactly the same
+ * mode as its original — a raw_sql AI-saved report duplicates into a raw_sql
+ * one, a template clone into a template one. Nothing is re-derived, so there
+ * is no path here that could turn one mode into the other by accident.
+ *
+ * The copy is always `private` and always owned by whoever pressed the button,
+ * never by the original's owner: duplicating a colleague's shared report must
+ * not silently hand them a report they did not make, nor re-publish it to the
+ * org at the original's visibility (docs/08 blast-radius).
+ */
+export async function duplicateReport(args: {
+  session: SessionClaims;
+  correlationId: string;
+  id: string;
+  name: string;
+}): Promise<CustomReportView> {
+  const row = await getRowOrThrow(args.id, args.correlationId);
+  /**
+   * Visible, not owned: you may duplicate a report shared with you. This is
+   * the same visibility gate `viewReport` applies, deliberately NOT the
+   * stricter `assertOwner` the edit paths use — copying what you are already
+   * allowed to read grants no access you did not have.
+   */
+  assertVisible(row, args.session, args.correlationId);
+
+  const def = parseReportDef(row.def_json, args.correlationId);
+  const created = await insertReportDefinition({
+    orgId: args.session.org_id,
+    ownerSub: args.session.sub,
+    name: args.name,
+    baseReportId: row.base_report_id,
+    sourceKind: row.source_kind,
+    schoolScope: row.school_scope,
+    defJson: def,
+    sqlText: row.sql_text,
+  });
+
+  await auditSink.write({
+    kind: 'report_definition.changed',
+    at: new Date().toISOString(),
+    actor_sub: args.session.sub,
+    org_id: args.session.org_id,
+    correlation_id: args.correlationId,
+    report_id: created.id,
+    school_ids: created.school_scope,
+    action: 'duplicated',
+    /** The row this was copied FROM — without it the trail cannot answer where a copy came from. */
+    base_report_id: args.id,
+    version: 1,
+  });
+
+  return viewReport({
+    session: args.session,
+    correlationId: args.correlationId,
+    id: created.id,
+    requestedSchoolIds: created.school_scope,
+  });
 }
 
 export async function cloneReport(args: {

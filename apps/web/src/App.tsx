@@ -268,6 +268,7 @@ export function App(): JSX.Element {
             schoolIds={selected}
             onBack={() => { setRoute({ kind: 'home' }); }}
             onSaved={(id) => { setRoute({ kind: 'report-edit', id }); }}
+            onSettings={() => { setRoute({ kind: 'settings' }); }}
             {...(route.seedQuestion === undefined ? {} : { seedQuestion: route.seedQuestion })}
           />
         ) : route.kind === 'report' ? (

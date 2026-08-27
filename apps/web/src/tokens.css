@@ -116,15 +116,68 @@ body {
  * separate `#print-root` (print.tsx/print.html) and never matches this
  * selector. That is what lets an entrance fade run on screen while staying
  * completely inert for Puppeteer — no timer, no opt-out flag needed, the
- * animation simply does not exist on the page ADR-021 photographs. Recharts'
- * OWN animation stays off everywhere (`ANIMATE = false` in widgets.tsx) for the
- * same reason stated there; this is a plain CSS fade on the static chrome
- * around a chart, not the chart's data draw.
+ * animation simply does not exist on the page ADR-021 photographs.
+ *
+ * This is the fade on the CHROME around a chart. The chart's own data draw is
+ * a separate mechanism with the same property: `useChartMotion()` (packages/
+ * chart-spec ChartMotion.tsx) defaults to off and is switched on only by the
+ * provider in `main.tsx`, which `print.tsx` does not mount — so the export is
+ * still — by construction, not by a flag — a photograph of finished charts.
  */
 @media (prefers-reduced-motion: no-preference) {
   #root .card {
-    animation: liftIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: liftIn 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
+
+  /**
+   * Staggered, so a dashboard ARRIVES rather than appearing.
+   *
+   * Every card fading on the same frame reads as one block switching on, which
+   * is the "static" complaint even though an animation was already running.
+   * Offsetting each one by 55 ms gives the eye an order to follow — top-left
+   * first, which is where the headline number is.
+   *
+   * Capped at the 8th child on purpose: the delay is a flourish, not a queue,
+   * and an 11-panel dashboard whose last card waits 600 ms has stopped being
+   * lively and started being slow. Beyond the cap every remaining card shares
+   * the last offset and comes in together.
+   *
+   * `nth-of-type` over `nth-child` because a `.notice` or a heading between
+   * panels would otherwise consume a step and leave a visible gap in the
+   * cascade.
+   */
+  #root .kpis > *:nth-of-type(1),
+  #root .pgallery > *:nth-of-type(1),
+  #root .specPanels > *:nth-of-type(1) { animation-delay: 0ms; }
+  #root .kpis > *:nth-of-type(2),
+  #root .pgallery > *:nth-of-type(2),
+  #root .specPanels > *:nth-of-type(2) { animation-delay: 55ms; }
+  #root .kpis > *:nth-of-type(3),
+  #root .pgallery > *:nth-of-type(3),
+  #root .specPanels > *:nth-of-type(3) { animation-delay: 110ms; }
+  #root .kpis > *:nth-of-type(4),
+  #root .pgallery > *:nth-of-type(4),
+  #root .specPanels > *:nth-of-type(4) { animation-delay: 165ms; }
+  #root .kpis > *:nth-of-type(5),
+  #root .pgallery > *:nth-of-type(5),
+  #root .specPanels > *:nth-of-type(5) { animation-delay: 220ms; }
+  #root .kpis > *:nth-of-type(6),
+  #root .pgallery > *:nth-of-type(6),
+  #root .specPanels > *:nth-of-type(6) { animation-delay: 275ms; }
+  #root .kpis > *:nth-of-type(7),
+  #root .pgallery > *:nth-of-type(7),
+  #root .specPanels > *:nth-of-type(7) { animation-delay: 330ms; }
+  #root .kpis > *:nth-of-type(n + 8),
+  #root .pgallery > *:nth-of-type(n + 8),
+  #root .specPanels > *:nth-of-type(n + 8) { animation-delay: 385ms; }
+
+  /**
+   * KPI tiles are not `.card`s (they carry their own `.kpi` surface), so they
+   * need the entrance declared for them — otherwise the numbers pop in flat
+   * above a cascade of charts, which draws the eye to the seam rather than the
+   * figures.
+   */
+  #root .kpi { animation: liftIn 0.42s cubic-bezier(0.16, 1, 0.3, 1) both; }
 }
 @keyframes liftIn {
   from { opacity: 0; transform: translateY(6px); }

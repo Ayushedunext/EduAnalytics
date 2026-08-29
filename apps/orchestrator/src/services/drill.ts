@@ -304,12 +304,45 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
   const merged = new Merged(result);
   const fields = path.measures.map((m) => m.field);
   /**
+   * The pending marker is summed alongside the measures so it survives the
+   * per-school merge, then dropped before the widget is built — it decides what
+   * the note says, and is never a bar.
+   */
+  const pending = level.pending;
+  const summed = pending === undefined ? fields : [...fields, pending.field];
+  /**
    * Summed across the level's school set, which after a school click is one
    * school. Ordered by the level's own `seq` where it has one — quarters and
    * classes both have a right order that is not "biggest first", and sorting
    * class labels as text puts X before IX.
    */
-  const rows = merged.sumBy(queryKey, level.x, fields, 'seq');
+  const rows = merged.sumBy(queryKey, level.x, summed, 'seq');
+
+  /**
+   * Categories that exist but cannot carry a value yet, in the order the axis
+   * draws them, so the sentence reads the way the chart does.
+   */
+  if (pending !== undefined && !merged.returnsColumn(queryKey, pending.field)) {
+    /**
+     * [MANDATORY] §10. The alternative is a note that confidently names every
+     * category as not-yet-due because a column went missing — a wrong answer
+     * wearing the shape of a right one, which is worse than no chart at all.
+     */
+    throw new PlatformError({
+      code: ERROR_CODES.INVALID_CHART_SPEC,
+      message: 'That level of the report could not be produced.',
+      diagnostics: { query: queryKey, missing_column: pending.field },
+      correlationId: args.correlationId,
+    });
+  }
+
+  const pendingLabels =
+    pending === undefined
+      ? []
+      : rows
+          .filter((row) => numberOr(row[pending.field], 0) === 0)
+          .map((row) => String(row[level.x] ?? '').trim())
+          .filter((label) => label !== '');
 
   const widget: Widget = {
     id: args.widgetId,
@@ -336,6 +369,7 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
         out[level.drill_value_field] = numberOr(row[level.drill_value_field], 0);
       }
       for (const field of fields) out[field] = numberOr(row[field], 0);
+      /** `pending.field` is deliberately absent: bookkeeping, not a measure. */
       return out;
     }),
     /** The leaf declares no `drill_dim`, so its chart renders inert. */
@@ -373,7 +407,19 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
       sql: '',
     },
     group_by: level.group_by,
-    notes: level.note === undefined ? [] : [level.note],
+    notes: [
+      ...(level.note === undefined ? [] : [level.note]),
+      ...(pending === undefined || pendingLabels.length === 0
+        ? []
+        : [
+            (pendingLabels.length === rows.length && pending.note_all !== undefined
+              ? pending.note_all
+              : pending.note
+            )
+              .replace('{categories}', listOf(pendingLabels))
+              .replace('{as_of}', args.asOfDate),
+          ]),
+    ],
     degraded: merged.failures(),
     degraded_schools: merged.schoolFailures(),
   };
@@ -405,6 +451,15 @@ function contextKey(context: readonly DrillStep[]): string {
 /** "St Mark's · Q2" — what the level's title interpolates. */
 function breadcrumb(context: readonly DrillStep[]): string {
   return context.map((step) => step.label).join(' · ');
+}
+
+/**
+ * "Q3 and Q4", "Q2, Q3 and Q4" — an Oxford-comma-free list, because the note is
+ * a sentence a bursar reads rather than a serialisation.
+ */
+function listOf(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`;
 }
 
 function numberOr(value: unknown, fallback: number): number {

@@ -559,13 +559,39 @@ const FEE_DEFAULTERS: PredefinedReport = {
       key: 'defaulters_by_quarter',
       description: 'Students with overdue fees, by academic quarter',
       drill_only: true,
+      /**
+       * -- Why the overdue test is in the SELECT and not the WHERE ------------
+       * Put it in the WHERE and a quarter whose dues have not fallen due yet
+       * returns no rows at all, so it draws no bar. On 29 August a reader saw
+       * Q1 and Q2 and no explanation, and could not tell "Q3 has no
+       * defaulters" from "Q3 is not due yet" from "Q3 does not exist" — three
+       * different facts, one of which (nearly 24,000 outstanding rows at Meera
+       * Bagh alone) is the opposite of reassuring.
+       *
+       * Aggregating conditionally instead keeps every quarter that has demand,
+       * with a zero where nothing is late. `due_rows` is what tells the two
+       * kinds of zero apart: zero due rows means the calendar has not asked
+       * yet, while due rows with no defaulters means everybody paid on time —
+       * good news, and it should look different from silence. The orchestrator
+       * turns the first case into a note naming the quarters (`DrillLevel.
+       * pending`).
+       *
+       * This is the same instinct as the `aging` query's "Not yet due" band a
+       * few statements up: the number excluded from a defaulter total is
+       * visible rather than invisible.
+       *
+       * It costs nothing extra. The scan is the same scan — the predicate just
+       * moved from filtering rows to classifying them.
+       */
       sql:
         `SELECT CONCAT('Q', ${ACADEMIC_QUARTER}) AS quarter, ${ACADEMIC_QUARTER} AS seq, ` +
-        'COUNT(DISTINCT enrollmentno) AS defaulters, ' +
-        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'COUNT(DISTINCT CASE WHEN balance_amount > 0 AND periodtodate < :as_of_date ' +
+        'THEN enrollmentno END) AS defaulters, ' +
+        'ROUND(SUM(CASE WHEN balance_amount > 0 AND periodtodate < :as_of_date ' +
+        'THEN balance_amount ELSE 0 END)) AS outstanding, ' +
+        'SUM(periodtodate < :as_of_date) AS due_rows ' +
         'FROM fee_compile_data_set ' +
-        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
-        'AND periodtodate < :as_of_date AND periodfromdate IS NOT NULL ' +
+        'WHERE academicyearname = :academic_year AND periodfromdate IS NOT NULL ' +
         'GROUP BY quarter, seq ORDER BY seq',
     },
     /**
@@ -584,13 +610,27 @@ const FEE_DEFAULTERS: PredefinedReport = {
       key: 'defaulters_by_class',
       description: 'Students with overdue fees, by class',
       drill_only: true,
+      /**
+       * Classified rather than filtered, for the same reason as the quarter
+       * query above and one more besides. Now that a not-yet-due quarter draws
+       * a bar, it can be CLICKED — and filtering here would answer that click
+       * with a blank panel and no reason, which is a worse dead end than the
+       * missing bar was. Keeping the classes and zeroing them lets the level
+       * say what it knows.
+       *
+       * It also steadies the axis: the same classes appear whichever quarter is
+       * open, so drilling Q1 then Q2 compares like with like instead of
+       * silently dropping whichever classes happened to be clean.
+       */
       sql:
         'SELECT classname, MIN(classseq) AS seq, ' +
-        'COUNT(DISTINCT enrollmentno) AS defaulters, ' +
-        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'COUNT(DISTINCT CASE WHEN balance_amount > 0 AND periodtodate < :as_of_date ' +
+        'THEN enrollmentno END) AS defaulters, ' +
+        'ROUND(SUM(CASE WHEN balance_amount > 0 AND periodtodate < :as_of_date ' +
+        'THEN balance_amount ELSE 0 END)) AS outstanding, ' +
+        'SUM(periodtodate < :as_of_date) AS due_rows ' +
         'FROM fee_compile_data_set ' +
-        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
-        'AND periodtodate < :as_of_date ' +
+        'WHERE academicyearname = :academic_year ' +
         `AND (:drill_quarter IS NULL OR ${ACADEMIC_QUARTER} = :drill_quarter) ` +
         'GROUP BY classname ORDER BY seq',
     },

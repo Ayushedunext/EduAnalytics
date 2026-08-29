@@ -95,7 +95,11 @@ describe('a cache entry can only be reached by an identical request', () => {
     // v5 since the aging chart went amber (`tone: 'warning'`). No widget added,
     // no number changed — a colour alone is enough, because the test of this
     // rule is what a reader sees and not what a deserialiser would notice.
-    expect(cacheKey(BASE)).toMatch(/^sap:v5:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v6 since the quarter drill began keeping not-yet-due quarters as zero
+    // bars. Drill levels carry their own cache keys, so a stale entry would
+    // have gone on hiding them.
+    expect(cacheKey(BASE)).toMatch(/^sap:v6:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

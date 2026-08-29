@@ -340,6 +340,37 @@ export interface DrillLevel {
    * belongs; it belongs against the bars that would mislead.
    */
   readonly note?: string;
+  /**
+   * Categories at this level that EXIST but cannot carry a value yet, and how
+   * to say so.
+   *
+   * Fee Defaulters' quarters are the case this was built for. Q3 and Q4 of the
+   * current year hold real demand, but on 29 August nothing in them is late,
+   * because their due dates have not arrived. A chart that simply omitted them
+   * left a reader unable to tell "no defaulters" from "not due yet" from "does
+   * not exist" — and at Meera Bagh the honest answer involved nearly 24,000
+   * outstanding rows, so the ambiguity ran in the reassuring direction.
+   *
+   * `field` names a bookkeeping column the level's SQL returns alongside its
+   * measures — zero when the category is not yet measurable. It is used to
+   * build the note and is then DROPPED, never drawn: it is not a measure and a
+   * reader has no use for a count of ledger rows.
+   *
+   * `note` is a template. `{categories}` becomes the labels of the categories
+   * concerned and `{as_of}` the date they were measured against, so the
+   * sentence names the quarters rather than gesturing at them.
+   */
+  readonly pending?: {
+    readonly field: string;
+    readonly note: string;
+    /**
+     * Used instead of `note` when EVERY category is pending, because listing
+     * them all is not a sentence — "Nothing in NURSERY, K.G., I, II, III …
+     * was due" says less than "nothing in this quarter was due", at four times
+     * the length. Absent means `note` is used regardless.
+     */
+    readonly note_all?: string;
+  };
 }
 
 export interface DrillPath {
@@ -466,6 +497,16 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
         title: 'Students with overdue fees by quarter · {context}',
         group_by: 'academic quarter',
         note: 'A student overdue in more than one quarter is counted in each, so these bars deliberately add up to more than the school’s own total.',
+        /**
+         * A quarter whose dues have not fallen due yet draws a zero bar and is
+         * named here, rather than being dropped from the chart. The zero is
+         * honest — nobody is late — and the note is what stops it being read as
+         * "nobody owes anything".
+         */
+        pending: {
+          field: 'due_rows',
+          note: 'Nothing in {categories} was due on {as_of}, so those quarters show no defaulters yet — not that their fees are paid.',
+        },
       },
       {
         x: 'classname',
@@ -475,6 +516,16 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
         group_by: 'class',
         /** These DO sum to the quarter above: a student sits in one class. */
         note: 'A student sits in one class, so these bars add up to the quarter’s own total.',
+        /**
+         * Reachable now that a not-yet-due quarter has a bar to click. Without
+         * this the click lands on an axis of zeroes with nothing to explain it.
+         */
+        pending: {
+          field: 'due_rows',
+          note: 'Nothing in {categories} had fallen due on {as_of}.',
+          note_all:
+            'No fees in this quarter had fallen due on {as_of}, so no class shows a defaulter yet — not that their fees are paid.',
+        },
       },
     ],
   },
@@ -2246,6 +2297,23 @@ export class Merged {
       }
     }
     return out;
+  }
+
+  /**
+   * Did the result set actually RETURN this column?
+   *
+   * `sumBy` initialises every requested field to 0 and adds, so a column that
+   * was never selected is indistinguishable from one that summed to zero. That
+   * is fine for a measure — an absent measure draws a zero bar and someone
+   * notices — and not fine for a marker whose ZERO carries meaning: a level
+   * whose `pending.field` was missing would quietly report every category as
+   * "not due yet", which is a confident false statement rather than a blank.
+   * Checked against the columns the query really answered with.
+   */
+  returnsColumn(key: string, column: string): boolean {
+    return this.queriesFor(key).some(
+      (query) => query.status === 'ok' && (query.columns ?? []).includes(column),
+    );
   }
 
   /**

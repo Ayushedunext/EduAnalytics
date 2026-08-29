@@ -32,6 +32,7 @@ interface QueryResult {
   description: string;
   sql: string;
   status: 'ok' | 'failed';
+  columns?: string[];
   rows?: Record<string, unknown>[];
   error?: { code: string; message: string };
 }
@@ -85,8 +86,20 @@ const SESSION = {
 
 const SCOPE = ['stmarksmb', 'stmarksj'];
 
+/**
+ * `columns` mirrors the row keys, as the MCP server really answers. It matters
+ * for any level with a `pending` marker: the service checks the column was
+ * genuinely returned rather than trusting a summed zero (`Merged.returnsColumn`).
+ */
 function query(key: string, rows: Record<string, unknown>[]): QueryResult {
-  return { key, description: `${key} description`, sql: `SELECT 1 AS ${key}`, status: 'ok', rows };
+  return {
+    key,
+    description: `${key} description`,
+    sql: `SELECT 1 AS ${key}`,
+    status: 'ok',
+    columns: [...new Set(rows.flatMap((r) => Object.keys(r)))],
+    rows,
+  };
 }
 
 function result(schools: { school_id: string; queries: QueryResult[] }[]) {
@@ -535,8 +548,8 @@ describe('fee defaulters: one bar per school, counting students', () => {
         school_id: 'stmarksmb',
         queries: [
           query('defaulters_by_quarter', [
-            { quarter: 'Q1', seq: 1, defaulters: 44, outstanding: 10 },
-            { quarter: 'Q2', seq: 2, defaulters: 31, outstanding: 20 },
+            { quarter: 'Q1', seq: 1, defaulters: 44, outstanding: 10, due_rows: 60 },
+            { quarter: 'Q2', seq: 2, defaulters: 31, outstanding: 20, due_rows: 40 },
           ]),
         ],
       },
@@ -570,8 +583,8 @@ describe('fee defaulters: one bar per school, counting students', () => {
         school_id: 'stmarksmb',
         queries: [
           query('defaulters_by_class', [
-            { classname: 'IX', seq: 9, defaulters: 12, outstanding: 5 },
-            { classname: 'X', seq: 10, defaulters: 19, outstanding: 8 },
+            { classname: 'IX', seq: 9, defaulters: 12, outstanding: 5, due_rows: 30 },
+            { classname: 'X', seq: 10, defaulters: 19, outstanding: 8, due_rows: 41 },
           ]),
         ],
       },
@@ -625,6 +638,145 @@ describe('fee defaulters: one bar per school, counting students', () => {
       (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-defaulters',
     );
     expect(heads?.tone).toBeUndefined();
+  });
+
+  /**
+   * A zero bar means two opposite things and the chart must not blur them:
+   * "the calendar has not asked yet" and "everybody paid on time". The first
+   * needs saying, the second is good news that speaks for itself. Dropping the
+   * quarter entirely — which is what filtering in the WHERE used to do — said
+   * neither, and left a reader unable to tell either from "this quarter does
+   * not exist".
+   */
+  it('keeps a not-yet-due quarter as a zero bar and names it', async () => {
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('defaulters_by_quarter', [
+            { quarter: 'Q1', seq: 1, defaulters: 26, outstanding: 900, due_rows: 79 },
+            { quarter: 'Q2', seq: 2, defaulters: 22, outstanding: 400, due_rows: 28 },
+            { quarter: 'Q3', seq: 3, defaulters: 0, outstanding: 0, due_rows: 0 },
+            { quarter: 'Q4', seq: 4, defaulters: 0, outstanding: 0, due_rows: 0 },
+          ]),
+        ],
+      },
+    ]);
+
+    const out = await defaulterDrill({ level: 2, context: [SCHOOL_STEP] });
+    const widget = out.widget as BarWidget;
+
+    /** All four quarters draw; the back half at zero. */
+    expect(widget.data.map((r) => r['quarter'])).toEqual(['Q1', 'Q2', 'Q3', 'Q4']);
+    expect(widget.data.map((r) => r['defaulters'])).toEqual([26, 22, 0, 0]);
+
+    /** Bookkeeping never becomes a bar. */
+    expect(widget.data.every((r) => !('due_rows' in r))).toBe(true);
+
+    const pending = out.notes.find((n) => n.includes('was due'));
+    expect(pending).toBeDefined();
+    expect(pending).toContain('Q3 and Q4');
+    expect(pending).toContain('2026-08-29');
+    /** The counting caveat is still there too — both notes, not one or other. */
+    expect(out.notes.some((n) => /counted in each/i.test(n))).toBe(true);
+  });
+
+  it('says nothing when every quarter has fallen due', async () => {
+    /**
+     * A note that fires whether or not it applies is noise, and noise is how a
+     * reader learns to skip the line that matters.
+     */
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('defaulters_by_quarter', [
+            { quarter: 'Q1', seq: 1, defaulters: 26, outstanding: 900, due_rows: 79 },
+            { quarter: 'Q2', seq: 2, defaulters: 0, outstanding: 0, due_rows: 3093 },
+          ]),
+        ],
+      },
+    ]);
+
+    const out = await defaulterDrill({ level: 2, context: [SCHOOL_STEP] });
+    /** Q2 is a zero bar meaning "everyone paid" — good news, and not pending. */
+    expect((out.widget as BarWidget).data.map((r) => r['defaulters'])).toEqual([26, 0]);
+    expect(out.notes.some((n) => n.includes('was due'))).toBe(false);
+  });
+
+  it('lists a single pending quarter without an "and"', async () => {
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('defaulters_by_quarter', [
+            { quarter: 'Q1', seq: 1, defaulters: 26, outstanding: 900, due_rows: 79 },
+            { quarter: 'Q4', seq: 4, defaulters: 0, outstanding: 0, due_rows: 0 },
+          ]),
+        ],
+      },
+    ]);
+    const out = await defaulterDrill({ level: 2, context: [SCHOOL_STEP] });
+    const pending = out.notes.find((n) => n.includes('was due'));
+    expect(pending).toContain('Nothing in Q4 was due');
+    expect(pending).not.toContain('and');
+  });
+
+  it('explains a click into a quarter nothing was due in, instead of a blank', async () => {
+    /**
+     * Q3 is clickable now that it draws a bar, so the level it leads to has to
+     * be able to account for itself. Every class pending means the sentence
+     * should name the QUARTER, not recite fourteen class names.
+     */
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('defaulters_by_class', [
+            { classname: 'IX', seq: 9, defaulters: 0, outstanding: 0, due_rows: 0 },
+            { classname: 'X', seq: 10, defaulters: 0, outstanding: 0, due_rows: 0 },
+          ]),
+        ],
+      },
+    ]);
+    const out = await defaulterDrill({
+      level: 3,
+      context: [SCHOOL_STEP, { dim: 'quarter', value: '3', label: 'Q3' }],
+    });
+    /** The classes still draw, at zero — an axis, not an empty panel. */
+    expect((out.widget as BarWidget).data).toHaveLength(2);
+    const pending = out.notes.find((n) => n.includes('had fallen due'));
+    expect(pending).toContain('No fees in this quarter');
+    expect(pending).toContain('2026-08-29');
+    /** Never the list form when it would recite every category. */
+    expect(pending).not.toContain('IX');
+  });
+
+  it('refuses to guess when the pending marker column is missing', async () => {
+    /**
+     * A summed zero and a column that was never selected look identical after
+     * the merge, so the check is against the columns the query really answered
+     * with. Without it a plumbing slip would produce a note calmly stating that
+     * nothing in Q1 through Q4 was ever due.
+     */
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          {
+            key: 'defaulters_by_quarter',
+            description: 'd',
+            sql: 'SELECT 1',
+            status: 'ok',
+            columns: ['quarter', 'seq', 'defaulters'],
+            rows: [{ quarter: 'Q1', seq: 1, defaulters: 26 }],
+          },
+        ],
+      },
+    ]);
+    await expect(defaulterDrill({ level: 2, context: [SCHOOL_STEP] })).rejects.toThrow(
+      PlatformError,
+    );
   });
 
   it('refuses a defaulters drill aimed at the fee-collection widget id', () => {

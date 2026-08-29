@@ -603,6 +603,14 @@ body {
 .drillCrumbSep { color: var(--color-text-muted); }
 .drillTrail .chipbtn { padding: 3px 9px; font-size: 11px; }
 .drillBusy { color: var(--color-text-muted); }
+/* A caveat that applies to the level on screen. Full-width so it sits under
+   the breadcrumb rather than beside it, and amber-keyed because it warns
+   against a specific misreading rather than merely informing. */
+.drillNote {
+  flex-basis: 100%; margin: 2px 0 0; font-size: 11.5px; line-height: 1.45;
+  color: var(--color-text-secondary); border-left: 2px solid var(--color-amber);
+  padding-left: 8px; font-weight: 400; text-align: left;
+}
 
 /* ---------- per-widget clone (docs/06 §3) ---------- */
 

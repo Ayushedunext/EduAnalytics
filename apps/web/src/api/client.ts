@@ -241,6 +241,13 @@ export interface DrillResponse {
   /** Invariant 6: docs/06 §4.4 puts every level's SQL in the logic panel. */
   query: { key: string; description: string; sql: string };
   group_by: string;
+  /**
+   * Caveats true at THIS level, shown against the chart. Fee Defaulters' quarter
+   * bars are the reason: they are honest per-quarter headcounts that must not be
+   * added up, and a warning in the report's notes list is one a reader has
+   * already scrolled past.
+   */
+  notes: string[];
   degraded: { key: string; message: string }[];
   degraded_schools: { school_id: string; message: string }[];
 }

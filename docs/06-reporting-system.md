@@ -114,7 +114,24 @@ The first real drill path, and what building it settled. Nothing above is supers
 
 **UX as shipped:** pointer cursor and a hover hint on a drillable chart; click swaps it in place; breadcrumb with clickable crumbs, ← Back, ⟲ Reset and a "Level *n* of 3" indicator, rendered by the page into the panel's actions slot beside ⧉ Clone — drill navigation is page state, never part of the spec, so a PDF cannot inherit one reader's navigation. The Logic panel gains the active level's SQL, highlighted, per §4.3. Not yet built: per-slice KPI recompute, "Ask AI about this slice" carrying the context, and drill-aware PDF export (the export still prints level 1). Chart-spec carries `drillable` + `drill_context` as §4.4 says, plus `drill_dim` (the dimension a click pushes) and `drill_value_field` (where a school reads as a name and drills on an id) — a `drillable` widget without a `drill_dim` now fails schema validation, so a chart cannot advertise a click that has nowhere to go.
 
-**Still one report.** The remaining dashboards get drill paths as catalog entries, not as new screens.
+### 4.6 Second path — Fee Defaulters (2026-08-29), and what a COUNT changes
+
+The same three levels — school → academic quarter → class — on a **single** measure: how many students carry overdue fees. One bar per school, drilling to one bar per quarter, then one per class. Adding it was a catalog entry (`DRILL_PATHS['fee-defaulters']`), two `drill_only` queries and a level-1 widget; no new screens, no new endpoint, no change to the drill service's control flow. That was the point of §4.5's shape.
+
+**One measure is a plain bar, not a group of one.** `DrillPath.measures` holds one or more; two or more become a grouped bar with a legend, one stays a single-series bar keeping the gradient and tallest-bar highlight that only mean something when a chart compares within itself. The spec enforces the floor: `bar.series` requires at least two entries, so a one-entry group cannot be built even by mistake.
+
+**Counting people is not counting money, and the levels prove it in opposite directions.** A defaulter is a person, so:
+
+- **classes within a quarter DO sum to the quarter** — a student sits in one class, so the classes partition it exactly (verified: sacskb Q1, 1,056 = 1,056 across 14 classes; Q2, 4,551 = 4,551 across 15);
+- **quarters within a school DO NOT sum to the school** — a student overdue on a Q1 instalment and a Q3 instalment is one defaulter and two bars. Measured 2026-08-29: sacskb has 5,155 distinct defaulters against quarter bars of 1,056 / 4,551 / 4,870 / 4,890, summing to 15,367. Three times the truth.
+
+Counting each student once — in their earliest overdue quarter, say — would make the bars add up and would answer a question nobody asked; "how many students are overdue for Q3" is the number a bursar chasing Q3 needs. So the honest count stays and the **level carries its own note**, rendered against the bars rather than in the report's notes list. `DrillLevel.note` is new for this: a caveat that is true at one level and not the others belongs where the misreading would happen, not three screens below it. The class level carries the converse note, because "these ones do add up" is equally worth knowing.
+
+**Two date columns, two jobs.** The overdue test stays `periodtodate < :as_of_date` — the same test every other query in the report uses, so a drill cannot quietly redefine what a defaulter is. The quarter BUCKET is `periodfromdate`, matching Fee Collection, so "Q2" means the same instalment on both dashboards. They disagree only for a period straddling a quarter boundary: 4,158 of 333,598 rows at sacskb (1.2%), 25 at premium_test, none at all in the four St Marks schools.
+
+**Cache versioning is now a standing rule, not an incident.** `sap:v3` → `sap:v4`. Adding a widget changes the shape of a cached value even when no type changes and nothing fails to deserialise, and the key is otherwise identical — so a warm cache serves the pre-change dashboard for the whole TTL. That happened on Fee Collection (found by running it, not by reasoning) and would have happened again here. The rule: **if a reader would see something different, bump the digit.**
+
+**Still two reports.** The remaining dashboards get drill paths as catalog entries, not as new screens.
 
 ## 5. PDF export
 

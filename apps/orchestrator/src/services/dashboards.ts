@@ -327,13 +327,36 @@ export interface DrillLevel {
   readonly title: string;
   /** For the Logic panel's group-by line at this level. */
   readonly group_by: string;
+  /**
+   * A caveat that is true at THIS level and not at the others, shown beside the
+   * chart rather than in the report's notes.
+   *
+   * It exists because of one specific, measured hazard: a defaulter count is a
+   * count of PEOPLE, and a student overdue in two quarters is one defaulter at
+   * school level but a bar in both quarters. At sacskb the four quarter bars
+   * total 15,367 against a school figure of 5,155 — a reader who adds them up is
+   * not slightly off, they are out by a factor of three. A note in the report's
+   * notes list, below the fold and shared by every level, is not where that
+   * belongs; it belongs against the bars that would mislead.
+   */
+  readonly note?: string;
 }
 
 export interface DrillPath {
   /** The widget a click starts from. Only this widget of the report drills. */
   readonly widget_id: string;
-  /** The measures drawn at every level, in legend order. */
-  readonly series: readonly { readonly field: string; readonly label: string }[];
+  /**
+   * The measures drawn at every level, in legend order.
+   *
+   * One or more. Several become a grouped bar with a legend (Fee Collection's
+   * payable/collected/pending); ONE stays a plain single-series bar, keeping
+   * the gradient and tallest-bar highlight that only make sense when a chart is
+   * comparing within itself (Fee Defaulters' headcount). Named `measures` and
+   * not `series` because `bar.series` in the spec means specifically the
+   * grouped case and requires at least two — the emitter below sets it only
+   * when there really are.
+   */
+  readonly measures: readonly { readonly field: string; readonly label: string }[];
   readonly levels: readonly [DrillLevel, ...DrillLevel[]];
 }
 
@@ -352,7 +375,7 @@ export interface DrillPath {
 export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
   'fee-collection': {
     widget_id: 'bar-school',
-    series: [
+    measures: [
       { field: 'payable', label: 'Fee payable' },
       { field: 'collected', label: 'Fee collected' },
       { field: 'pending', label: 'Fee pending' },
@@ -392,6 +415,66 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
         title: 'Demand, collection and pending by class · {context}',
         group_by: 'class',
         /** The leaf: no `drill_dim`, so the chart at this level is not clickable. */
+      },
+    ],
+  },
+  /**
+   * Defaulters: school → quarter → class, the same three levels as fees, on a
+   * single measure — how many students carry overdue fees.
+   *
+   * -- The one thing this path must not let a reader believe -----------------
+   * A defaulter is a PERSON, and the levels therefore relate to each other
+   * differently in each direction:
+   *
+   *   classes within a quarter  → SUM to the quarter. A student sits in one
+   *                               class, so the parts are disjoint.
+   *   quarters within a school  → DO NOT sum to the school. A student overdue
+   *                               on a Q1 instalment and a Q3 instalment is one
+   *                               defaulter and two bars.
+   *
+   * That second one is not a rounding difference. Measured 2026-08-29 on the
+   * real extract: sacskb has 5,155 distinct defaulters and quarter bars of
+   * 1,056 / 4,551 / 4,870 / 4,890 — a sum of 15,367, three times the truth.
+   * Counting each student once (say, in their earliest overdue quarter) would
+   * make the bars add up and would answer a question nobody asked: "how many
+   * students were overdue in Q3" is the number a bursar chasing Q3 needs. So
+   * the honest count stays and the level carries its own warning, shown against
+   * the bars rather than in a notes list under the page.
+   */
+  'fee-defaulters': {
+    widget_id: 'bar-school-defaulters',
+    /**
+     * One measure, so this renders as a plain single-series bar rather than a
+     * group — the spec's `bar.series` is for two or more, and one bar per
+     * school is exactly what was asked for.
+     */
+    measures: [{ field: 'defaulters', label: 'Students with overdue fees' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Students with overdue fees by school',
+        group_by: 'school',
+      },
+      {
+        x: 'quarter',
+        drill_dim: 'quarter',
+        drill_value_field: 'seq',
+        query: 'defaulters_by_quarter',
+        narrow: { kind: 'scope' },
+        title: 'Students with overdue fees by quarter · {context}',
+        group_by: 'academic quarter',
+        note: 'A student overdue in more than one quarter is counted in each, so these bars deliberately add up to more than the school’s own total.',
+      },
+      {
+        x: 'classname',
+        query: 'defaulters_by_class',
+        narrow: { kind: 'param', param: 'drill_quarter', type: 'number' },
+        title: 'Students with overdue fees by class · {context}',
+        group_by: 'class',
+        /** These DO sum to the quarter above: a student sits in one class. */
+        note: 'A student sits in one class, so these bars add up to the quarter’s own total.',
       },
     ],
   },
@@ -803,7 +886,7 @@ function buildFeeCollection(merged: Merged, { year, scope }: BuildContext): Dash
       title: path.levels[0].title,
       x: 'school_name',
       y: 'payable',
-      series: [...path.series],
+      series: [...path.measures],
       data: perSchool.map((entry) => ({
         school_id: entry.school_id,
         /** Falls back to the id: an unnamed bar is still a bar someone can act on. */
@@ -908,6 +991,8 @@ function buildFeeCollection(merged: Merged, { year, scope }: BuildContext): Dash
  */
 function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
+  /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
+  const path = DRILL_PATHS['fee-defaulters'] as DrillPath;
 
   const totals = merged.sumAll('totals', ['defaulters', 'overdue']);
   const aging = merged.sumBy('aging', 'bucket', ['students', 'outstanding'], 'seq');
@@ -983,6 +1068,49 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
         tone: 'neutral',
       },
     );
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — one bar per school, how many
+   * students carry overdue fees.
+   *
+   * Built from the SAME `totals` rows the KPI tiles read, kept per school
+   * instead of summed across them, so it costs no extra query — the same trick
+   * Fee Collection's level 1 uses, and it matters more here: `totals` is the one
+   * scan on this dashboard that buys a number no arithmetic on the other result
+   * sets could produce (see the catalog's note on why it exists at all).
+   *
+   * Per-school is the only grouping where a distinct headcount can be summed
+   * across at all, and even then only because a student belongs to exactly one
+   * school. `sumPerSchool` adds within a school and never between them, which
+   * for a one-row-per-school result set is a no-op — that is the point. Summing
+   * these bars is still wrong at every level below this one; the quarter level
+   * says so against its own chart.
+   */
+  const perSchool = merged.sumPerSchool('totals', ['defaulters']);
+  if (perSchool.length > 0) {
+    const schoolName = new Map(scope.map((s) => [s.school_id, s.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'defaulters',
+      /**
+       * No `series`: one measure is a plain bar, not a group of one. The spec
+       * requires at least two entries precisely so a single-series chart cannot
+       * grow a legend restating its own title.
+       */
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        defaulters: entry.totals['defaulters'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
   }
 
   if (overdueBands.length > 0) {
@@ -1107,7 +1235,7 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
 
   return {
     widgets,
-    groupBy: ['aging band', 'class', 'fee head', 'student'],
+    groupBy: ['school', 'aging band', 'class', 'fee head', 'student'],
     notes: [
       `A student is counted as a defaulter when a fee period ended on or before ${asOf} and a balance remains. Dues not yet due are shown as their own band and are excluded from every "overdue" figure.`,
       /**
@@ -1117,6 +1245,14 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
        */
       'The fee ledger holds current balances, so the as-of date decides what counts as overdue and how deep the band is. It does not rebuild the ledger as it stood on that date: a payment made last week is already reflected here.',
       'Student names and enrolment numbers are masked for sessions without student-data permission; the amounts are not.',
+      /**
+       * The counting rule, stated once for the whole report. The quarter level
+       * repeats it against its own bars (`DRILL_PATHS`), because that is the
+       * only chart where adding the bars up is a tempting mistake — but a
+       * reader who never drills should still know that these are people.
+       */
+      'Defaulter counts are counts of students, not of dues. A student who owes across several fee heads or several periods is one defaulter, which is why the aging bands and the quarter breakdown add up to more than the total.',
+      'Quarters are ACADEMIC quarters, measured from the period a fee was demanded for, so Q2 means the same thing here as it does on Fee Collection: Q1 is April–June, Q4 is January–March.',
     ],
   };
 }

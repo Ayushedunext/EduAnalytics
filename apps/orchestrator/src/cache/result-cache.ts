@@ -127,6 +127,12 @@ async function connect(): Promise<void> {
  * measure, for the whole TTL. That is what this version digit is for: adding a
  * widget IS a change to the shape of a cached value, even though no type
  * changed and nothing failed to deserialise.
+ *
+ * v3 -> v4 (2026-08-29): the same again for Fee Defaulters
+ * (`bar-school-defaulters`). Twice in three days is the useful signal here —
+ * ANY change to what a builder emits needs this digit, not only a change to a
+ * type. The rule to carry forward: if a reader would see something different,
+ * bump it.
  */
 export function cacheKey(parts: {
   kind: string;
@@ -141,7 +147,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v3:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v4:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

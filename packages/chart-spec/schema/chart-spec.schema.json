@@ -125,6 +125,15 @@
                       }
                     }
                   },
+                  "tone": {
+                    "type": "string",
+                    "enum": [
+                      "neutral",
+                      "positive",
+                      "warning",
+                      "negative"
+                    ]
+                  },
                   "type": {
                     "type": "string",
                     "const": "bar"
@@ -224,6 +233,15 @@
                         ]
                       }
                     }
+                  },
+                  "tone": {
+                    "type": "string",
+                    "enum": [
+                      "neutral",
+                      "positive",
+                      "warning",
+                      "negative"
+                    ]
                   },
                   "type": {
                     "type": "string",

@@ -133,6 +133,11 @@ async function connect(): Promise<void> {
  * ANY change to what a builder emits needs this digit, not only a change to a
  * type. The rule to carry forward: if a reader would see something different,
  * bump it.
+ *
+ * v4 -> v5 (2026-08-29): Fee Defaulters' aging chart gained `tone: 'warning'`,
+ * so it draws amber instead of teal. No widget was added and no number moved —
+ * which is exactly why this one is worth recording. The rule is about what a
+ * READER sees, not about whether the shape changed enough to break anything.
  */
 export function cacheKey(parts: {
   kind: string;
@@ -147,7 +152,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v4:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v5:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

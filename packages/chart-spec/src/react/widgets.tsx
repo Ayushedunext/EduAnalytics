@@ -50,6 +50,7 @@ import { widgetSchema } from '../spec.js';
 import type {
   BarSeries,
   BarWidget,
+  Tone,
   DonutWidget,
   KpiWidget,
   LineWidget,
@@ -440,6 +441,21 @@ function seriesOf(widget: BarWidget): readonly BarSeries[] {
   return widget.series ?? [{ field: widget.y, label: widget.title ?? widget.y }];
 }
 
+/**
+ * The colour a data-bound chart draws in.
+ *
+ * `tone` wins over `accent` when both are present, and the precedence is the
+ * point: `accent` is variety chosen by the page showing the chart, `tone` is
+ * what the measure IS (spec.ts). A caller cycling colours across a preview grid
+ * must not be able to paint overdue money in the teal it uses for headcounts —
+ * meaning outranks arrangement. Neither present is the platform teal every
+ * chart has always been.
+ */
+function measureColour(tone: Tone | undefined, accent: ChartAccent | undefined): string {
+  if (tone !== undefined && tone !== 'neutral') return toneColour(tone);
+  return ACCENT_COLOUR[accent ?? 'primary'];
+}
+
 export function BarPanel({
   widget,
   compact,
@@ -462,7 +478,7 @@ export function BarPanel({
 }): ReactElement {
   const series = seriesOf(widget);
   const grouped = widget.series !== undefined;
-  const seriesColour = ACCENT_COLOUR[accent ?? 'primary'];
+  const seriesColour = measureColour(widget.tone, accent);
   /**
    * A depth gradient built from ONE hue at two opacities, never a second
    * colour -- so it stays inside docs/10 section 1's "teal-family series" rule
@@ -749,7 +765,7 @@ export function LinePanel({
 }): ReactElement {
   const gradId = useGradientId('area');
   const animation = useAnimation();
-  const seriesColor = ACCENT_COLOUR[accent ?? 'primary'];
+  const seriesColor = measureColour(widget.tone, accent);
 
   // Empty and single-point series read as a broken chart if forced through
   // the same axes a real trend uses — an honest small state instead (§18/19).

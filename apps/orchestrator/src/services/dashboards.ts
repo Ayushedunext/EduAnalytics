@@ -1120,6 +1120,19 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
       title: 'Overdue by age of the debt',
       x: 'bucket',
       y: 'outstanding',
+      /**
+       * Amber, because docs/10 §1's token table assigns it to "warnings, fees
+       * outstanding" and that is precisely what these bars are. Not a contrast
+       * trick: `kpi-balance` above already states the same fact in the same
+       * colour, and this chart had no way to. It also separates the two bar
+       * panels on this page, which is a welcome side effect rather than the
+       * reason.
+       *
+       * Set here and not in the SPA because the PDF renders the same spec
+       * (ADR-021) — a colour looked up client-side would print differently
+       * from the screen it was approved on.
+       */
+      tone: 'warning',
       data: overdueBands.map((r) => ({
         bucket: label(r['bucket']),
         outstanding: num(r['outstanding']),

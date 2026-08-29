@@ -91,7 +91,11 @@ describe('a cache entry can only be reached by an identical request', () => {
     // v4 since Fee Defaulters gained its own drill entry point, two days later.
     // Any change to what a builder EMITS needs the bump, not only a change to a
     // type — if a reader would see something different, the digit moves.
-    expect(cacheKey(BASE)).toMatch(/^sap:v4:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v5 since the aging chart went amber (`tone: 'warning'`). No widget added,
+    // no number changed — a colour alone is enough, because the test of this
+    // rule is what a reader sees and not what a deserialiser would notice.
+    expect(cacheKey(BASE)).toMatch(/^sap:v5:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

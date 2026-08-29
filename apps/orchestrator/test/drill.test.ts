@@ -589,6 +589,44 @@ describe('fee defaulters: one bar per school, counting students', () => {
     expect(out.notes[0]).toMatch(/one class/i);
   });
 
+  it('marks the aging chart as overdue money, so screen and PDF agree', async () => {
+    /**
+     * The colour lives in the SPEC, not in the SPA. docs/10 §1 assigns amber to
+     * "warnings, fees outstanding" and this chart is exactly that; setting it
+     * server-side is what stops the PDF (ADR-021 renders the same spec) from
+     * printing a different colour than the screen it was approved on.
+     */
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('aging', [
+            { bucket: '1-30 days', seq: 2, students: 4, outstanding: 100 },
+            { bucket: '90+ days', seq: 5, students: 2, outstanding: 900 },
+          ]),
+        ],
+      },
+    ]);
+    const built = await buildDashboard({
+      session: SESSION,
+      schoolIds: ['stmarksmb'],
+      reportId: 'fee-defaulters',
+      academicYear: '2026-27',
+      asOfDate: '2026-08-29',
+      correlationId: 'corr-1',
+    });
+    const aging = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-aging',
+    );
+    expect(aging?.tone).toBe('warning');
+
+    /** The headcount chart stays untoned — it is a count, not a warning. */
+    const heads = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-defaulters',
+    );
+    expect(heads?.tone).toBeUndefined();
+  });
+
   it('refuses a defaulters drill aimed at the fee-collection widget id', () => {
     /**
      * The two reports drill on the same DIMENSIONS but from different widgets.

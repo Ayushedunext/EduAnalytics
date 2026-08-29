@@ -129,3 +129,48 @@ describe('drillable widgets name their dimension (ADR-020)', () => {
     ).toBe(false);
   });
 });
+
+/**
+ * `tone` on a chart is the same field `kpi` has always carried, and it is in
+ * the CONTRACT rather than in the SPA because the PDF renders the identical
+ * spec (ADR-021). A colour looked up client-side would print differently from
+ * the screen it was approved on, which is the one thing that ADR exists to
+ * prevent — so what is asserted here is that the spec can carry it at all, and
+ * that a widget without one is unchanged.
+ */
+describe('a chart can say what its measure is about', () => {
+  it('accepts a toned bar', () => {
+    expect(validateChartSpec(specWith({ ...groupedBar, tone: 'warning' })).ok).toBe(true);
+  });
+
+  it('accepts a toned line, not only a bar', () => {
+    const line = {
+      id: 'line-month',
+      type: 'line',
+      x: 'fee_month',
+      y: 'collected',
+      data: [{ fee_month: 'Apr', collected: 1 }],
+      tone: 'negative',
+    };
+    expect(validateChartSpec(specWith(line)).ok).toBe(true);
+  });
+
+  it('rejects a tone outside the enum kpi already uses', () => {
+    /**
+     * One vocabulary for both, so "warning" cannot come to mean one thing on a
+     * tile and another on the chart beside it.
+     */
+    expect(validateChartSpec(specWith({ ...groupedBar, tone: 'amber' })).ok).toBe(false);
+    expect(validateChartSpec(specWith({ ...groupedBar, tone: '#f2a93b' })).ok).toBe(false);
+  });
+
+  it('leaves an untoned chart exactly as it was', () => {
+    const { series, drillable, drill_dim, drill_value_field, drill_context, ...plain } = groupedBar;
+    const parsed = validateChartSpec(specWith(plain));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      const widget = parsed.value.widgets[0] as { tone?: unknown };
+      expect(widget.tone).toBeUndefined();
+    }
+  });
+});

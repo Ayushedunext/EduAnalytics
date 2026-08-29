@@ -433,7 +433,7 @@ const FEE_DEFAULTERS: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'fee_compile_data_set',
   domain: 'fees',
-  params: [ACADEMIC_YEAR, AS_OF_DATE],
+  params: [ACADEMIC_YEAR, AS_OF_DATE, DRILL_QUARTER],
   queries: [
     /**
      * Distinct students cannot be derived by adding up the other result sets —
@@ -525,6 +525,74 @@ const FEE_DEFAULTERS: PredefinedReport = {
         'AND periodtodate < :as_of_date ' +
         'GROUP BY enrollmentno, studentname, classname, sectionname ' +
         'ORDER BY outstanding DESC LIMIT 50',
+    },
+    /**
+     * Drill level 2 — how many students carry overdue fees, by academic quarter,
+     * for whichever school the reader clicked at level 1.
+     *
+     * There is no level-1 query: level 1 keeps the `totals` rows above per
+     * school instead of summing them (services/dashboards.ts), so the school
+     * breakdown costs nothing on a table where a scan is seconds.
+     *
+     * -- Bucketed on periodfromdate, filtered on periodtodate ------------------
+     * Two different date columns doing two different jobs, deliberately. The
+     * OVERDUE test is `periodtodate < :as_of_date` — the same test every other
+     * query in this report uses, so a drill cannot quietly redefine what a
+     * defaulter is. The BUCKET is the quarter the demand period began in, which
+     * is what Fee Collection's drill also uses, so "Q2" means the same instalment
+     * on both dashboards and a reader can put them side by side.
+     *
+     * The two disagree only for a period that starts in one academic quarter and
+     * ends in the next. Measured 2026-08-29 on the real extract: 4,158 of
+     * 333,598 rows at sacskb (1.2%), 25 at premium_test, and none at all in the
+     * four St Marks schools.
+     *
+     * -- COUNT(DISTINCT), and what that means for the reader -------------------
+     * A student overdue on two instalments in the same quarter is one bar-unit,
+     * not two. Across quarters they are counted once in each, so these bars add
+     * up to more than the school's own figure — by a factor of three at sacskb.
+     * That is the honest answer to "how many students are overdue for Q3", which
+     * is the number a bursar chasing Q3 needs, and the level carries a note
+     * saying so against the chart (`DRILL_PATHS`).
+     */
+    {
+      key: 'defaulters_by_quarter',
+      description: 'Students with overdue fees, by academic quarter',
+      drill_only: true,
+      sql:
+        `SELECT CONCAT('Q', ${ACADEMIC_QUARTER}) AS quarter, ${ACADEMIC_QUARTER} AS seq, ` +
+        'COUNT(DISTINCT enrollmentno) AS defaulters, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'AND periodtodate < :as_of_date AND periodfromdate IS NOT NULL ' +
+        'GROUP BY quarter, seq ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the same headcount by class, within the clicked school and
+     * quarter.
+     *
+     * These bars DO add up to the quarter above, and that is a fact about
+     * students rather than about the SQL: a child sits in one class, so the
+     * classes partition the quarter's distinct students exactly. Verified on the
+     * real extract (sacskb Q1: 1,056 = 1,056 across 14 classes; Q2: 4,551 =
+     * 4,551 across 15).
+     *
+     * Ordered by `classseq`, never by `classname`, which sorts X before IX.
+     */
+    {
+      key: 'defaulters_by_class',
+      description: 'Students with overdue fees, by class',
+      drill_only: true,
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, ' +
+        'COUNT(DISTINCT enrollmentno) AS defaulters, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'AND periodtodate < :as_of_date ' +
+        `AND (:drill_quarter IS NULL OR ${ACADEMIC_QUARTER} = :drill_quarter) ` +
+        'GROUP BY classname ORDER BY seq',
     },
   ],
 };

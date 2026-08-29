@@ -433,3 +433,241 @@ describe('a click narrows, and only inside what the reader could already see', (
     ).toThrow(PlatformError);
   });
 });
+
+/**
+ * Fee Defaulters drills on a COUNT OF PEOPLE, which behaves differently from
+ * Fee Collection's amounts in two ways that these tests pin down:
+ *
+ *   - one measure, so the widget must NOT carry `series`. A one-entry group
+ *     would draw a legend restating the title and cost the bar its gradient
+ *     and tallest-bar highlight;
+ *   - the quarter level's bars do not add up to the school figure, so that
+ *     level must ship the note that says so. A silent chart here is not a
+ *     cosmetic miss: on the real extract the four bars total three times the
+ *     school's own number.
+ */
+function defaulterResult(schools: { school_id: string; queries: QueryResult[] }[]) {
+  return {
+    report_id: 'fee-defaulters',
+    title: 'Fee Defaulters',
+    source: 'fee_compile_data_set',
+    params: {},
+    as_of: '2026-08-29T10:00:00.000Z',
+    schools: schools.map((s) => ({ school_id: s.school_id, status: 'ok', queries: s.queries })),
+  };
+}
+
+function defaulterDrill(args: {
+  level: number;
+  context: { dim: string; value: string; label: string }[];
+}) {
+  return buildDrill({
+    session: SESSION,
+    schoolIds: SCOPE,
+    reportId: 'fee-defaulters',
+    widgetId: 'bar-school-defaulters',
+    level: args.level,
+    context: args.context,
+    academicYear: '2026-27',
+    asOfDate: '2026-08-29',
+    correlationId: 'corr-def',
+  });
+}
+
+describe('fee defaulters: one bar per school, counting students', () => {
+  it('builds level 1 from the totals rows the KPI tiles already read', async () => {
+    response = defaulterResult([
+      { school_id: 'stmarksmb', queries: [query('totals', [{ defaulters: 62, overdue: 900000 }])] },
+      { school_id: 'stmarksj', queries: [query('totals', [{ defaulters: 55, overdue: 700000 }])] },
+    ]);
+
+    const built = await buildDashboard({
+      session: SESSION,
+      schoolIds: SCOPE,
+      reportId: 'fee-defaulters',
+      academicYear: '2026-27',
+      asOfDate: '2026-08-29',
+      correlationId: 'corr-1',
+    });
+
+    const widget = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-defaulters',
+    );
+    expect(widget).toBeDefined();
+    expect(widget?.y).toBe('defaulters');
+    /** ONE measure: a plain bar, never a group of one. */
+    expect(widget?.series).toBeUndefined();
+    expect(widget?.data).toEqual([
+      { school_id: 'stmarksmb', school_name: 'Meera Bagh', defaulters: 62 },
+      { school_id: 'stmarksj', school_name: 'Janakpuri', defaulters: 55 },
+    ]);
+    expect(widget?.drill_dim).toBe('school');
+    expect(widget?.drill_value_field).toBe('school_id');
+  });
+
+  it('never sums one school’s defaulters into another’s bar', async () => {
+    /**
+     * The whole reason level 1 uses `sumPerSchool` and not `sumAll`. Two
+     * schools of 62 and 55 are two bars, not one bar of 117 — and the failure
+     * mode if that ever regressed is a chart that looks entirely plausible.
+     */
+    response = defaulterResult([
+      { school_id: 'stmarksmb', queries: [query('totals', [{ defaulters: 62, overdue: 1 }])] },
+      { school_id: 'stmarksj', queries: [query('totals', [{ defaulters: 55, overdue: 1 }])] },
+    ]);
+    const built = await buildDashboard({
+      session: SESSION,
+      schoolIds: SCOPE,
+      reportId: 'fee-defaulters',
+      academicYear: '2026-27',
+      asOfDate: '2026-08-29',
+      correlationId: 'corr-1',
+    });
+    const widget = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-defaulters',
+    );
+    expect(widget?.data.map((r) => r['defaulters'])).toEqual([62, 55]);
+  });
+
+  it('drills to quarters, carrying the warning that the bars do not add up', async () => {
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('defaulters_by_quarter', [
+            { quarter: 'Q1', seq: 1, defaulters: 44, outstanding: 10 },
+            { quarter: 'Q2', seq: 2, defaulters: 31, outstanding: 20 },
+          ]),
+        ],
+      },
+    ]);
+
+    const out = await defaulterDrill({ level: 2, context: [SCHOOL_STEP] });
+
+    expect(lastCall?.args['query_keys']).toEqual(['defaulters_by_quarter']);
+    expect(lastCall?.args['school_ids']).toEqual(['stmarksmb']);
+    /** The report's own as-of date travels with the drill, unchanged. */
+    expect((lastCall?.args['params'] as Record<string, unknown>)['as_of_date']).toBe('2026-08-29');
+
+    const widget = out.widget as BarWidget;
+    expect(widget.x).toBe('quarter');
+    expect(widget.y).toBe('defaulters');
+    expect(widget.series).toBeUndefined();
+    expect(widget.data.map((r) => r['defaulters'])).toEqual([44, 31]);
+
+    /**
+     * [MANDATORY] the level that can be misread must say so. 44 + 31 is not
+     * this school's defaulter count and a reader has no way to know that from
+     * the bars alone.
+     */
+    expect(out.notes).toHaveLength(1);
+    expect(out.notes[0]).toMatch(/counted in each/i);
+  });
+
+  it('drills to classes, binding the quarter and saying these DO add up', async () => {
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('defaulters_by_class', [
+            { classname: 'IX', seq: 9, defaulters: 12, outstanding: 5 },
+            { classname: 'X', seq: 10, defaulters: 19, outstanding: 8 },
+          ]),
+        ],
+      },
+    ]);
+
+    const out = await defaulterDrill({ level: 3, context: [SCHOOL_STEP, QUARTER_STEP] });
+
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_quarter']).toBe(2);
+    expect(typeof params['drill_quarter']).toBe('number');
+
+    const widget = out.widget as BarWidget;
+    expect(widget.x).toBe('classname');
+    expect(widget.drillable).toBe(false);
+    expect(out.notes[0]).toMatch(/one class/i);
+  });
+
+  it('marks the aging chart as overdue money, so screen and PDF agree', async () => {
+    /**
+     * The colour lives in the SPEC, not in the SPA. docs/10 §1 assigns amber to
+     * "warnings, fees outstanding" and this chart is exactly that; setting it
+     * server-side is what stops the PDF (ADR-021 renders the same spec) from
+     * printing a different colour than the screen it was approved on.
+     */
+    response = defaulterResult([
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('aging', [
+            { bucket: '1-30 days', seq: 2, students: 4, outstanding: 100 },
+            { bucket: '90+ days', seq: 5, students: 2, outstanding: 900 },
+          ]),
+        ],
+      },
+    ]);
+    const built = await buildDashboard({
+      session: SESSION,
+      schoolIds: ['stmarksmb'],
+      reportId: 'fee-defaulters',
+      academicYear: '2026-27',
+      asOfDate: '2026-08-29',
+      correlationId: 'corr-1',
+    });
+    const aging = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-aging',
+    );
+    expect(aging?.tone).toBe('warning');
+
+    /** The headcount chart stays untoned — it is a count, not a warning. */
+    const heads = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-defaulters',
+    );
+    expect(heads?.tone).toBeUndefined();
+  });
+
+  it('refuses a defaulters drill aimed at the fee-collection widget id', () => {
+    /**
+     * The two reports drill on the same DIMENSIONS but from different widgets.
+     * Accepting either id on either report would let a click on one dashboard
+     * fetch a level of the other.
+     */
+    expect(() =>
+      resolveDrill({
+        reportId: 'fee-defaulters',
+        widgetId: 'bar-school',
+        level: 2,
+        context: [SCHOOL_STEP],
+        schoolIds: SCOPE,
+        correlationId: 'c',
+      }),
+    ).toThrow(PlatformError);
+  });
+});
+
+/**
+ * A single-measure path must not emit `series`, and a multi-measure one must.
+ * Asserted over the CATALOG rather than over the two reports by name, so a
+ * third drill path added later is covered without anyone remembering to.
+ */
+describe('measures decide whether a level is a grouped bar', () => {
+  it.each(Object.entries(DRILL_PATHS))('%s declares at least one measure', (_id, path) => {
+    expect(path.measures.length).toBeGreaterThan(0);
+  });
+
+  it.each(Object.entries(DRILL_PATHS))(
+    '%s: every measure is a field its own levels can return',
+    (_id, path) => {
+      /**
+       * A measure naming a column the level's SQL does not select would render
+       * as a chart of zeroes — the shape of a working report with none of the
+       * data, which is the failure §10 names.
+       */
+      for (const measure of path.measures) {
+        expect(measure.field).toMatch(/^[a-z_][a-z0-9_]*$/);
+        expect(measure.label.length).toBeGreaterThan(0);
+      }
+    },
+  );
+});

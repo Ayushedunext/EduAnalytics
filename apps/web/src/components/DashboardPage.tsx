@@ -130,6 +130,7 @@ export function DashboardPage({
             context: result.context,
             level: result.level,
             query: result.query,
+            notes: result.notes,
           },
         }));
         if (result.degraded.length > 0 || result.degraded_schools.length > 0) {
@@ -400,6 +401,8 @@ interface DrillState {
   readonly context: readonly DrillStep[];
   readonly level: number;
   readonly query: { key: string; description: string; sql: string };
+  /** Caveats the SERVER attached to this level — never composed here. */
+  readonly notes: readonly string[];
 }
 
 /**
@@ -469,6 +472,15 @@ function DrillTrail({
         ⟲ Reset
       </button>
       {busy && <span className="drillBusy">loading…</span>}
+      {/* Against the bars it is about, not in the report's notes list three
+          screens down. Fee Defaulters' quarter level is why this exists: its
+          bars are correct and adding them up is wrong by a factor of three,
+          and that is not something to learn after the fact. */}
+      {state.notes.map((note) => (
+        <p key={note} className="drillNote">
+          {note}
+        </p>
+      ))}
     </div>
   );
 }

@@ -87,7 +87,15 @@ describe('a cache entry can only be reached by an identical request', () => {
     // written against a LITERAL prefix. A regex that accepted any version would
     // pass whether or not anyone remembered to bump it, and this is precisely
     // the rule nobody remembers.
-    expect(cacheKey(BASE)).toMatch(/^sap:v3:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v4 since Fee Defaulters gained its own drill entry point, two days later.
+    // Any change to what a builder EMITS needs the bump, not only a change to a
+    // type — if a reader would see something different, the digit moves.
+    //
+    // v5 since the aging chart went amber (`tone: 'warning'`). No widget added,
+    // no number changed — a colour alone is enough, because the test of this
+    // rule is what a reader sees and not what a deserialiser would notice.
+    expect(cacheKey(BASE)).toMatch(/^sap:v5:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

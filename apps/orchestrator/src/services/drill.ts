@@ -69,6 +69,13 @@ export interface DrillResult {
    */
   readonly query: { readonly key: string; readonly description: string; readonly sql: string };
   readonly group_by: string;
+  /**
+   * Caveats true at THIS level, shown against the chart rather than in the
+   * report's notes list. Fee Defaulters' quarter level is the reason: its bars
+   * are honest per-quarter headcounts that must not be added together, and a
+   * warning three screens below the chart is a warning nobody reads.
+   */
+  readonly notes: readonly string[];
   /** Named, never blank (ADR-011) — the same contract the dashboard route has. */
   readonly degraded: readonly { key: string; message: string }[];
   readonly degraded_schools: readonly { school_id: string; message: string }[];
@@ -295,7 +302,7 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
   );
 
   const merged = new Merged(result);
-  const fields = path.series.map((s) => s.field);
+  const fields = path.measures.map((m) => m.field);
   /**
    * Summed across the level's school set, which after a school click is one
    * school. Ordered by the level's own `seq` where it has one — quarters and
@@ -310,7 +317,14 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
     title: level.title.replace('{context}', breadcrumb(args.context)),
     x: level.x,
     y: fields[0] ?? 'value',
-    series: [...path.series],
+    /**
+     * `series` only when there really are several. The spec requires at least
+     * two entries, and a one-entry "group" would draw a legend that restates
+     * the chart's own title while costing the single-series bar its gradient
+     * and tallest-bar highlight (react/widgets.tsx). One measure is a plain
+     * bar, which is what Fee Defaulters wants and what the schema enforces.
+     */
+    ...(path.measures.length > 1 ? { series: [...path.measures] } : {}),
     data: rows.map((row) => {
       const out: Record<string, string | number> = { [level.x]: String(row[level.x] ?? '—') };
       /**
@@ -359,6 +373,7 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
       sql: '',
     },
     group_by: level.group_by,
+    notes: level.note === undefined ? [] : [level.note],
     degraded: merged.failures(),
     degraded_schools: merged.schoolFailures(),
   };

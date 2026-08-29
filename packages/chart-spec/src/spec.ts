@@ -122,6 +122,13 @@ const widgetBase = {
 };
 
 /**
+ * What a measure is ABOUT, when that is a fact about the report rather than a
+ * taste. Shared with `kpi`, which has carried it since the first dashboard.
+ */
+export const toneSchema = z.enum(['neutral', 'positive', 'warning', 'negative']);
+export type Tone = z.infer<typeof toneSchema>;
+
+/**
  * A KPI tile. value is a pre-formatted display string because currency and
  * number formatting are locale decisions made once, server-side, so the screen
  * and the PDF cannot format the same number differently.
@@ -133,7 +140,7 @@ export const kpiWidgetSchema = z
     label: z.string().min(1),
     value: z.string(),
     delta: z.string().optional(),
-    tone: z.enum(['neutral', 'positive', 'warning', 'negative']).optional(),
+    tone: toneSchema.optional(),
   })
   .strict();
 
@@ -193,6 +200,30 @@ const cartesian = {
   /** Field name in data for the value axis. */
   y: z.string().min(1),
   data: z.array(dataRowSchema),
+  /**
+   * What this chart's measure is about — added 2026-08-29.
+   *
+   * The same field `kpi` has always had, and set by the same authority for the
+   * same reason: the server knows that "Overdue by age of the debt" is money
+   * that is late, and docs/10 §1's token table assigns amber to exactly that
+   * ("warnings, fees outstanding"). A KPI tile beside the chart already says so
+   * (`kpi-balance` is `tone: 'warning'`); the chart drawing the same fact had
+   * no way to.
+   *
+   * -- Why this is in the CONTRACT and `ChartAccent` is not -------------------
+   * They answer different questions and the distinction is load-bearing.
+   * `ChartAccent` (react/widgets.tsx) is variety — which teal step a caller
+   * paints one of several single-series previews, a property of the page doing
+   * the showing. `tone` is meaning: overdue money is amber wherever it is
+   * drawn, including on paper. Keeping it out of the spec would mean the SPA
+   * and the PDF each look up the colour separately, and the first time one of
+   * them forgot, an export would disagree with the screen it was approved
+   * from — which is the one thing ADR-021 exists to prevent.
+   *
+   * Absent means neutral, which is the platform teal every chart has always
+   * been, so no existing widget changes.
+   */
+  tone: toneSchema.optional(),
 };
 
 export const barWidgetSchema = z

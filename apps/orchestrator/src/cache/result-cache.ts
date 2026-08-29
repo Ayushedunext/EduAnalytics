@@ -138,6 +138,18 @@ async function connect(): Promise<void> {
  * so it draws amber instead of teal. No widget was added and no number moved —
  * which is exactly why this one is worth recording. The rule is about what a
  * READER sees, not about whether the shape changed enough to break anything.
+ *
+ * v5 -> v6 (2026-08-29): the defaulters quarter AND class drills now keep
+ * categories that are not due yet, as zero bars with a note, instead of
+ * dropping them. Drill levels are cached under their own keys, so this is the
+ * first bump about a DRILL entry rather than a dashboard one — same rule,
+ * wider reach.
+ *
+ * The digit tracks what has SHIPPED, not each step of getting there. Iterating
+ * on a branch invalidates local entries by deleting them; bumping per edit
+ * would burn a version on work nobody has seen. (Worth saying because this
+ * change was written in two passes and the second one was served a stale drill
+ * from the first — the cache is quicker to catch you out than it looks.)
  */
 export function cacheKey(parts: {
   kind: string;
@@ -152,7 +164,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v5:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v6:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

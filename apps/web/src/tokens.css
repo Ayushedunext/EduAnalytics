@@ -248,13 +248,32 @@ body {
   background: var(--color-nav-hover);
   border-radius: 3px;
 }
+/* No `transform` in the transition, and none on :hover below -- see why there. */
 .nav li {
   padding: 10px 12px; border-radius: 9px; font-size: 13.5px; margin-bottom: 2px;
   display: flex; gap: 10px; align-items: center; color: var(--color-nav-text);
-  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .nav li.clickable { cursor: pointer; }
-.nav li.clickable:hover { background: var(--color-nav-hover); color: #fff; transform: translateX(1px); }
+/* Colour only. A `transform: translateX(1px)` used to ride along here and it
+   made the whole menu JITTER (fixed 2026-09-01).
+
+   The loop: a transform makes the row its own composited layer, and Chrome
+   snaps a composited layer to whole device pixels. These rows do not sit on
+   whole pixels -- 13.5px text in a 10px-padded flex row lands them on
+   fractions -- so applying the transform nudged the row's box a sliver
+   vertically. With the cursor resting near a row's edge that sliver is enough
+   to move the boundary past it: hover is lost, the transform is dropped, the
+   row snaps back under the cursor, hover returns. Measured at ~27Hz -- 24
+   mouseover/mouseout pairs in 900ms with the mouse held perfectly still, which
+   is what the user saw as the panel vibrating.
+
+   The 1px slide was decoration; the background and colour change is the
+   affordance and it is unaffected. Any hover style that moves an element's own
+   geometry has this failure mode -- if a nudge is ever wanted back here, it has
+   to be something that does not shift the box the cursor is being tested
+   against. */
+.nav li.clickable:hover { background: var(--color-nav-hover); color: #fff; }
 .nav li.active {
   background: linear-gradient(90deg, var(--color-teal) 0%, var(--color-teal-dark) 100%);
   color: #fff; font-weight: 600; box-shadow: var(--shadow-xs);

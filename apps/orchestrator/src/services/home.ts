@@ -661,7 +661,7 @@ export async function buildHomeSummary(args: {
 
   const spec: ChartSpec = {
     spec_version: 1,
-    title: 'Home',
+    title: 'Dashboard',
     widgets,
     meta: {
       scope,

@@ -258,7 +258,7 @@ export function App(): JSX.Element {
           academicYear={home?.academic_year ?? null}
           crumb={
             route.kind === 'home'
-              ? 'Home'
+              ? 'Dashboard'
               : route.kind === 'settings'
                 ? 'Settings'
                 : route.kind === 'ask'

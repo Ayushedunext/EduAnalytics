@@ -275,6 +275,46 @@ export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
 };
 
 /**
+ * The ONE query behind each dashboard's DRILL-ENTRY chart — the school-level
+ * bar that the Dashboard grid draws and that a reader clicks to descend.
+ *
+ * -- Why this is not `DASHBOARD_LEAD_QUERY` ----------------------------------
+ * The two answer different questions and, for three of the four, name different
+ * statements. A dashboard's LEAD chart is whatever its own page opens with —
+ * Fee Collection leads with receipts by month, a line. Its DRILL-ENTRY chart is
+ * level 1 of the curated path (`DRILL_PATHS`): one bar per school, the thing a
+ * click descends from. The Dashboard grid wants the second, because a card
+ * showing a chart that cannot be drilled is a card that lies about what happens
+ * when you click it.
+ *
+ * Only the mapping differs. Both tables name a query the report already vets,
+ * both are fetched through the same `run_predefined` with one `query_keys`
+ * entry, and neither is a second serving path.
+ *
+ * -- Why level 1 costs no query of its own ------------------------------------
+ * Every entry here names a statement the DASHBOARD ALREADY RUNS for something
+ * else, re-grouped per school rather than summed across schools
+ * (`Merged.sumPerSchool`). Fee Collection's school bars come from the same
+ * `by_component` rows its fee-head table reads; Fee Defaulters' from the
+ * `totals` rows behind its KPI tiles. So the grid costs exactly one scan per
+ * card, the same as the lead-chart previews it replaces — and it is the SAME
+ * scan the full report pays for, which is what ADR-020 means by a drill being a
+ * re-grouping rather than a new query.
+ *
+ * [MANDATORY] partial by design, and that is the invariant to keep: an entry
+ * here exists if and only if the report has a `DRILL_PATHS` entry, because a
+ * drill-entry query with no path to descend is a chart that renders clickable
+ * and refuses the click. test/home-previews.test.ts asserts the two tables
+ * agree in both directions.
+ */
+export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
+  'enrollment-overview': 'by_class',
+  'fee-collection': 'by_component',
+  'fee-defaulters': 'totals',
+  'attendance-analytics': 'summary',
+};
+
+/**
  * Which of a report's widgets accept a `bucket` override, and which values —
  * a widget's own SQL declares its bucket variants (mcp-server/src/reports/
  * catalog.ts); this table only says which widgets HAVE one, for the clone

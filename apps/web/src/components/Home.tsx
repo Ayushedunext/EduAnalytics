@@ -38,12 +38,30 @@
  * The sidebar is the menu (every dashboard, Ask AI, Settings — Sidebar.tsx). It
  * used to be duplicated here as a second set of link-only tiles, which meant
  * this screen and the sidebar were two menus disagreeing about nothing, just
- * saying the same thing twice. Home's own job is to be the ONE screen that
- * shows something FROM each dashboard rather than a way to each dashboard —
- * `available` dashboards get a live preview card (their own lead widget,
- * services/home.ts `buildHomePreview`); `coming`/`blocked` ones, which have
- * nothing to preview, collapse into a slim strip, because the sidebar is
- * already the place to discover those.
+ * saying the same thing twice. This screen's own job is to be the ONE place
+ * that shows something FROM each dashboard rather than a way to each dashboard.
+ *
+ * -- A curated six, not everything available ---------------------------------
+ * The grid used to be every `available` dashboard, which is nine cards and
+ * growing — the sidebar again, drawn larger. It is now six, ranked and ordered
+ * by the SERVER (`/api/home` `grid`, services/home.ts `DASHBOARD_GRID`), and
+ * this component renders that order rather than re-deriving it: what the
+ * overview leads with is a product decision, and a second copy of the rule here
+ * would be free to disagree with the first.
+ *
+ * Everything else drops to the strip below — which now holds three kinds, not
+ * two. Dashboards that are BUILT but not on the grid are clickable there with
+ * no pill; `coming` and `blocked` keep their pill and stay inert. A working
+ * dashboard greyed out beside things that genuinely cannot be opened would be
+ * the same lie the three card states exist to avoid.
+ *
+ * -- Each card draws the chart a click DESCENDS from -------------------------
+ * A card shows the report's drill-entry chart (level 1, one bar per school)
+ * where the report has a curated path, and its lead chart where it does not.
+ * Fee Collection is why the distinction matters: its page opens with receipts
+ * by month, but the chart a reader drills into is demand by school, fed by a
+ * different statement. A card drawing the first would invite a click it cannot
+ * honour.
  *
  * -- Each card is its own request ---------------------------------------------
  * The cards used to arrive together, which meant the grid was only as fast as
@@ -104,8 +122,19 @@ export function Home({
 }: Props): JSX.Element {
   const aiActive = session.ai_status === 'active';
   const scopeNames = home.spec.meta.scope.map((s) => s.school_name).join(' · ');
-  const previewable = home.dashboards.filter((c) => c.status === 'available');
-  const more = home.dashboards.filter((c) => c.status !== 'available');
+  /**
+   * The grid, in the server's order (`/api/home` `grid`). Looked up rather than
+   * filtered: the order is the server's ranking and re-deriving it here from
+   * `status` would put the cards back in catalog order, which ranks by the
+   * accident of what was built first.
+   */
+  const byId = new Map(home.dashboards.map((card) => [card.id, card]));
+  const previewable = home.grid.flatMap((id) => {
+    const card = byId.get(id);
+    return card === undefined ? [] : [card];
+  });
+  const onGrid = new Set(home.grid);
+  const more = home.dashboards.filter((card) => !onGrid.has(card.id));
 
   return (
     <main className="flex-1 overflow-y-auto">
@@ -230,7 +259,7 @@ export function Home({
           ))}
         </div>
 
-        <MoreDashboards cards={more} />
+        <MoreDashboards cards={more} onOpen={onOpen} />
 
         <p className="text-[11.5px] text-[var(--color-muted)] mt-7 leading-relaxed">
           Scope comes from the launch token the ERP signed. It cannot be widened from this browser,
@@ -279,27 +308,55 @@ function PreviewCard({
 }
 
 /**
- * Everything with nothing to preview -- `coming` (not built yet) and
- * `blocked` (no data in the ERP extract) alike. One slim row rather than full
- * tiles: the sidebar already lists each of these by name with the same
- * status and reason (Sidebar.tsx), so this strip is a reminder they exist,
- * not the place to learn about them for the first time.
+ * Everything the grid does not draw. One slim row rather than full tiles: the
+ * sidebar already lists each of these by name with the same status and reason
+ * (Sidebar.tsx), so this strip is a reminder they exist, not the place to learn
+ * about them for the first time.
+ *
+ * -- Three kinds here now, and one of them is clickable -----------------------
+ * This used to hold only `coming` and `blocked` dashboards, because the grid
+ * drew every `available` one. The grid is a curated six now (services/home.ts
+ * `DASHBOARD_GRID`), so BUILT dashboards land here too — and they must not sit
+ * greyed out beside things that genuinely cannot be opened. A card that works
+ * gets a real click and no pill; the other two keep their pill and stay inert,
+ * which is the same three-state distinction the cards above make and for the
+ * same reason: they need different people to fix them.
  */
-function MoreDashboards({ cards }: { cards: readonly DashboardCard[] }): JSX.Element | null {
+function MoreDashboards({
+  cards,
+  onOpen,
+}: {
+  cards: readonly DashboardCard[];
+  onOpen: (reportId: string) => void;
+}): JSX.Element | null {
   if (cards.length === 0) return null;
   return (
     <>
       <div className="sect">More dashboards</div>
       <div className="moreStrip">
-        {cards.map((card) => (
-          <span key={card.id} className="moreChip" title={card.reason ?? card.blurb}>
-            <span aria-hidden="true">{card.icon}</span>
-            {card.title}
-            <span className={`pill ${card.status === 'blocked' ? 'nodata' : 'soon'}`}>
-              {card.status === 'blocked' ? 'no data' : 'soon'}
+        {cards.map((card) => {
+          const open = card.status === 'available';
+          return (
+            <span
+              key={card.id}
+              className={`moreChip${open ? ' clickable' : ''}`}
+              title={open ? `Open ${card.title}` : (card.reason ?? card.blurb)}
+              role={open ? 'button' : undefined}
+              tabIndex={open ? 0 : undefined}
+              onClick={() => {
+                if (open) onOpen(card.id);
+              }}
+            >
+              <span aria-hidden="true">{card.icon}</span>
+              {card.title}
+              {!open && (
+                <span className={`pill ${card.status === 'blocked' ? 'nodata' : 'soon'}`}>
+                  {card.status === 'blocked' ? 'no data' : 'soon'}
+                </span>
+              )}
             </span>
-          </span>
-        ))}
+          );
+        })}
       </div>
     </>
   );

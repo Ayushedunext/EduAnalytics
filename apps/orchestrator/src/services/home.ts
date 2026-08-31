@@ -43,8 +43,10 @@ import { schoolNames } from '../db/registry.js';
 import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
 import { config } from '../config.js';
 import {
+  DASHBOARD_DRILL_QUERY,
   DASHBOARD_LEAD_QUERY,
   buildDashboard,
+  drillPathFor,
   isDashboardId,
   type DashboardId,
 } from './dashboards.js';
@@ -169,7 +171,21 @@ export interface HomeSummary {
   readonly spec: ChartSpec;
   readonly academic_year: string | null;
   readonly blocked_metrics: readonly BlockedMetric[];
+  /**
+   * Every card in the catalog. Still the whole list, because the SIDEBAR
+   * renders from it (Sidebar.tsx) and it is also the set a custom report can be
+   * cloned from (`listReportSources`).
+   */
   readonly dashboards: readonly DashboardCard[];
+  /**
+   * Which of them the Dashboard GRID draws, in the order it draws them.
+   *
+   * Sent as ids rather than left for the SPA to filter, for the same reason the
+   * card statuses are: what the overview leads with is a decision this service
+   * makes, and a second copy of the rule in the browser is a second copy that
+   * can disagree. The SPA renders the order it is given.
+   */
+  readonly grid: readonly string[];
   /** Schools that failed within a fan-out. Annotated, never swallowed (ADR-011). */
   readonly degraded_schools: readonly { school_id: string; message: string }[];
 }
@@ -195,12 +211,72 @@ export interface HomePreview {
   readonly reason?: string;
 }
 
-/** The dashboards Home offers a preview card for, in catalog order. */
+/**
+ * The charts the Dashboard grid draws, in the order it draws them.
+ *
+ * -- Why a curated list and not "everything available" -----------------------
+ * The grid used to be every `available` dashboard, which is nine cards and
+ * growing. Nine charts under four summary cards is not an overview; it is the
+ * sidebar again, drawn larger, and a screen that shows everything ranks nothing.
+ * This names the six a reader is meant to scan first, and the rest stay one
+ * click away in the sidebar and in the strip below the grid.
+ *
+ * -- The order is the ranking -------------------------------------------------
+ * Money first, because it is what a Director and an Accountant both open the
+ * page for; then the two headcount-and-presence charts; then staff and
+ * transport, which are read less often. Catalog order would have led with
+ * Enrollment for no better reason than that it was built first.
+ *
+ * -- What "6" is and is not ---------------------------------------------------
+ * Six is a product decision, not a technical limit. Four of these have a
+ * curated drill path today (`DRILL_PATHS`); Staff Overview and Transport do not
+ * yet, and draw their lead chart inert until they grow one. That gap is
+ * deliberately visible rather than papered over: a card that cannot be drilled
+ * must not pretend it can, so `drillable` on the widget decides it and nothing
+ * on this list overrides that.
+ */
+const DASHBOARD_GRID: readonly DashboardId[] = [
+  'fee-collection',
+  'fee-defaulters',
+  'attendance-analytics',
+  'enrollment-overview',
+  'staff-overview',
+  'transport-analytics',
+];
+
+/**
+ * The grid's cards, in grid order, filtered to what this build can actually
+ * serve.
+ *
+ * The `status === 'available'` check is not redundant with the list above. The
+ * list is a product decision about what the screen leads with; availability is
+ * a fact about the build and the ERP extract, decided in `DASHBOARDS`. A
+ * dashboard demoted to `coming` or `blocked` must drop out of the grid without
+ * anyone remembering to edit two places.
+ */
 export function previewableDashboards(): readonly (DashboardCard & { id: DashboardId })[] {
-  return DASHBOARDS.filter(
-    (card): card is DashboardCard & { id: DashboardId } =>
-      card.status === 'available' && isDashboardId(card.id),
-  );
+  const byId = new Map(DASHBOARDS.map((card) => [card.id, card]));
+  return DASHBOARD_GRID.flatMap((id) => {
+    const card = byId.get(id);
+    return card !== undefined && card.status === 'available' && isDashboardId(card.id)
+      ? [card as DashboardCard & { id: DashboardId }]
+      : [];
+  });
+}
+
+/**
+ * Everything the grid does NOT draw, for the strip beneath it.
+ *
+ * Three kinds land here and they are not alike: dashboards that are built and
+ * simply not on the grid, ones whose serving path is not written yet
+ * (`coming`), and ones the ERP extract has no data for (`blocked`). The first
+ * kind is reachable RIGHT NOW, so the strip has to let it be opened rather than
+ * showing it greyed beside things that cannot be — which is what the SPA does
+ * with the `status` each card already carries.
+ */
+export function otherDashboards(): readonly DashboardCard[] {
+  const onGrid = new Set<string>(DASHBOARD_GRID);
+  return DASHBOARDS.filter((card) => !onGrid.has(card.id));
 }
 
 /**
@@ -250,6 +326,46 @@ export async function buildHomePreview(args: {
   }
 
   try {
+    /**
+     * The DRILL-ENTRY chart where the report has one, and the lead chart where
+     * it does not.
+     *
+     * The grid's cards are meant to be descended into (ADR-020: school →
+     * quarter → class), so the card must draw the chart that HAS that path —
+     * level 1, one bar per school — rather than whatever the report's own page
+     * happens to open with. For Fee Collection those are different charts fed
+     * by different statements: the page leads with receipts by month, the drill
+     * starts from demand by school.
+     *
+     * A report with no `DRILL_PATHS` entry keeps its lead chart and renders
+     * inert. That is the honest state, not a placeholder: Staff Overview and
+     * Transport have no curated path yet, and a card that drew a clickable
+     * chart over a path that does not exist would refuse the click it invited.
+     */
+    const path = drillPathFor(card.id);
+    let queryKey: string;
+    if (path === undefined) {
+      queryKey = DASHBOARD_LEAD_QUERY[card.id];
+    } else {
+      const drillQuery = DASHBOARD_DRILL_QUERY[card.id];
+      /**
+       * [MANDATORY] CODING_GUIDELINES §10. A path with no drill query declared
+       * is a table that has drifted, and the failure it would otherwise produce
+       * is the success-shaped kind: the card falls back to the lead chart and
+       * renders a NON-drillable chart under a report advertising three levels.
+       * Refused here, where it names the missing table, rather than on screen.
+       */
+      if (drillQuery === undefined) {
+        throw new PlatformError({
+          code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+          message: 'That dashboard could not be previewed.',
+          diagnostics: { report_id: card.id, missing: 'DASHBOARD_DRILL_QUERY' },
+          correlationId: args.correlationId,
+        });
+      }
+      queryKey = drillQuery;
+    }
+
     const result = await buildDashboard({
       session: args.session,
       schoolIds: args.schoolIds,
@@ -257,24 +373,30 @@ export async function buildHomePreview(args: {
       academicYear: args.academicYear,
       asOfDate: args.asOfDate,
       correlationId: args.correlationId,
-      queryKeys: [DASHBOARD_LEAD_QUERY[card.id]],
+      queryKeys: [queryKey],
     });
 
     /**
-     * The lead query produces exactly one chart widget, because every builder
-     * guards its widgets on the rows they need. Finding it by type rather than
-     * by id keeps this honest if a builder ever pushes a KPI off the same
-     * result set: the card wants the shape, and falls back to whatever single
-     * widget did come back rather than showing nothing.
+     * Where a drill path exists the widget is chosen BY ID, not by type. That
+     * one statement can feed more than one widget — `by_component` builds both
+     * Fee Collection's school bars and its fee-head table — so "the first
+     * bar/line/donut" is no longer a reliable way to find the drill entry, and
+     * picking the wrong one would hand the card a chart with no `drill_dim`.
+     *
+     * Without a path, the old rule stands: prefer the chart over a KPI, because
+     * the summary strip above already carries the numbers and the card's job is
+     * to be the thing the strip cannot be — a shape.
      */
-    const chart = result.spec.widgets.find(
-      (w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut',
-    );
+    const widget =
+      path === undefined
+        ? result.spec.widgets.find((w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut')
+        : result.spec.widgets.find((w) => w.id === path.widget_id);
+
     return {
       id: card.id,
       title: card.title,
       icon: card.icon,
-      widget: chart ?? result.spec.widgets[0] ?? null,
+      widget: widget ?? result.spec.widgets[0] ?? null,
       status: 'ok',
     };
   } catch (err) {
@@ -811,6 +933,7 @@ export async function buildHomeSummary(args: {
     academic_year: academicYear,
     blocked_metrics: blocked,
     dashboards: DASHBOARDS,
+    grid: previewableDashboards().map((card) => card.id),
     degraded_schools: degradedFrom([students, staff, fees, attendance]),
   };
 

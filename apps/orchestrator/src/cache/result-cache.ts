@@ -156,11 +156,21 @@ async function connect(): Promise<void> {
  * phase: every dashboard that grows a drill grows a widget, and every widget is
  * a change a reader sees.
  *
- * v7 -> v8 (2026-08-31): the Dashboard summary's four cards. The strip was
- * renamed, reordered, given a breakdown under each figure, and the fee card
- * changed what its headline MEANS (the year's demand, not the arrears) along
- * with its widget id. Every one of those is a reader-visible change and any one
- * alone would have earned the bump.
+ * v7 -> v8 (2026-08-31): the Dashboard revamp. The summary strip was renamed,
+ * reordered and given a breakdown under each figure, the fee card changed what
+ * its headline MEANS (the year's demand, not the arrears) along with its widget
+ * id, and `HomeSummary` grew a `grid` field naming which charts the overview
+ * draws and in what order. Every one of those is a reader-visible change and
+ * any one alone would have earned the bump.
+ *
+ * ONE digit for the whole revamp, not one per slice. The header above is
+ * explicit that this tracks what has SHIPPED rather than each step of getting
+ * there, and the revamp lands as a single PR — so the later slices extend this
+ * entry and local entries are deleted while iterating. The Dashboard's PREVIEW
+ * cards needed no help either way: their key already carries the query keys
+ * (`report:<id>:q=<keys>`, services/dashboards.ts), so pointing a card at its
+ * drill-entry statement instead of its lead one lands on a different key by
+ * construction.
  *
  * -- This one was caught by the cache, not by a test -------------------------
  * Worth recording, because the failure was invisible from inside the code. With

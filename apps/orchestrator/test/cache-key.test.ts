@@ -101,7 +101,7 @@ describe('a cache entry can only be reached by an identical request', () => {
     // have gone on hiding them.
     //
     // v8 since the Dashboard summary's four cards changed shape and meaning.
-    expect(cacheKey(BASE)).toMatch(/^sap:v8:report:fee-defaulters:[0-9a-f]{32}$/);
+    expect(cacheKey(BASE)).toMatch(/^sap:v9:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

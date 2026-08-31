@@ -28,7 +28,7 @@
  */
 
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
-import { useId } from 'react';
+import { useId, useState } from 'react';
 import {
   Area,
   Bar,
@@ -73,8 +73,35 @@ import type {
  * `SERIES_OTHER` below.
  */
 const SERIES: readonly [string, ...string[]] = ['#028090', '#02c39a', '#f2a93b', '#e05252'];
-/** The fold-in colour for any category past the fixed palette (dataviz non-negotiable: never a generated hue). */
-const SERIES_OTHER = '#64748b';
+/**
+ * The fold-in colours for categories past the fixed palette — neutrals, so a
+ * fifth category reads as "the rest" rather than competing with the four that
+ * carry meaning. Never a GENERATED hue (the dataviz non-negotiable): these are
+ * two existing tokens, `--color-muted` and `--color-line`.
+ *
+ * Two of them, not one, because of stacked bars. A single fold-in colour is fine
+ * when the extra categories sit apart — a fifth donut slice, a fifth bar in a
+ * group — and wrong inside one stacked bar, where two adjacent segments painted
+ * the same grey are one segment as far as a reader can tell. Comparative
+ * Analysis' recovery timeline is exactly that case: "still pending" and "timing
+ * not recorded" are its fifth and sixth states.
+ *
+ * They alternate rather than extend, so this is not a sixth and seventh
+ * categorical step by the back door — the palette is still four steps plus a
+ * neutral pair, and anything past six is deliberately repeating.
+ */
+const SERIES_NEUTRALS: readonly [string, string] = ['#64748b', '#cbd5e1'];
+/** The single fold-in neutral, where only one is needed (donut legend, etc.). */
+const SERIES_OTHER = SERIES_NEUTRALS[0];
+
+/** The colour of the nth series: the fixed palette, then the neutrals. */
+function seriesColourAt(index: number): string {
+  return (
+    SERIES[index] ??
+    SERIES_NEUTRALS[(index - SERIES.length) % SERIES_NEUTRALS.length] ??
+    SERIES_OTHER
+  );
+}
 
 /**
  * A single-series bar/line's colour, for callers that want visual variety
@@ -506,7 +533,23 @@ export function BarPanel({
 }): ReactElement {
   const series = seriesOf(widget);
   const grouped = widget.series !== undefined;
+  /**
+   * The measures are PARTS of one bar rather than bars beside each other
+   * (spec.ts, `bar.stacked`). The schema already guarantees `series` is present
+   * whenever this is true, so everything below can treat it as a variation of
+   * the grouped case rather than a third kind of chart.
+   */
+  const stacked = grouped && widget.stacked === true;
   const seriesColour = measureColour(widget.tone, accent);
+  /**
+   * Is this panel a level of a drill path (ADR-020)? True at every level: level
+   * 1 declares `drillable`, and a level reached by clicking carries the context
+   * that got it there — the leaf included, which declares `drillable: false`.
+   *
+   * It decides the panel's FOOTPRINT, below, and nothing else.
+   */
+  const drillPanel =
+    widget.drillable === true || (widget.drill_context ?? []).length > 0;
   /**
    * A depth gradient built from ONE hue at two opacities, never a second
    * colour -- so it stays inside docs/10 section 1's "teal-family series" rule
@@ -530,7 +573,12 @@ export function BarPanel({
    */
   if (widget.data.length === 0) {
     return (
-      <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
+      <Panel
+        title={widget.title}
+        variant={drillPanel ? 'wide' : 'medium'}
+        compact={compact}
+        actions={actions}
+      >
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">▤</span>
           <span className="msg">No records available.</span>
@@ -572,18 +620,38 @@ export function BarPanel({
    * around it.
    */
   const bars = grouped
-    ? series.map((entry, index) => (
-        <Bar
-          key={entry.field}
-          dataKey={entry.field}
-          name={entry.label}
-          fill={SERIES[index] ?? SERIES_OTHER}
-          radius={axis.horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
-          maxBarSize={axis.horizontal ? 11 : 26}
-          {...animation}
-          activeBar={{ stroke: INK, strokeWidth: 1 }}
-        />
-      ))
+    ? series.map((entry, index) => {
+        /**
+         * Only the segment at the VALUE end of a stack is rounded; rounding
+         * every segment would draw four capsules with gaps of background
+         * between them, which reads as four bars — the exact misreading
+         * stacking exists to prevent. An unstacked group rounds each bar,
+         * because each one really is its own mark.
+         */
+        const last = index === series.length - 1;
+        const square: [number, number, number, number] = [0, 0, 0, 0];
+        const rounded: [number, number, number, number] = axis.horizontal
+          ? [0, 3, 3, 0]
+          : [3, 3, 0, 0];
+        return (
+          <Bar
+            key={entry.field}
+            dataKey={entry.field}
+            name={entry.label}
+            fill={seriesColourAt(index)}
+            {...(stacked ? { stackId: 'a' } : {})}
+            radius={stacked ? (last ? rounded : square) : rounded}
+            /**
+             * A stack is ONE bar per category however many measures it holds,
+             * so it gets the width a single-series bar would have rather than
+             * the narrow band a member of a group gets.
+             */
+            maxBarSize={stacked ? (axis.horizontal ? 14 : 38) : axis.horizontal ? 11 : 26}
+            {...animation}
+            activeBar={{ stroke: INK, strokeWidth: 1 }}
+          />
+        );
+      })
     : [
         <Bar
           key={widget.y}
@@ -624,6 +692,16 @@ export function BarPanel({
    * title already names the one thing it draws, and a legend box repeating it
    * would be chrome standing in for information.
    */
+  /**
+   * The legend's entries are passed EXPLICITLY, in the spec's series order.
+   *
+   * Recharts derives its own payload otherwise, and the order it derives is not
+   * the order the chart draws — the Fee Collection group renders
+   * payable/collected/pending and legends them "Collected, Demand raised,
+   * Outstanding". On a grouped bar that is a nuisance; on a STACKED one it is a
+   * defect, because the legend is the only key to which band of one bar is
+   * which, and a reader matching top-to-bottom gets the wrong answer.
+   */
   const legend = grouped ? (
     <Legend
       verticalAlign="top"
@@ -632,6 +710,43 @@ export function BarPanel({
       iconType="circle"
       iconSize={8}
       wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 4 }}
+      /**
+       * `content` rather than `payload`: this Recharts version derives the
+       * payload itself and does not accept one, so the only way to fix the
+       * ORDER is to draw the row. It is six spans and a dot each — chrome, not
+       * a chart — and it renders identically on paper, which a legend the PDF
+       * had to re-derive would not be guaranteed to do.
+       */
+      content={() => (
+        <ul
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '4px 14px',
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            fontSize: 11,
+            color: MUTED,
+          }}
+        >
+          {series.map((entry, index) => (
+            <li key={entry.field} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: seriesColourAt(index),
+                  display: 'inline-block',
+                }}
+              />
+              {entry.label}
+            </li>
+          ))}
+        </ul>
+      )}
     />
   ) : null;
 
@@ -657,8 +772,8 @@ export function BarPanel({
      * than per-category: three measures across nine classes is 27 bars, and a
      * band sized for one would draw them on top of each other.
      */
-    const perRow = grouped ? 13 * series.length + 10 : 26;
-    const compactPerRow = grouped ? 11 * series.length + 8 : 22;
+    const perRow = grouped && !stacked ? 13 * series.length + 10 : 26;
+    const compactPerRow = grouped && !stacked ? 11 * series.length + 8 : 22;
     const height =
       compact === true
         ? clamp(64 + axis.count * compactPerRow, 220, 340)
@@ -715,7 +830,35 @@ export function BarPanel({
   }
 
   return (
-    <Panel title={widget.title} variant="medium" compact={compact} actions={actions}>
+    /**
+     * A drill panel is `wide` even when its bars run vertically.
+     *
+     * Orientation is derived from the CATEGORY LABELS (`categoryAxis`), and a
+     * drill path changes its categories at every level — so Comparative
+     * Analysis' panel is horizontal at school level ("World School"), still
+     * horizontal at instalment level ("April 2026-27"), and turns vertical at
+     * class level, where the longest label is "NURSERY". Sized by orientation
+     * alone that panel is 12 columns, then 12, then 6: it HALVES under the
+     * reader on the last click, and the six columns it frees cannot be filled,
+     * because every panel below it on these reports is already 12.
+     *
+     * Which is the wrong thing to optimise anyway. docs/06 §4.4 has a drill
+     * "swap the chart in place", and a panel that resizes as you descend is not
+     * in place — the page reflows under the cursor that just clicked, and
+     * clicking ← Back reflows it again. A stable frame is what makes three
+     * levels read as one chart being narrowed rather than three charts.
+     *
+     * `wide` and not `medium` for the pair of them, because level 1 is
+     * horizontal on every path in the catalog (they all begin with school
+     * names) and is therefore already 12. Widening the leaf costs nothing and
+     * narrowing the root would cramp the chart the whole path descends from.
+     */
+    <Panel
+      title={widget.title}
+      variant={drillPanel ? 'wide' : 'medium'}
+      compact={compact}
+      actions={actions}
+    >
       <ChartFrame
         compact={compact}
         naturalHeight={compact === true ? 240 : grouped ? 300 : 260}
@@ -778,6 +921,48 @@ function makeLineDot(lastIndex: number, color: string): (props: LineDotProps) =>
   };
 }
 
+/**
+ * Long-format rows pivoted into the wide shape Recharts draws from.
+ *
+ * The spec's `line.series` names a FIELD whose value splits the rows into
+ * several lines -- one row per (period, year) for a two-year recovery trend --
+ * because that is the shape SQL returns and the shape a spec can describe
+ * without inventing a column name per series. Recharts wants the opposite: one
+ * row per period carrying a key per line. Pivoting here, in the renderer, keeps
+ * the contract describing the DATA rather than the drawing library.
+ *
+ * Category order is the order the rows arrive in, never sorted: the emitter
+ * ordered the periods (`seq` in the SQL) and re-sorting them as text would put
+ * Q10 before Q2. Series order is first-appearance for the same reason -- the
+ * emitter puts the current year first, and colour identity follows it.
+ *
+ * A missing (period, series) pair is left ABSENT rather than filled with zero:
+ * a year with no instalment 5 has no point there, and a zero would draw a line
+ * diving to the floor, which is a measurement nobody took.
+ */
+function pivotSeries(
+  rows: readonly Record<string, unknown>[],
+  x: string,
+  y: string,
+  seriesField: string,
+): { rows: Record<string, unknown>[]; names: string[] } {
+  const byCategory = new Map<string, Record<string, unknown>>();
+  const names: string[] = [];
+  for (const row of rows) {
+    const category = String(row[x] ?? '');
+    const name = String(row[seriesField] ?? '');
+    if (name !== '' && !names.includes(name)) names.push(name);
+    let entry = byCategory.get(category);
+    if (entry === undefined) {
+      entry = { [x]: category };
+      byCategory.set(category, entry);
+    }
+    const value = row[y];
+    if (name !== '' && value !== null && value !== undefined) entry[name] = value;
+  }
+  return { rows: [...byCategory.values()], names };
+}
+
 export function LinePanel({
   widget,
   compact,
@@ -806,6 +991,93 @@ export function LinePanel({
         </div>
       </Panel>
     );
+  }
+
+  /**
+   * Several lines on one pair of axes (`line.series`) -- the year-on-year
+   * comparison Comparative Analysis' recovery trend is. Kept as its own branch
+   * rather than folded into the single-series path below because the two differ
+   * in more than a loop: a gradient fill under two overlapping lines is mud, and
+   * the "latest point" emphasis that makes sense for one trend would mark two
+   * different points on two different lines.
+   *
+   * `series` has been in the contract since it was written and had no renderer
+   * until now, which is why this is an implementation rather than a contract
+   * change: a spec setting it drew a single line and silently lost the split.
+   */
+  if (widget.series !== undefined) {
+    const pivoted = pivotSeries(widget.data, widget.x, widget.y, widget.series);
+    if (pivoted.names.length > 0) {
+      return (
+        /**
+         * `wide`, where a single-series line is `hero`.
+         *
+         * Not a preference — it is the same kind of rule as `categoryAxis`
+         * deciding a bar's orientation from its label lengths: the widget's own
+         * shape decides its footprint. A one-series line is a trend, and `hero`
+         * (span 7) leaves exactly the 5 columns a donut's `side` fills, which is
+         * the pairing Fee Collection's "Receipts by month" and "Payment modes"
+         * are built on. A MULTI-series line is a comparison: it carries a legend,
+         * twice the marks, and the reader is matching two shapes against each
+         * other point by point, which is the one thing horizontal room actually
+         * buys. It also has no donut to pair with — a report that compares two
+         * years has no reason to also carry a five-slice breakdown — so at span 7
+         * those 5 columns strand, and the page grows a hole no later panel can
+         * fill because every remaining panel is span 12.
+         *
+         * Single-series lines are untouched: Fee Collection's row still pairs.
+         */
+        <Panel title={widget.title} variant="wide" compact={compact} actions={actions}>
+          <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 320}>
+            <ComposedChart data={pivoted.rows} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+              <CartesianGrid stroke={GRID} vertical={false} />
+              <XAxis
+                dataKey={widget.x}
+                tick={tick}
+                interval={0}
+                angle={-35}
+                textAnchor="end"
+                tickMargin={4}
+                height={clamp(categoryAxis(pivoted.rows, widget.x).longest * 4.8 + 26, 40, 76)}
+              />
+              <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
+              <Tooltip content={<ChartTooltip />} cursor={{ stroke: MUTED, strokeWidth: 1, strokeDasharray: '3 3' }} />
+              {/* [MANDATORY for two or more series] identity is never colour
+                  alone -- the same rule the grouped bar follows. */}
+              <Legend
+                verticalAlign="top"
+                align="left"
+                height={26}
+                iconType="plainline"
+                iconSize={14}
+                wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 4 }}
+              />
+              {pivoted.names.map((name, index) => (
+                <Line
+                  key={name}
+                  type="monotone"
+                  dataKey={name}
+                  name={name}
+                  stroke={SERIES[index] ?? SERIES_OTHER}
+                  strokeWidth={2.25}
+                  /**
+                   * Dotted from the second line on. A comparison line is a
+                   * REFERENCE, and dash pattern separates it from this year's
+                   * line without a fifth hue -- and it survives a greyscale
+                   * print, which colour alone does not (docs/10 §1).
+                   */
+                  {...(index === 0 ? {} : { strokeDasharray: '5 4' })}
+                  dot={{ r: 2.5, fill: SERIES[index] ?? SERIES_OTHER, strokeWidth: 0 }}
+                  activeDot={{ r: 5, fill: SERIES[index] ?? SERIES_OTHER, stroke: '#fff', strokeWidth: 2 }}
+                  connectNulls={false}
+                  {...animation}
+                />
+              ))}
+            </ComposedChart>
+          </ChartFrame>
+        </Panel>
+      );
+    }
   }
 
   if (widget.data.length === 1) {
@@ -1012,6 +1284,22 @@ export function DonutPanel({
   );
 }
 
+/**
+ * Compare two cells of the same column.
+ *
+ * Numbers numerically, everything else as text under the reader's own locale —
+ * `localeCompare` rather than `<`, so "Ácharya" files beside "Acharya" instead
+ * of after "Zoya". Nulls sort last in both directions: a missing value is not
+ * the smallest value, and letting it lead an ascending sort would put every
+ * blank row at the top of a table someone sorted to find their worst school.
+ */
+function compareCells(a: unknown, b: unknown): number {
+  if (a === null || a === undefined) return b === null || b === undefined ? 0 : 1;
+  if (b === null || b === undefined) return -1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 export function TablePanel({
   widget,
   actions,
@@ -1019,6 +1307,35 @@ export function TablePanel({
   widget: TableWidget;
   actions?: ReactNode | undefined;
 }): ReactElement {
+  /**
+   * Which column the reader sorted by, if any. `null` means the EMITTED order,
+   * which is not "unsorted": the server ranked these rows for a reason (worst
+   * arrears first, largest class first), so the initial view is the report's own
+   * answer and re-sorting is the reader overriding it. Reset is therefore a real
+   * third state of the header, not a no-op.
+   *
+   * Held here rather than lifted to the page because it is a property of looking
+   * at this table, not of the report — a sorted column is never persisted, never
+   * cloned into a saved report, and never printed: the PDF renders the spec's own
+   * order (ADR-021), which is what keeps an export matching what was approved.
+   */
+  const [sort, setSort] = useState<{ field: string; descending: boolean } | null>(null);
+
+  const sorted = (() => {
+    if (sort === null) return widget.rows;
+    const column = widget.columns.find((entry) => entry.field === sort.field);
+    if (column === undefined) return widget.rows;
+    const key = column.sort_field ?? column.field;
+    /**
+     * A copy. `widget.rows` belongs to the spec, and sorting in place would
+     * mutate the object the PDF route and the clone button read from.
+     */
+    return [...widget.rows].sort((a, b) => {
+      const order = compareCells(a[key], b[key]);
+      return sort.descending ? -order : order;
+    });
+  })();
+
   return (
     <Panel title={widget.title} variant="wide" actions={actions}>
       {widget.rows.length === 0 ? (
@@ -1032,18 +1349,46 @@ export function TablePanel({
             <table className="specTable">
               <thead>
                 <tr>
-                  {widget.columns.map((column) => (
-                    <th key={column.field} style={{ textAlign: column.align ?? 'left' }}>
-                      {column.label}
-                      {/* docs/04 rail 6: a masked column says so. Hiding it would be
-                          a silently different table for a different reader. */}
-                      {column.masked === true && <span className="pill nodata ml-2">masked</span>}
-                    </th>
-                  ))}
+                  {widget.columns.map((column) => {
+                    const active = sort !== null && sort.field === column.field;
+                    return (
+                      <th
+                        key={column.field}
+                        style={{ textAlign: column.align ?? 'left' }}
+                        aria-sort={active ? (sort.descending ? 'descending' : 'ascending') : 'none'}
+                      >
+                        {/* A real button, so the header is reachable by keyboard
+                            and announced as the control it is. Three states in
+                            order: ascending, descending, back to the order the
+                            server sent. */}
+                        <button
+                          type="button"
+                          className={`specSort${active ? ' active' : ''}`}
+                          onClick={() => {
+                            setSort((current) =>
+                              current === null || current.field !== column.field
+                                ? { field: column.field, descending: false }
+                                : current.descending
+                                  ? null
+                                  : { field: column.field, descending: true },
+                            );
+                          }}
+                        >
+                          {column.label}
+                          <span className="specSortMark" aria-hidden="true">
+                            {active ? (sort.descending ? '▾' : '▴') : '⇅'}
+                          </span>
+                        </button>
+                        {/* docs/04 rail 6: a masked column says so. Hiding it would be
+                            a silently different table for a different reader. */}
+                        {column.masked === true && <span className="pill nodata ml-2">masked</span>}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {widget.rows.map((row, index) => (
+                {sorted.map((row, index) => (
                   <tr key={index}>
                     {widget.columns.map((column) => (
                       <td key={column.field} style={{ textAlign: column.align ?? 'left' }}>

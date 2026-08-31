@@ -215,7 +215,17 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v8:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  /**
+   * v9 (2026-08-31): Comparative Analysis. The standing rule applies — a reader
+   * would see something different, so the digit moves. Two things changed under
+   * warm keys: the report's own widget ids and query key were renamed mid-build
+   * (`bar-installment`/`demand_by_installment` → `bar-period`/`demand_by_period`)
+   * as the comparison axis moved off the school's free-text instalment name, and
+   * a warm entry from before that rename deserialises perfectly and draws the old
+   * chart under the new title. Nothing fails; the screen is just wrong, which is
+   * exactly the failure this digit exists for.
+   */
+  return `sap:v9:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

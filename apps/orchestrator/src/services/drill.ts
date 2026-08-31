@@ -94,6 +94,16 @@ export interface DrillRequest {
   readonly context: readonly DrillStep[];
   readonly academicYear: string;
   readonly asOfDate: string;
+  /**
+   * The comparison year the parent report was built with. Threaded rather than
+   * re-derived for the reason every other filter is: a level that quietly picked
+   * its own second year could show a breakdown computed against a different
+   * comparison from the chart it was reached by clicking. The drilled LEVELS
+   * themselves draw the current year only (see `DRILL_PATHS`), but the year is
+   * still a declared parameter of the report and `run_predefined` refuses a
+   * declared-and-missing one outright.
+   */
+  readonly compareYear?: string | undefined;
   readonly correlationId: string;
 }
 
@@ -268,6 +278,7 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
   const { params: baseParams } = resolveReportParams(args.reportId, {
     academicYear: args.academicYear,
     asOfDate: args.asOfDate,
+    compareYear: args.compareYear,
   });
   const params: Record<string, string | number> = { ...baseParams, ...drillParams };
 

@@ -356,7 +356,14 @@ body {
 .kpis { display: flex; flex-wrap: wrap; gap: 16px; }
 
 .kpi {
-  flex: 1 1 210px;
+  /* 190px, not 210px, since Comparative Analysis brought a SIX-tile strip.
+     `flex-grow: 1` means a four-tile strip is pixel-identical either way — the
+     tiles stretch to fill the row regardless — so the basis only decides where
+     the row wraps. At 210px six tiles overflowed a 1330px content column by
+     about ten pixels and broke 4 + 2, leaving two tiles stretched to half the
+     page each; at 190px they fit, and every narrower viewport still wraps
+     exactly as it did. */
+  flex: 1 1 190px;
   padding: 17px 19px 15px;
   position: relative;
   display: flex;
@@ -913,6 +920,28 @@ body {
 .specTable tbody tr:hover td { background: var(--color-surface-sunken); }
 .specTable td:first-child, .specTable th:first-child { color: var(--color-text-primary); font-weight: 500; }
 
+/* A sortable column heading (chart-spec `TablePanel`).
+
+   The button inherits the cell's typography entirely, so a sortable heading
+   looks like a heading rather than like a control dropped into a table — the
+   affordance is the hover state and the ⇅ mark, which is the convention every
+   data grid uses and the least chrome that still says "this is clickable".
+   `align-items: baseline` keeps the mark on the label's baseline; `justify-*`
+   inherits from the cell so a right-aligned numeric column's heading stays
+   right-aligned over its digits. */
+.specTable th > .specSort {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+}
+.specTable th > .specSort:hover { color: var(--color-text-primary); }
+.specTable th > .specSort:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 2px; }
+.specTable th > .specSort.active { color: var(--color-primary); }
+/* The idle mark is faint: it says the column CAN be sorted without competing
+   with the arrow on the column that actually is. */
+.specSortMark { font-size: 9px; opacity: 0.45; }
+.specSort.active .specSortMark { opacity: 1; }
+
 /* ---------- My Reports (docs/06 §3, docs/10 §3) ---------- */
 
 .reportsHead { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
@@ -1049,6 +1078,25 @@ body {
 }
 .chipbtn--ai:hover:not(.disabled) { box-shadow: 0 5px 16px rgba(2, 128, 144, 0.36); background: linear-gradient(135deg, var(--color-teal) 0%, var(--color-teal-dark) 100%); }
 .chipbtn--ai.disabled { background: var(--color-disabled); color: #fff; opacity: 0.7; }
+
+/* A chip that IS a filter rather than an action (DashboardPage's "Compare
+   with"). It wears the same pill as its neighbours on purpose: it sits in the
+   same row and does the same job as the affordances beside it, so a second
+   visual language there would read as a control that arrived from somewhere
+   else. The label stays in the chip's own weight and the native <select> is
+   stripped back to the value, which keeps the whole thing one object.
+
+   Native, not a custom menu: it opens correctly on a tablet, it is keyboard-
+   and screen-reader-complete for free, and §19 forbids adding a component
+   library for something the platform already has. */
+.chipSelect { display: inline-flex; align-items: center; gap: 7px; padding-right: 9px; }
+.chipSelect > span { color: var(--color-text-muted); font-weight: 600; }
+.chipSelect select {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: var(--color-primary); cursor: pointer;
+}
+.chipSelect select:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 2px; }
+.chipSelect select:disabled { color: var(--color-disabled); cursor: not-allowed; }
 
 .backLink {
   background: none; border: none; padding: 0; font-family: var(--font-sans);

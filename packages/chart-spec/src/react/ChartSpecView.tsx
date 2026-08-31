@@ -83,10 +83,24 @@ export function ChartSpecView({
       {kpis.length > 0 && (
         <div className="kpis mb-4">
           {kpis.map((widget, index) => (
-            // The first KPI is the server's own headline metric (dashboards.ts
-            // and home.ts both emit the lead figure first) — never re-picked
-            // here by inspecting values, only by position (§22).
-            <WidgetView key={widget.id} widget={widget} hero={index === 0 && kpis.length > 1} />
+            /**
+             * The first KPI is the server's own headline metric (dashboards.ts
+             * and home.ts both emit the lead figure first) — never re-picked
+             * here by inspecting values, only by position (§22).
+             *
+             * Above five tiles there is no hero, and that is a layout fact
+             * rather than a preference. A hero is double-width (tokens.css
+             * `.kpi--hero`, `flex: 2 1 436px`), so at six tiles the strip no
+             * longer fits one row of a dashboard-width column and breaks 5 + 1,
+             * leaving a single tile stretched across the page under five normal
+             * ones. Six equal tiles read as the grid they are. A hero is a LEAD
+             * among a few; past that the strip is a set, and nothing leads it.
+             */
+            <WidgetView
+              key={widget.id}
+              widget={widget}
+              hero={index === 0 && kpis.length > 1 && kpis.length <= 5}
+            />
           ))}
         </div>
       )}

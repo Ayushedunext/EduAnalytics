@@ -83,6 +83,13 @@ const cloneBodySchema = z.object({
   name: z.string().min(1).max(255),
   academic_year: z.string().min(1),
   as_of: z.string().min(1).optional(),
+  /**
+   * The comparison year for a year-on-year report. Optional, and the service
+   * derives the preceding year without it — but a reader who cloned "2026-27
+   * against 2023-24" cloned that comparison, and dropping it here would save a
+   * report that quietly compares against something else.
+   */
+  compare_year: z.string().min(1).optional(),
   /** Per-widget clone (docs/06 §3): clone just this one chart. */
   widget_id: z.string().min(1).optional(),
   /** Time-grouping override — only meaningful together with `widget_id`. */
@@ -104,6 +111,7 @@ customReportsRouter.post('/api/reports/clone', (req: Request, res: Response, nex
       schoolIds,
       academicYear: parsed.data.academic_year,
       asOfDate: parsed.data.as_of ?? new Date().toISOString().slice(0, 10),
+      ...(parsed.data.compare_year === undefined ? {} : { compareYear: parsed.data.compare_year }),
       ...(parsed.data.widget_id === undefined ? {} : { widgetScope: parsed.data.widget_id }),
       ...(parsed.data.bucket === undefined ? {} : { bucket: parsed.data.bucket }),
     });

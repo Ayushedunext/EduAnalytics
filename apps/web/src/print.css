@@ -156,6 +156,13 @@ body {
   max-height: none;
   overflow: visible;
 }
+/* Paper has no interactions. The sort control prints as the plain heading it
+   stands in for, and the ⇅ mark — an affordance for a click nobody can make on
+   a PDF — is dropped entirely (ADR-021: the export shows the spec's own row
+   order, so a sort indicator on paper would be an affordance AND a lie). */
+.printPage .specTable th > .specSort { cursor: default; }
+.printPage .specSortMark { display: none; }
+
 .printPage .specTable {
   font-size: 10.5px;
 }

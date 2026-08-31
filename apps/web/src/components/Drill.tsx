@@ -72,6 +72,14 @@ export function useDrill(args: {
   schoolIds: readonly string[];
   academicYear: string | null;
   /**
+   * The comparison year the surface is currently showing, for a report that
+   * takes one. Passed down so a drilled level is fetched under the SAME filters
+   * as the chart it was reached from — a level that arrived under the server's
+   * default comparison while the page above it showed another would be two
+   * views of two different questions, one of them silently.
+   */
+  compareYear?: string | undefined;
+  /**
    * Where a drill failure is SAID. Passed in rather than owned here because the
    * two surfaces have different places to say it — a page notice above the
    * charts, a line inside one card — and a hook that picked one would be making
@@ -82,7 +90,7 @@ export function useDrill(args: {
   const [drills, setDrills] = useState<Record<string, DrillState>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
-  const { reportId, schoolIds, academicYear, onError } = args;
+  const { reportId, schoolIds, academicYear, compareYear, onError } = args;
 
   const clear = useCallback(() => {
     setDrills({});
@@ -105,11 +113,13 @@ export function useDrill(args: {
 
       setBusy(widgetId);
       onError(null);
-      drillReport(reportId, schoolIds, academicYear, {
-        widget_id: widgetId,
-        level: context.length + 1,
-        context,
-      })
+      drillReport(
+        reportId,
+        schoolIds,
+        academicYear,
+        { widget_id: widgetId, level: context.length + 1, context },
+        { compareYear },
+      )
         .then((result) => {
           setDrills((current) => ({
             ...current,
@@ -136,7 +146,7 @@ export function useDrill(args: {
           setBusy((current) => (current === widgetId ? null : current));
         });
     },
-    [reportId, schoolIds, academicYear, onError],
+    [reportId, schoolIds, academicYear, compareYear, onError],
   );
 
   return { drills, busy, navigate, clear };

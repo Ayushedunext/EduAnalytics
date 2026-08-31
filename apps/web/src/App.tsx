@@ -338,6 +338,7 @@ export function App(): JSX.Element {
             loading={homeLoading}
             previews={previews}
             previewsLoading={previewsLoading}
+            schoolIds={selected}
             onOpen={(id) => { setRoute({ kind: 'report', id }); }}
             onAskAI={() => { setRoute({ kind: 'ask' }); }}
           />

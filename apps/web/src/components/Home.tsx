@@ -72,8 +72,11 @@
  * simply appear as they are ready.
  */
 
-import { KpiTile, WidgetSpecView, type ChartAccent } from '@sap/chart-spec/react';
+import { useCallback, useState } from 'react';
+import { KpiTile, WidgetSpecView, type ChartAccent, type DrillTarget } from '@sap/chart-spec/react';
+import type { Widget } from '@sap/chart-spec';
 import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
+import { DrillTrail, useDrill, widgetIdOf } from './Drill';
 
 /**
  * Which of the four CVD-audited chart colours (widgets.tsx `ACCENT_COLOUR`)
@@ -107,6 +110,13 @@ interface Props {
    */
   previews: Record<string, HomePreview>;
   previewsLoading: boolean;
+  /**
+   * The scope the previews were fetched with. Passed rather than read off
+   * `home.spec.meta.scope` so a card's drill runs against exactly the selection
+   * its chart was built from — the two are the same today, and a drill that
+   * quietly re-derived its own scope is how they would stop being.
+   */
+  schoolIds: readonly string[];
   onOpen: (reportId: string) => void;
   onAskAI: () => void;
 }
@@ -117,6 +127,7 @@ export function Home({
   loading,
   previews,
   previewsLoading,
+  schoolIds,
   onOpen,
   onAskAI,
 }: Props): JSX.Element {
@@ -254,6 +265,8 @@ export function Home({
               key={card.id}
               card={card}
               preview={previews[card.id]}
+              schoolIds={schoolIds}
+              academicYear={home.academic_year}
               onOpen={onOpen}
             />
           ))}
@@ -281,12 +294,51 @@ export function Home({
 function PreviewCard({
   card,
   preview,
+  schoolIds,
+  academicYear,
   onOpen,
 }: {
   card: DashboardCard;
   preview: HomePreview | undefined;
+  schoolIds: readonly string[];
+  academicYear: string | null;
   onOpen: (reportId: string) => void;
 }): JSX.Element {
+  /**
+   * A drill failure is said INSIDE the card that failed. The page has no notice
+   * of its own for this and should not grow one: five other cards are fine, and
+   * a banner across the top would report a whole-screen problem where there is
+   * a one-card one (ADR-011's reasoning, one level down).
+   */
+  const [drillError, setDrillError] = useState<string | null>(null);
+  const { drills, busy, navigate } = useDrill({
+    reportId: card.id,
+    schoolIds,
+    academicYear,
+    onError: useCallback((message: string | null) => { setDrillError(message); }, []),
+  });
+
+  const base = preview?.status === 'ok' ? preview.widget : null;
+  const baseId = widgetIdOf(base);
+  const drilled = baseId === null ? undefined : drills[baseId];
+  /** The drilled level replaces the card's chart IN PLACE, as a panel's does. */
+  const shown = (drilled?.widget ?? base) as Widget | null;
+
+  /**
+   * Opening the full report is the CARD's click; drilling is the CHART's. They
+   * would otherwise fight: a bar click bubbles, so a drill would also navigate
+   * away from the card it just drilled, and the reader would never see the
+   * level they asked for.
+   *
+   * So the body stops propagation once there is anything to drill, and the head
+   * — title, icon, arrow — stays the way to the report. A click on empty chart
+   * space then does nothing, which is the right answer for a surface where the
+   * bars are the targets.
+   */
+  const interactive =
+    drilled !== undefined ||
+    (shown !== null && 'drillable' in shown && shown.drillable === true);
+
   return (
     <div className="card pcard" onClick={() => { onOpen(card.id); }} role="button" tabIndex={0}>
       <div className="pcardHead">
@@ -294,11 +346,50 @@ function PreviewCard({
         <b>{card.title}</b>
         <span className="pcardGo" aria-hidden="true">→</span>
       </div>
-      <div className="pcardBody">
+      <div
+        className="pcardBody"
+        onClick={
+          interactive
+            ? (event) => { event.stopPropagation(); }
+            : undefined
+        }
+      >
         {preview === undefined ? (
           <div className="skeleton skeletonPreview" />
-        ) : preview.status === 'ok' && preview.widget !== null ? (
-          <WidgetSpecView widget={preview.widget} compact accent={PREVIEW_ACCENT[card.id]} />
+        ) : shown !== null ? (
+          <>
+            <WidgetSpecView
+              widget={shown}
+              compact
+              accent={PREVIEW_ACCENT[card.id]}
+              /**
+               * The renderer reports WHICH value was clicked; deciding what to
+               * fetch is this screen's job, because the drill path is a
+               * server-side catalog (DRILL_PATHS) and the spec carries only the
+               * dimension, never a query.
+               *
+               * One widget per card, so the handler takes only the target --
+               * `WidgetSpecView`'s single-widget form, not `ChartSpecView`'s
+               * `(widget, target)`. The id is `baseId`: the level-1 widget's,
+               * which is what keyed the drill in the first place and stays the
+               * key at every level below it.
+               */
+              onDrill={(target: DrillTarget) => {
+                if (baseId === null) return;
+                navigate(baseId, [...(drilled?.context ?? []), target]);
+              }}
+            />
+            {drilled !== undefined && baseId !== null && (
+              <DrillTrail
+                title={card.title}
+                state={drilled}
+                busy={busy === baseId}
+                compact
+                onJump={(depth) => { navigate(baseId, drilled.context.slice(0, depth)); }}
+              />
+            )}
+            {drillError !== null && <p className="pcardError">{drillError}</p>}
+          </>
         ) : (
           <span className="pcardMuted">{preview.reason ?? card.blurb}</span>
         )}

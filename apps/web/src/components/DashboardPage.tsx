@@ -18,13 +18,12 @@
  * diverge. This file draws no chart of its own.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChartSpecView } from '@sap/chart-spec/react';
 import type { DrillTarget } from '@sap/chart-spec/react';
 import type { Widget } from '@sap/chart-spec';
 import {
   cloneReport,
-  drillReport,
   getReport,
   reportPdfUrl,
   ApiFailure,
@@ -32,6 +31,7 @@ import {
   type DrillStep,
   type SessionResponse,
 } from '../api/client';
+import { DrillTrail, useDrill, widgetIdOf } from './Drill';
 import { LogicPanel } from './LogicPanel';
 import { WidgetCloneButton } from './WidgetCloneButton';
 import { CLONEABLE_WIDGETS, WIDGET_BUCKET_OPTIONS } from '../reportWidgetClone';
@@ -62,12 +62,16 @@ export function DashboardPage({
   const [cloning, setCloning] = useState(false);
 
   /**
-   * Drilled panels, keyed by widget id (ADR-020). Absent means level 1 — the
-   * chart as the dashboard response delivered it, which is why Reset costs no
-   * request: level 1 never left.
+   * Drill navigation, shared with the Dashboard grid's cards (components/
+   * Drill.tsx). This page keeps only the decision of WHERE a failure is said —
+   * in its own notice, above the charts.
    */
-  const [drills, setDrills] = useState<Record<string, DrillState>>({});
-  const [drillBusy, setDrillBusy] = useState<string | null>(null);
+  const { drills, busy: drillBusy, navigate: navigateDrill, clear: clearDrills } = useDrill({
+    reportId,
+    schoolIds,
+    academicYear,
+    onError: useCallback((message: string | null) => { setError(message); }, []),
+  });
 
   useEffect(() => {
     if (academicYear === null) return undefined;
@@ -80,8 +84,7 @@ export function DashboardPage({
      * this year would be the success-shaped failure §10 names — so the drill
      * stack is cleared with the fetch that replaces the data under it.
      */
-    setDrills({});
-    setDrillBusy(null);
+    clearDrills();
     getReport(reportId, schoolIds, academicYear)
       .then((data) => {
         if (!cancelled) setReport(data);
@@ -94,58 +97,7 @@ export function DashboardPage({
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [reportId, schoolIds, academicYear]);
-
-  /**
-   * Fetch the level reached by `context`, or restore level 1 when it is empty.
-   *
-   * One function for both a click (context grows by one) and a breadcrumb jump
-   * (context is truncated), because they are the same request: the level is
-   * always `context.length + 1`. A separate "go back" path would be a second
-   * way to compute the same number, and the first time they disagreed the
-   * breadcrumb would name a slice the chart is not showing.
-   */
-  function navigateDrill(widgetId: string, context: readonly DrillStep[]): void {
-    if (academicYear === null) return;
-    if (context.length === 0) {
-      setDrills((current) => {
-        const next = { ...current };
-        delete next[widgetId];
-        return next;
-      });
-      return;
-    }
-    setDrillBusy(widgetId);
-    setError(null);
-    drillReport(reportId, schoolIds, academicYear, {
-      widget_id: widgetId,
-      level: context.length + 1,
-      context,
-    })
-      .then((result) => {
-        setDrills((current) => ({
-          ...current,
-          [widgetId]: {
-            widget: result.widget,
-            context: result.context,
-            level: result.level,
-            query: result.query,
-            notes: result.notes,
-          },
-        }));
-        if (result.degraded.length > 0 || result.degraded_schools.length > 0) {
-          setError('That level could not be read for every school in the selection.');
-        }
-      })
-      .catch((err: unknown) => {
-        // The panel stays on the level it was: a failed drill must not leave
-        // the chart blank under a breadcrumb claiming it drilled (§10).
-        setError(err instanceof ApiFailure ? err.message : 'Could not drill into that value.');
-      })
-      .finally(() => {
-        setDrillBusy((busy) => (busy === widgetId ? null : busy));
-      });
-  }
+  }, [reportId, schoolIds, academicYear, clearDrills]);
 
   /**
    * The spec as it should be DRAWN: every drilled widget replaced in place by
@@ -381,123 +333,6 @@ export function DashboardPage({
       </div>
     </main>
   );
-}
-
-/**
- * Where a drilled panel currently is (ADR-020, docs/06 §4.4).
- *
- * Page state, not spec state. ADR-015 keeps the spec a description of WHAT to
- * draw; which level a reader has navigated to is a property of this session at
- * this moment, and putting it in the spec would mean a saved report or a PDF
- * carried someone else's navigation.
- *
- * Keyed by widget id because a report may hold more than one drillable chart
- * and each drills independently. `null` for a widget means level 1 — the chart
- * exactly as the dashboard response delivered it, which is why Reset needs no
- * request: level 1 is already in hand.
- */
-interface DrillState {
-  readonly widget: unknown;
-  readonly context: readonly DrillStep[];
-  readonly level: number;
-  readonly query: { key: string; description: string; sql: string };
-  /** Caveats the SERVER attached to this level — never composed here. */
-  readonly notes: readonly string[];
-}
-
-/**
- * Breadcrumb, Back and Reset for a drilled panel, rendered into the panel's
- * existing actions slot beside the Clone button.
- *
- * In the PAGE rather than in the renderer, for the same reason the Clone button
- * is: `@sap/chart-spec` draws specs and the PDF uses the identical code path
- * (ADR-021), so an interactive control living there would either print or need
- * a flag to stop it printing. The renderer's only part in this is reporting the
- * click.
- */
-function DrillTrail({
-  title,
-  state,
-  busy,
-  onJump,
-}: {
-  title: string;
-  state: DrillState;
-  busy: boolean;
-  /** Jump to `depth` steps of context — 0 is level 1, the un-drilled chart. */
-  onJump: (depth: number) => void;
-}): JSX.Element {
-  /*
-   * The root crumb is the REPORT's name, not the un-drilled chart's title
-   * ("Demand, collection and pending by school"). docs/06 §4.3 writes the trail
-   * as `Fee Collection ▸ Apr-26 ▸ Class 9`, and a root that restated the whole
-   * chart title would fill the panel head while saying nothing the drilled
-   * chart's own title does not already say.
-   */
-  return (
-    <div className="drillTrail">
-      <span className="drillLevel">Level {state.level} of 3</span>
-      <button
-        type="button"
-        className="drillCrumb"
-        onClick={() => { onJump(0); }}
-        disabled={busy}
-      >
-        {title}
-      </button>
-      {state.context.map((step, index) => (
-        <span key={`${step.dim}:${step.value}`}>
-          <span className="drillCrumbSep">▸</span>{' '}
-          <button
-            type="button"
-            className="drillCrumb"
-            /* The last crumb is where the reader already is: it names the
-               current view rather than offering to navigate to it. */
-            disabled={busy || index === state.context.length - 1}
-            onClick={() => { onJump(index + 1); }}
-          >
-            {step.label}
-          </button>
-        </span>
-      ))}
-      <button
-        type="button"
-        className="chipbtn"
-        disabled={busy}
-        onClick={() => { onJump(state.context.length - 1); }}
-      >
-        ← Back
-      </button>
-      <button type="button" className="chipbtn" disabled={busy} onClick={() => { onJump(0); }}>
-        ⟲ Reset
-      </button>
-      {busy && <span className="drillBusy">loading…</span>}
-      {/* Against the bars it is about, not in the report's notes list three
-          screens down. Fee Defaulters' quarter level is why this exists: its
-          bars are correct and adding them up is wrong by a factor of three,
-          and that is not something to learn after the fact. */}
-      {state.notes.map((note) => (
-        <p key={note} className="drillNote">
-          {note}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-/**
- * A widget's id, off an `unknown` from the API.
- *
- * `DashboardResponse.spec.widgets` is deliberately `unknown[]` in the client
- * (api/client.ts): the renderer validates against the schema before drawing, and
- * a narrower type here would be a second, weaker copy of that check. This page
- * needs only the id, to know which panel a drilled level replaces, so it reads
- * exactly that and nothing else.
- */
-function widgetIdOf(widget: unknown): string | null {
-  if (typeof widget !== 'object' || widget === null) return null;
-  const id = (widget as { id?: unknown }).id;
-  return typeof id === 'string' && id !== '' ? id : null;
 }
 
 function asOf(iso: string): string {

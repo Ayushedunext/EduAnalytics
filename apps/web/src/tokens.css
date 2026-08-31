@@ -640,6 +640,31 @@ body {
   padding-left: 8px; font-weight: 400; text-align: left;
 }
 
+/* The trail on a Dashboard grid card, where the whole control gets about one
+   line instead of a panel's full actions row (components/Drill.tsx `compact`).
+
+   Only the SIZE changes. The level counter and Reset are dropped in the
+   component rather than hidden here, because a control that is present in the
+   DOM and invisible is still in the tab order -- a keyboard reader would land
+   on a Reset button nobody can see. The notes are never dropped at either size:
+   Fee Defaulters' quarter warning is the reason the trail carries them, and it
+   is needed most on the surface charts are read fastest. */
+.drillTrailCompact {
+  gap: 5px; font-size: 11px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.drillTrailCompact .drillCrumb { font-size: 11px; }
+.drillTrailCompact .chipbtn { padding: 2px 8px; font-size: 10.5px; }
+.drillTrailCompact .drillNote { font-size: 11px; margin-top: 4px; }
+
+/* A drill that failed, said inside the card it failed in. Five other cards are
+   fine, so this is deliberately not a page-level banner (ADR-011's partial-
+   failure reasoning, one level down). */
+.pcardError {
+  margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--color-danger);
+  border-left: 2px solid var(--color-danger); padding-left: 8px;
+}
+
 /* ---------- per-widget clone (docs/06 §3) ---------- */
 
 .widgetCloneWrap { position: relative; }

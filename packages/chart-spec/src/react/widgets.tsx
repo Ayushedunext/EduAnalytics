@@ -1211,15 +1211,36 @@ export function WidgetSpecView({
   hero,
   compact,
   accent,
+  onDrill,
 }: {
   widget: unknown;
   hero?: boolean | undefined;
   compact?: boolean | undefined;
   accent?: ChartAccent | undefined;
+  /**
+   * Drill clicks (ADR-020), forwarded to `WidgetView` exactly as `ChartSpecView`
+   * forwards them for a whole spec. Added for the Dashboard grid, whose cards
+   * each hold ONE widget and are drilled in place — before this, a single-widget
+   * caller could render a chart the spec marked `drillable` and then silently
+   * drop every click on it, which is the affordance lying about itself.
+   *
+   * Still nothing prints: a drilled level is reached by clicking, and the PDF
+   * path passes no handler, so the hint and the pointer cursor stay off paper
+   * for free.
+   */
+  onDrill?: DrillHandler | undefined;
 }): ReactElement {
   const parsed = widgetSchema.safeParse(widget);
   if (!parsed.success) {
     return <div className="notice">This could not be displayed because its definition is not valid.</div>;
   }
-  return <WidgetView widget={parsed.data} hero={hero} compact={compact} accent={accent} />;
+  return (
+    <WidgetView
+      widget={parsed.data}
+      hero={hero}
+      compact={compact}
+      accent={accent}
+      onDrill={onDrill}
+    />
+  );
 }

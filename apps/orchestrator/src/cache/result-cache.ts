@@ -216,16 +216,24 @@ export function cacheKey(parts: {
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
   /**
-   * v9 (2026-08-31): Comparative Analysis. The standing rule applies — a reader
-   * would see something different, so the digit moves. Two things changed under
-   * warm keys: the report's own widget ids and query key were renamed mid-build
+   * v10 (2026-09-01): the served catalog. `/api/home`'s cached value CARRIES the
+   * dashboard list (`HomeSummary.dashboards`), which the sidebar renders
+   * directly — so `servedDashboards` withholding the unopenable cards changes
+   * nothing for a school with a warm key until it expires, and the menu keeps
+   * offering four "soon" rows and a ⛔ that the running build no longer serves.
+   * The standing rule again: a reader would see something different, so the
+   * digit moves. This is the same class of failure as v9's — the entry
+   * deserialises perfectly and the screen is simply wrong.
+   *
+   * v9 (2026-08-31): Comparative Analysis. Two things changed under warm keys:
+   * the report's own widget ids and query key were renamed mid-build
    * (`bar-installment`/`demand_by_installment` → `bar-period`/`demand_by_period`)
    * as the comparison axis moved off the school's free-text instalment name, and
    * a warm entry from before that rename deserialises perfectly and draws the old
    * chart under the new title. Nothing fails; the screen is just wrong, which is
    * exactly the failure this digit exists for.
    */
-  return `sap:v9:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v10:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

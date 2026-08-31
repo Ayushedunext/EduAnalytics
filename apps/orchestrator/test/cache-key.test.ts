@@ -101,7 +101,11 @@ describe('a cache entry can only be reached by an identical request', () => {
     // have gone on hiding them.
     //
     // v8 since the Dashboard summary's four cards changed shape and meaning.
-    expect(cacheKey(BASE)).toMatch(/^sap:v9:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v10 since the served catalog dropped the cards nobody can open. The list
+    // rides INSIDE the cached `/api/home` value and the sidebar renders it, so
+    // a warm entry would keep offering menu rows the running build withholds.
+    expect(cacheKey(BASE)).toMatch(/^sap:v10:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

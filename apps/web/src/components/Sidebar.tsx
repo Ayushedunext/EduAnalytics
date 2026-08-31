@@ -6,22 +6,24 @@ import type { DashboardCard } from '../api/client';
  * docs/10 §2 fixes the inventory; the labels and order follow the UX prototype
  * (docs/11, Artifacts) so the built screen matches the design.
  *
- * [MANDATORY] docs/10 §3, "locked != hidden": gated features render with a lock
- * and a path to unlock rather than disappearing, because an admin who cannot see
- * a feature cannot discover that setting up a key would unlock it.
+ * [MANDATORY] docs/10 §3, "locked ≠ hidden": a GATED feature renders with a
+ * lock and a path to unlock rather than disappearing, because an admin who
+ * cannot see a feature cannot discover that setting up a key would unlock it.
+ * Ask AI below is that case, and the only one left in this menu.
  *
- * -- Three states, not one -----------------------------------------------
- * A padlock is a claim about PERMISSION, and using it for everything unbuilt
- * tells an admin to go looking for a setting that does not exist. So:
+ * -- What a menu row promises (amended 2026-09-01) ---------------------------
+ * The rule above is about a SIGNPOST. 🔒 points at Settings; the admin walks
+ * there and the feature opens. It was being stretched to cover two states that
+ * point nowhere — `coming` (the serving path is not built: the rollup store,
+ * ADR-010, and the agent runtime, ADR-022) and `blocked` (the ERP extract has
+ * no such data, AUDIT_REPORT C20) — and no role, key or setting opens either.
  *
- *   locked  🔒  — really gated. Ask AI is gated on `ai_status` (ADR-017), and
- *                 that lock is cosmetic on top of a genuine server-side 403.
- *   soon        — the serving path is not built yet. Nothing to unlock.
- *   blocked  ⛔ — the DATA does not exist (AUDIT_REPORT C20). Not our setting
- *                 to change; it needs the ERP team.
- *
- * The distinction is the point: "you can't see this", "we haven't built this"
- * and "this data doesn't exist" send a user to three different places.
+ * So they are not here. The server withholds them (`servedDashboards` in
+ * services/home.ts), which is why this file no longer needs a trail glyph and
+ * no longer hand-writes an "Agents · SOON" row of its own: every row in this
+ * list, apart from a key-less Ask AI, is a place you can go. The reasons live
+ * on in the catalog, where the people who can act on them read them, and a card
+ * returns to this menu by turning `available` — not by anyone editing here.
  */
 
 interface Props {
@@ -38,12 +40,6 @@ interface Props {
   active: string;
   onNavigate: (id: string) => void;
 }
-
-const TRAIL: Record<'available' | 'coming' | 'blocked', string> = {
-  available: '',
-  coming: 'SOON',
-  blocked: '⛔',
-};
 
 export function Sidebar({
   orgName,
@@ -101,6 +97,15 @@ export function Sidebar({
         </li>
 
         {items.map((item) => {
+          /**
+           * The server serves only `available` cards, so this is always true
+           * today. It is still asked, rather than assumed: `status` is data off
+           * the wire and the type still carries three values, so a card that
+           * somehow arrives unopenable renders inert with its reason on hover
+           * instead of routing to a screen that 404s. What it will NOT do is
+           * decorate itself — a trail glyph here would be a second, quieter
+           * place for the withheld states to come back.
+           */
           const enabled = item.status === 'available';
           return (
             <li
@@ -116,7 +121,6 @@ export function Sidebar({
             >
               <span className="w-4 text-center opacity-80">{item.icon}</span>
               <span className="flex-1">{item.title}</span>
-              {TRAIL[item.status] !== '' && <span className="trail">{TRAIL[item.status]}</span>}
             </li>
           );
         })}
@@ -139,19 +143,6 @@ export function Sidebar({
           <span className="w-4 text-center opacity-80">🤖</span>
           <span className="flex-1">Ask AI</span>
           {aiStatus !== 'active' && <span className="trail">🔒</span>}
-        </li>
-        {/*
-          Agents carries NO padlock at any ai_status, and that is not an
-          oversight. The agent runtime is a later phase (ADR-022) and most of an
-          agent — triggers, if/else flows, message actions — never touches the
-          model at all; only "describe your workflow" and the AI-compose node are
-          key-gated (docs/05 §4.4). Connecting a key therefore cannot unlock
-          this: there is nothing built behind it to unlock.
-        */}
-        <li className="muted" title="Agent runtime is a later phase (ADR-022)">
-          <span className="w-4 text-center opacity-80">⚡</span>
-          <span className="flex-1">Agents</span>
-          <span className="trail">SOON</span>
         </li>
         <li
           className={`clickable ${active === 'my-reports' ? 'active' : ''}`}

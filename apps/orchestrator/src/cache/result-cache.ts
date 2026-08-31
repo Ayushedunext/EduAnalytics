@@ -172,6 +172,13 @@ async function connect(): Promise<void> {
  * drill-entry statement instead of its lead one lands on a different key by
  * construction.
  *
+ * Extended again for the drill paths: Attendance's middle level moved from
+ * month to academic quarter. A drill key is
+ * `drill:<report>:<widget>:L<level>:<context>` and carries no query name, so a
+ * warm level-2 entry from the month version would have been served verbatim
+ * under the quarter version -- same report, same widget, same level, same
+ * `school=<id>` context. Exactly the case this digit exists for.
+ *
  * -- This one was caught by the cache, not by a test -------------------------
  * Worth recording, because the failure was invisible from inside the code. With
  * the new build shipped and the orchestrator hot-reloaded, the screen still drew

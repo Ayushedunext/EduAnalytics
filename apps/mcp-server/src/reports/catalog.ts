@@ -178,7 +178,23 @@ const BUCKET: ReportParam = {
  * defaulter report asks the other question — how late is it — and uses
  * `periodtodate` for exactly that reason.
  */
-const ACADEMIC_QUARTER = 'FLOOR(MOD(MONTH(periodfromdate) + 8, 12) / 3) + 1';
+function academicQuarter(column: string): string {
+  return `FLOOR(MOD(MONTH(${column}) + 8, 12) / 3) + 1`;
+}
+
+/** The demand ledger's quarter — the original, and still the common case. */
+const ACADEMIC_QUARTER = academicQuarter('periodfromdate');
+
+/**
+ * The same boundary against the attendance register's own date column.
+ *
+ * Derived from `academicQuarter` rather than written out again, which is the
+ * whole reason that function exists. Two hand-written copies of "shift April to
+ * 0, divide by 3" would be two places for the school year to start in January,
+ * and a fees quarter disagreeing with an attendance quarter is the kind of drift
+ * nobody notices until a principal compares two screens.
+ */
+const ATTENDANCE_QUARTER = academicQuarter('a.attendancedate');
 
 /**
  * The quarter a drill click narrowed to (ADR-020: clicked values enter as BOUND
@@ -220,19 +236,6 @@ const DRILL_CLASS: ReportParam = {
   required: false,
   description:
     'Drill context: restrict to one class, as `classname` records it. Omitted means every class.',
-};
-
-/**
- * The month a drill click narrowed to, as `YYYY-MM` — the same shape
- * `by_month` emits, so the value a reader clicked is the value that binds
- * without a round trip through a date type that would have to guess a day.
- */
-const DRILL_MONTH: ReportParam = {
-  name: 'drill_month',
-  type: 'string',
-  required: false,
-  description:
-    'Drill context: restrict to one month, as YYYY-MM. Omitted means the whole window.',
 };
 
 /**
@@ -980,7 +983,7 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'student_attendance_data_set',
   domain: 'students',
-  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE, DRILL_MONTH],
+  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE, DRILL_QUARTER],
   queries: [
     {
       key: 'summary',
@@ -1071,33 +1074,73 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
         'marked_days DESC LIMIT 200',
     },
     /**
-     * Drill level 3 — the same status counts by class, within the clicked
-     * month.
+     * Drill level 2 — the same status counts by academic quarter.
      *
-     * Levels 1 and 2 add no SQL: level 1 keeps `summary` per school, level 2 IS
-     * `by_month`. Only the leaf needs a statement, and it is `by_class` with the
-     * month bound — `LEFT(a.attendancedate, 7)` compared against a `YYYY-MM`
-     * string, which is the same expression `by_month` groups by, so the value a
-     * reader clicked binds without passing through a date type that would have
-     * to invent a day.
+     * -- Why quarter and not month ----------------------------------------------
+     * This level WAS `by_month`, and the swap is deliberate rather than a
+     * preference. Fees and Defaulters both descend school → quarter → class, and
+     * an attendance drill that descended school → month → class made the middle
+     * level mean something different on one card out of four — a reader
+     * comparing "Q2 fees" with "July attendance" is comparing two windows
+     * without being told. The quarter is the same Apr–Mar boundary the fee
+     * ledger uses (`academicQuarter`), so the two now line up by construction.
+     *
+     * Nothing is lost from the product: the dashboard's own `by_month` line
+     * chart still draws the monthly trend on the report page, which is where
+     * month-level detail was actually being read. The DRILL is about descending
+     * a hierarchy, and quarter is the level the rest of the platform descends
+     * through.
+     *
+     * `seq` is the quarter NUMBER, which is what a click binds (`drill_quarter`
+     * is typed `number`), while `quarter` is the "Q2" a reader sees. Same
+     * split as `demand_by_quarter`, for the same reason: the axis label and the
+     * bound value are different things and conflating them makes the drill
+     * depend on a display string.
+     */
+    {
+      key: 'by_quarter',
+      description: 'Present and absent student-days by academic quarter',
+      drill_only: true,
+      sql:
+        `SELECT CONCAT('Q', ${ATTENDANCE_QUARTER}) AS quarter, ${ATTENDANCE_QUARTER} AS seq, ` +
+        'COUNT(*) AS marked_days, COUNT(DISTINCT a.attendancedate) AS working_days, ' +
+        STATUS_SUMS +
+        ' FROM ' +
+        STUDENT_DAYS +
+        ' GROUP BY quarter, seq ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the same status counts by class, within the clicked
+     * quarter.
+     *
+     * Level 1 adds no SQL (it keeps `summary` per school); levels 2 and 3 are
+     * the two statements above and below this comment.
+     *
+     * `:drill_quarter IS NULL OR …` rather than two statements, exactly as
+     * `demand_by_class` does it: a `variants` pair differing only in a WHERE
+     * clause would, the day one of them gained a measure, quietly answer a
+     * different question under the same heading. Level 3 always arrives WITH a
+     * quarter by construction (its context is [school, quarter] — see
+     * DRILL_PATHS); the null branch keeps the statement honest if it is ever run
+     * on its own.
      *
      * The drill measures are COUNTS (present and absent student-days), never
      * the rate the dashboard's own tiles show. A rate is a quotient, and
      * quotients do not survive the merge `sumBy` performs: adding two schools'
-     * rates, or two months', produces a number belonging to neither. Counts add
-     * correctly at every level, and the ratio a reader wants is legible in the
-     * two bars standing side by side.
+     * rates, or two quarters', produces a number belonging to neither. Counts
+     * add correctly at every level, and the ratio a reader wants is legible in
+     * the two bars standing side by side.
      */
     {
-      key: 'by_class_for_month',
-      description: 'Present and absent student-days by class, within one month',
+      key: 'by_class_for_quarter',
+      description: 'Present and absent student-days by class, within one academic quarter',
       drill_only: true,
       sql:
         'SELECT a.classname, COUNT(*) AS marked_days, ' +
         STATUS_SUMS +
         ' FROM ' +
         STUDENT_DAYS +
-        ' WHERE (:drill_month IS NULL OR LEFT(a.attendancedate, 7) = :drill_month) ' +
+        ` WHERE (:drill_quarter IS NULL OR ${ATTENDANCE_QUARTER} = :drill_quarter) ` +
         'GROUP BY a.classname ORDER BY marked_days DESC',
     },
   ],

@@ -626,7 +626,21 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
   },
 
   /**
-   * Attendance: school → month → class — docs/06 §4.3's second curated path.
+   * Attendance: school → quarter → class — docs/06 §4.3's second curated path.
+   *
+   * -- Why the middle level is a quarter and no longer a month ----------------
+   * It was `month` until 2026-08-31. Fees and Defaulters both descend school →
+   * quarter → class, and a third path whose middle level was a month made that
+   * level mean something different on one card out of four: a reader comparing
+   * "Q2 fees" against "July attendance" is comparing two windows without having
+   * been told they differ. The quarter here is the same Apr–Mar boundary the
+   * fee ledger uses — one `academicQuarter` helper in the catalog produces
+   * both — so the two cannot drift into disagreeing about when the year starts.
+   *
+   * The monthly view is not lost: the dashboard's own `by_month` line chart
+   * still draws the trend on the report page, which is where month-level detail
+   * was actually read. A DRILL is for descending a hierarchy, and quarter is the
+   * level the rest of the platform descends through.
    *
    * -- Counts, not the rate ---------------------------------------------------
    * Two measures, present and absent student-days, rather than the attendance
@@ -660,18 +674,25 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
         group_by: 'school',
       },
       {
-        x: 'month',
-        drill_dim: 'month',
-        query: 'by_month',
+        x: 'quarter',
+        drill_dim: 'quarter',
+        /**
+         * The axis reads "Q2" and the click binds 2. Same split as the fee
+         * paths: binding the visible label would make the drill depend on a
+         * display string, and `drill_quarter` is typed `number` precisely so a
+         * string is refused at the MCP boundary rather than coerced.
+         */
+        drill_value_field: 'seq',
+        query: 'by_quarter',
         narrow: { kind: 'scope' },
-        title: 'Present and absent student-days by month · {context}',
-        group_by: 'month',
-        note: 'These are MARKED student-days. A day nobody marked is missing from the bars rather than counted as an absence, so a thin month may mean poor marking rather than good attendance.',
+        title: 'Present and absent student-days by quarter · {context}',
+        group_by: 'academic quarter',
+        note: 'These are MARKED student-days. A day nobody marked is missing from the bars rather than counted as an absence, so a thin quarter may mean poor marking rather than good attendance.',
       },
       {
         x: 'classname',
-        query: 'by_class_for_month',
-        narrow: { kind: 'param', param: 'drill_month', type: 'string' },
+        query: 'by_class_for_quarter',
+        narrow: { kind: 'param', param: 'drill_quarter', type: 'number' },
         title: 'Present and absent student-days by class · {context}',
         group_by: 'class',
       },

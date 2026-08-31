@@ -80,7 +80,9 @@ export const DASHBOARD_IDS = [
   'enrollment-overview',
   'fee-collection',
   'fee-defaulters',
+  'fee-by-student',
   'staff-overview',
+  'staff-attendance',
   'admissions-funnel',
   'attendance-analytics',
   'principal-snapshot',
@@ -113,7 +115,22 @@ export const REPORT_FILTERS: Record<
   'enrollment-overview': { academicYear: true, asOf: false, dateWindow: false },
   'fee-collection': { academicYear: true, asOf: false, dateWindow: false },
   'fee-defaulters': { academicYear: true, asOf: true, dateWindow: false },
+  /**
+   * Year only. Nothing here depends on what has FALLEN DUE — this report reads
+   * the whole book per student, due or not — so an as-of pill would appear to
+   * move the numbers and would not. A filter that does nothing is worse than a
+   * filter that is absent (the same rule Staff Overview's missing year follows).
+   */
+  'fee-by-student': { academicYear: true, asOf: false, dateWindow: false },
   'staff-overview': { academicYear: false, asOf: true, dateWindow: false },
+  /**
+   * A date WINDOW and nothing else. Staff are not enrolled in an academic year,
+   * so there is none to bind (the same reason Staff Overview declares none);
+   * and unlike headcount, attendance is not a point-in-time question, so an
+   * as-of date would answer 'who was marked on exactly this day' under the
+   * heading of a report about a period.
+   */
+  'staff-attendance': { academicYear: false, asOf: false, dateWindow: true },
   'admissions-funnel': { academicYear: true, asOf: false, dateWindow: false },
   /**
    * Attendance binds BOTH, against two different tables, because neither table
@@ -266,7 +283,9 @@ export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
   'enrollment-overview': 'by_class',
   'fee-collection': 'by_month',
   'fee-defaulters': 'aging',
+  'fee-by-student': 'by_class',
   'staff-overview': 'by_department',
+  'staff-attendance': 'by_month',
   'admissions-funnel': 'funnel',
   'attendance-analytics': 'by_month',
   'principal-snapshot': 'by_class',
@@ -311,8 +330,10 @@ export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
   'enrollment-overview': 'by_class',
   'fee-collection': 'by_component',
   'fee-defaulters': 'totals',
+  'fee-by-student': 'dues',
   'attendance-analytics': 'summary',
   'staff-overview': 'by_department',
+  'staff-attendance': 'summary',
   'transport-analytics': 'by_pickup_route',
 };
 
@@ -582,6 +603,59 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
     ],
   },
   /**
+   * Fee by student: school → academic quarter → class.
+   *
+   * The same three levels and the same quarter boundary as the two fee paths
+   * beside it, on ONE measure — the amount outstanding. A single measure is a
+   * plain bar, not a group of one.
+   *
+   * -- Why the student COUNT is not a second bar ------------------------------
+   * Every level's statement returns `students` alongside `outstanding`, and it
+   * is deliberately not drawn. A count of 500 and an amount of ₹5,000,000 share
+   * an axis only in the sense that both are numbers: the count would be an
+   * invisible sliver against the money and the axis would be labelled for
+   * neither. The count is on the report's own tiles, where it has a scale of
+   * its own.
+   *
+   * -- These bars do NOT sum the way the class bars do -------------------------
+   * The amounts do partition cleanly — a rupee of demand belongs to one quarter
+   * and one class — so summing the bars is sound. The `students` column behind
+   * them does not: a child owing in two quarters is one student and two rows.
+   * That is exactly the trap Fee Defaulters carries a warning about, and the
+   * reason this path draws the money rather than the people.
+   */
+  'fee-by-student': {
+    widget_id: 'bar-school-fee-student',
+    measures: [{ field: 'outstanding', label: 'Outstanding' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Outstanding by school',
+        group_by: 'school',
+      },
+      {
+        x: 'quarter',
+        drill_dim: 'quarter',
+        drill_value_field: 'seq',
+        query: 'by_quarter',
+        narrow: { kind: 'scope' },
+        title: 'Outstanding by quarter · {context}',
+        group_by: 'academic quarter',
+        note: 'This is the whole year’s book, due or not — unlike Fee Defaulters, which counts only what has already fallen due.',
+      },
+      {
+        x: 'classname',
+        query: 'by_class_for_quarter',
+        narrow: { kind: 'param', param: 'drill_quarter', type: 'number' },
+        title: 'Outstanding by class · {context}',
+        group_by: 'class',
+      },
+    ],
+  },
+
+  /**
    * Enrollment: school → class → section — docs/06 §4.3's third curated path,
    * and the cheapest of the three to add.
    *
@@ -747,6 +821,62 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
         narrow: { kind: 'param', param: 'drill_department', type: 'string' },
         title: 'Staff on roll by designation · {context}',
         group_by: 'designation',
+      },
+    ],
+  },
+
+  /**
+   * Staff attendance: school → quarter → department.
+   *
+   * A quarter IS available here, unlike on Staff Overview, and the difference
+   * is the data rather than a preference: `employee_attendance_data_set` has a
+   * real per-row date, so bucketing by quarter is arithmetic. Headcount had no
+   * date to bucket and therefore no honest quarter to offer. Same Apr–Mar
+   * boundary as every other quarter in the platform, from the one
+   * `academicQuarter` helper.
+   *
+   * Department is the leaf for the same reason Staff Overview stops there: the
+   * only level below it is naming individuals.
+   *
+   * -- Counts, and only two of the four buckets are drawn ---------------------
+   * Present and absent staff-days, never a rate — a rate is a quotient and
+   * quotients do not survive `sumBy`, exactly as on the student side. The
+   * HALF-DAY bucket is deliberately not a third bar: it is a real count the
+   * report publishes on its own page, but drawing it beside present and absent
+   * invites a reader to add three numbers that do not partition the same thing.
+   * The level note says it is excluded rather than leaving the bars to imply
+   * they account for everything.
+   */
+  'staff-attendance': {
+    widget_id: 'bar-school-staff-attendance',
+    measures: [
+      { field: 'present_days', label: 'Present staff-days' },
+      { field: 'absent_days', label: 'Absent staff-days' },
+    ],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Present and absent staff-days by school',
+        group_by: 'school',
+      },
+      {
+        x: 'quarter',
+        drill_dim: 'quarter',
+        drill_value_field: 'seq',
+        query: 'by_quarter',
+        narrow: { kind: 'scope' },
+        title: 'Present and absent staff-days by quarter · {context}',
+        group_by: 'academic quarter',
+        note: 'Half-day leave is counted separately and is in neither bar, so these two do not add up to the days marked. These are MARKED staff-days: a day nobody marked is missing rather than counted as an absence.',
+      },
+      {
+        x: 'departmentname',
+        query: 'by_department_for_quarter',
+        narrow: { kind: 'param', param: 'drill_quarter', type: 'number' },
+        title: 'Present and absent staff-days by department · {context}',
+        group_by: 'department',
       },
     ],
   },
@@ -1038,7 +1168,9 @@ export const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) =
   'enrollment-overview': buildEnrollment,
   'fee-collection': buildFeeCollection,
   'fee-defaulters': buildFeeDefaulters,
+  'fee-by-student': buildFeeByStudent,
   'staff-overview': buildStaffOverview,
+  'staff-attendance': buildStaffAttendance,
   'admissions-funnel': buildAdmissionsFunnel,
   'attendance-analytics': buildAttendance,
   'principal-snapshot': buildPrincipalSnapshot,
@@ -1637,6 +1769,156 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
  * staff join on a date and leave on one (mcp-server/src/reports/catalog.ts). The
  * screen says so rather than showing a pill that does nothing.
  */
+
+/**
+ * Fee by Student — what each child owes over the whole year's book.
+ *
+ * The named table is this report's principal content; the chart above it is the
+ * way into a school, a quarter and a class. Identities are masked at the MCP
+ * layer for a session without `students.read` (rail 6), so nothing here needs
+ * to know who is reading — it renders whatever came back, `[masked]` included.
+ */
+function buildFeeByStudent(merged: Merged, { year, scope }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+  const path = DRILL_PATHS['fee-by-student'] as DrillPath;
+
+  const totals = merged.sumAll('totals', ['students_billed', 'payable', 'paid']);
+  const dues = merged.sumAll('dues', ['students', 'outstanding']);
+  const byClass = merged.sumBy('by_class', 'classname', ['students', 'outstanding'], 'seq');
+  const students = merged.concatRows('students');
+
+  if (dues !== null) {
+    const owing = num(dues['students']);
+    const outstanding = num(dues['outstanding']);
+    widgets.push(
+      {
+        id: 'kpi-outstanding',
+        type: 'kpi',
+        label: `Outstanding · ${year}`,
+        value: rupees(outstanding),
+        tone: outstanding > 0 ? 'warning' : 'positive',
+      },
+      {
+        id: 'kpi-students-owing',
+        type: 'kpi',
+        label: 'Students carrying a balance',
+        value: count(owing),
+        tone: 'neutral',
+      },
+      {
+        id: 'kpi-average',
+        type: 'kpi',
+        /**
+         * Computed from the two SUMMED totals, never by averaging per-school
+         * averages — a 200-student school and a 4,000-student one do not weigh
+         * the same, and a mean of their means says they do.
+         */
+        label: 'Average balance, per student owing',
+        value: owing > 0 ? rupees(outstanding / owing) : '—',
+        tone: 'neutral',
+      },
+    );
+  }
+
+  if (totals !== null) {
+    widgets.push({
+      id: 'kpi-billed',
+      type: 'kpi',
+      label: 'Students billed',
+      value: count(num(totals['students_billed'])),
+      tone: 'neutral',
+    });
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — outstanding per school, from the
+   * `dues` rows the tiles above already read. Costs no query of its own.
+   */
+  const perSchool = merged.sumPerSchool('dues', ['outstanding']);
+  if (perSchool.length > 0) {
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'outstanding',
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        outstanding: entry.totals['outstanding'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+  }
+
+  if (byClass.length > 0) {
+    widgets.push({
+      id: 'bar-class',
+      type: 'bar',
+      title: 'Outstanding by class',
+      x: 'classname',
+      y: 'outstanding',
+      data: byClass.map((r) => ({
+        classname: label(r['classname']),
+        outstanding: num(r['outstanding']),
+      })),
+    });
+  }
+
+  /**
+   * The named list. Re-sorted here because each school answered separately and
+   * a merge of several ranked lists is not itself ranked — the largest balance
+   * in the group could otherwise sit below a smaller one from the school that
+   * happened to answer first.
+   *
+   * The cap is re-applied for the same reason: three schools' 200 rows each is
+   * 600, which is not what "top 200" means to the person reading it.
+   */
+  if (students.length > 0) {
+    const ranked = [...students]
+      .sort((a, b) => num(b.row['balance']) - num(a.row['balance']))
+      .slice(0, 200);
+    widgets.push({
+      id: 'table-students',
+      type: 'table',
+      title: 'What each student owes (top 200 by balance)',
+      columns: [
+        { field: 'studentname', label: 'Student' },
+        { field: 'enrollmentno', label: 'Enrolment no.' },
+        { field: 'classname', label: 'Class' },
+        { field: 'sectionname', label: 'Section' },
+        { field: 'payable', label: 'Payable', align: 'right' },
+        { field: 'paid', label: 'Paid', align: 'right' },
+        { field: 'balance', label: 'Balance', align: 'right' },
+      ],
+      rows: ranked.map(({ row }) => ({
+        studentname: label(row['studentname']),
+        enrollmentno: label(row['enrollmentno']),
+        classname: label(row['classname']),
+        sectionname: label(row['sectionname']),
+        payable: rupees(num(row['payable'])),
+        paid: rupees(num(row['paid'])),
+        balance: rupees(num(row['balance'])),
+      })),
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['student', 'class', 'academic quarter'],
+    notes: [
+      'This is the whole year’s book: every student carrying a balance, whether or not it has fallen due. Fee Defaulters answers the other question — who is LATE — and its totals are smaller for that reason, not because the two disagree.',
+      'A student who has overpaid is left out of the outstanding total rather than netted off against another family’s arrears, so the figures here are what is owed, not a net position.',
+      'Student names and enrolment numbers are masked for a session without students.read (docs/08 §4.5); the amounts are shown either way, and any masked column is named on the result.',
+      'The list is the 200 largest balances in the selected schools, not the whole roll.',
+    ],
+  };
+}
+
 function buildStaffOverview(merged: Merged, { asOf, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
 
@@ -2335,6 +2617,179 @@ function buildPrincipalSnapshot(merged: Merged, { year, asOf }: BuildContext): D
  * `buildAttendance`'s is, joined on `studentprofileid` -- the only student key
  * this table carries, and not the same column every other roster table uses.
  */
+
+/**
+ * Staff Attendance — the staff register, over the report's window.
+ *
+ * Modelled on `buildAttendance` because the tables are siblings with the same
+ * traps; what differs is the half-day bucket, which is drawn as its own bar and
+ * excluded from the rate rather than folded into either neighbour.
+ */
+function buildStaffAttendance(merged: Merged, { scope }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+  const path = DRILL_PATHS['staff-attendance'] as DrillPath;
+
+  const summary = merged.sumAll('summary', [
+    'marked_days',
+    'days_marked',
+    'staff_marked',
+    'present_days',
+    'absent_days',
+    'half_days',
+    'other_days',
+  ]);
+  const byMonth = merged.sumBy('by_month', 'month', ['present_days', 'absent_days', 'half_days'], 'seq');
+  const byDepartment = merged.sumBy('by_department', 'departmentname', [
+    'marked_days',
+    'present_days',
+    'absent_days',
+    'half_days',
+  ]);
+  const byStatus = merged.sumBy('by_status', 'statusname', ['days']);
+
+  const marked = summary !== null ? num(summary['marked_days']) : 0;
+  if (summary !== null && marked > 0) {
+    const present = num(summary['present_days']);
+    const half = num(summary['half_days']);
+    widgets.push(
+      {
+        id: 'kpi-marked',
+        type: 'kpi',
+        label: 'Staff-days marked',
+        value: count(marked),
+        tone: 'neutral',
+      },
+      {
+        id: 'kpi-present-rate',
+        type: 'kpi',
+        /**
+         * Present over MARKED staff-days, and the label says "of marked" for
+         * the same reason Attendance Analytics' does: the extract names no
+         * staff calendar, so working days are not knowable and a day nobody
+         * marked is in neither the numerator nor the denominator.
+         *
+         * Half-days are in the DENOMINATOR and not the numerator. That is a
+         * choice and it is the conservative one — a half-day was not a full
+         * day present — and it is stated in the notes rather than left for a
+         * reader to reverse-engineer from three tiles.
+         */
+        label: 'Present, of marked staff-days',
+        value: `${((present / marked) * 100).toFixed(1)}%`,
+        tone: present / marked < 0.85 ? 'warning' : 'neutral',
+      },
+      {
+        id: 'kpi-staff-marked',
+        type: 'kpi',
+        label: 'Staff appearing in the register',
+        value: count(num(summary['staff_marked'])),
+        tone: 'neutral',
+      },
+      {
+        id: 'kpi-half-days',
+        type: 'kpi',
+        label: 'Half-day leave',
+        value: count(half),
+        tone: 'neutral',
+      },
+    );
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — one pair of bars per school, from
+   * the same `summary` rows the tiles above read, kept per school rather than
+   * summed across them. Costs no query of its own.
+   *
+   * A school with nothing marked is OMITTED rather than drawn as two zero bars,
+   * exactly as Attendance Analytics does it: zero present and zero absent reads
+   * as "nobody came" when the true statement is "nobody marked the register".
+   */
+  const perSchool = merged
+    .sumPerSchool('summary', ['present_days', 'absent_days'])
+    .filter((entry) => (entry.totals['present_days'] ?? 0) + (entry.totals['absent_days'] ?? 0) > 0);
+  if (perSchool.length > 0) {
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'present_days',
+      series: [...path.measures],
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        present_days: entry.totals['present_days'] ?? 0,
+        absent_days: entry.totals['absent_days'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+  }
+
+  if (byMonth.length > 0) {
+    widgets.push({
+      id: 'line-month',
+      type: 'line',
+      title: 'Present staff-days by month',
+      x: 'month',
+      y: 'present_days',
+      data: byMonth.map((r) => ({
+        month: label(r['month']),
+        present_days: num(r['present_days']),
+      })),
+    });
+  }
+
+  if (byDepartment.length > 0) {
+    widgets.push({
+      id: 'bar-department',
+      type: 'bar',
+      title: 'Present and absent staff-days by department',
+      x: 'departmentname',
+      y: 'present_days',
+      series: [...path.measures],
+      data: byDepartment.map((r) => ({
+        departmentname: label(r['departmentname']),
+        present_days: num(r['present_days']),
+        absent_days: num(r['absent_days']),
+      })),
+    });
+  }
+
+  /**
+   * The raw statuses, published beside every bucketed number for the same
+   * reason Attendance Analytics and the Admissions funnel publish theirs: a
+   * reader can check the bucketing instead of trusting it.
+   */
+  if (byStatus.length > 0) {
+    widgets.push({
+      id: 'table-status',
+      type: 'table',
+      title: 'What was recorded',
+      columns: [
+        { field: 'statusname', label: 'Status' },
+        { field: 'days', label: 'Staff-days', align: 'right' },
+      ],
+      rows: byStatus.map((r) => ({
+        statusname: label(r['statusname']),
+        days: count(num(r['days'])),
+      })),
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['month', 'department', 'status'],
+    notes: [
+      'Staff-days are MARKED days. The extract names no staff calendar, so a day nobody marked is missing from every figure here rather than counted as an absence — a thin month may mean poor marking rather than poor attendance.',
+      'Half-day leave (First Half / Second Half) is counted in its own bucket. It is in the denominator of the present rate but not the numerator, and it is in neither the present nor the absent bars, so those two do not add up to the days marked.',
+      'Statuses are read by name, never by code: the status ids in this table disagree with the student register (5 means Absent here and Suspend there).',
+    ],
+  };
+}
+
 function buildTransportAnalytics(merged: Merged, { scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
 

@@ -1095,3 +1095,92 @@ describe('attendance drills school to quarter to class, in counts', () => {
     }
   });
 });
+
+describe('fee by student drills school to quarter to class, on the money', () => {
+  it('draws ONE measure — the amount, not the student count beside it', () => {
+    const path = DRILL_PATHS['fee-by-student'];
+    /**
+     * Every level's statement returns `students` alongside `outstanding`, and
+     * only the amount is drawn. A count of 500 and an amount of ₹5,000,000
+     * share an axis only in the sense that both are numbers: the count would be
+     * an invisible sliver and the axis would be labelled for neither.
+     */
+    expect(path?.measures.map((m) => m.field)).toEqual(['outstanding']);
+  });
+
+  it('descends through the same quarter as the other fee paths', () => {
+    const path = DRILL_PATHS['fee-by-student'];
+    expect(path?.levels[1]?.drill_dim).toBe('quarter');
+    expect(path?.levels[1]?.drill_dim).toBe(DRILL_PATHS['fee-collection']?.levels[1]?.drill_dim);
+    /** The leaf declares no `drill_dim`, so its chart renders inert. */
+    expect(path?.levels[2]?.drill_dim).toBeUndefined();
+  });
+
+  it('says at the quarter level that this is the whole book, not just what is late', async () => {
+    response = {
+      report_id: 'fee-by-student',
+      title: 'Fee by Student',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_quarter', [
+              { quarter: 'Q1', seq: 1, students: 40, outstanding: 120000 },
+              { quarter: 'Q2', seq: 2, students: 55, outstanding: 260000 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('fee-by-student', 'bar-school-fee-student', 2, [SCHOOL_STEP]);
+
+    expect(lastCall?.args['query_keys']).toEqual(['by_quarter']);
+    expect((out.widget as BarWidget).data.map((r) => r['quarter'])).toEqual(['Q1', 'Q2']);
+    /**
+     * The note is load-bearing rather than decorative. A bursar reading this
+     * beside Fee Defaulters sees two different totals for what looks like the
+     * same question, and the difference is due-yet versus not — if that is not
+     * said against the bars, the gap reads as an error in one of the reports.
+     */
+    expect(out.notes[0]).toMatch(/whole year|due or not|already fallen due/i);
+  });
+
+  it('binds the clicked quarter as a number at level 3', async () => {
+    response = {
+      report_id: 'fee-by-student',
+      title: 'Fee by Student',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_class_for_quarter', [
+              { classname: 'IX', seq: 9, students: 12, outstanding: 90000 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('fee-by-student', 'bar-school-fee-student', 3, [
+      SCHOOL_STEP,
+      QUARTER_STEP,
+    ]);
+
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_quarter']).toBe(2);
+    /**
+     * No `as_of_date`. Nothing in this report depends on what has fallen due,
+     * and a filter that appeared to move the numbers without moving them would
+     * be worse than an absent one.
+     */
+    expect(params['as_of_date']).toBeUndefined();
+    expect((out.widget as BarWidget).x).toBe('classname');
+  });
+});

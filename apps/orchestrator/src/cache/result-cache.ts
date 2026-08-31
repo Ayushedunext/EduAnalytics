@@ -185,6 +185,12 @@ async function connect(): Promise<void> {
  * the filters and the school set are all unchanged, so nothing else in the key
  * moves and a warm entry would answer with the pre-change dashboard.
  *
+ * And for Staff Attendance joining the grid. The DASHBOARD itself needed no
+ * help -- a new report id is a new `kind` and therefore new keys by
+ * construction -- but `HomeSummary` carries the grid's membership and order, so
+ * the SUMMARY's own cached value changed shape again. The same held when Fee by
+ * Student joined it.
+ *
  * -- This one was caught by the cache, not by a test -------------------------
  * Worth recording, because the failure was invisible from inside the code. With
  * the new build shipped and the orchestrator hot-reloaded, the screen still drew

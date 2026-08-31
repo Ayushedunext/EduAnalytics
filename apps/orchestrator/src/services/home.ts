@@ -227,18 +227,20 @@ export interface HomePreview {
  * transport, which are read less often. Catalog order would have led with
  * Enrollment for no better reason than that it was built first.
  *
- * -- What "6" is and is not ---------------------------------------------------
- * Six is a product decision, not a technical limit. Four of these have a
- * curated drill path today (`DRILL_PATHS`); Staff Overview and Transport do not
- * yet, and draw their lead chart inert until they grow one. That gap is
- * deliberately visible rather than papered over: a card that cannot be drilled
- * must not pretend it can, so `drillable` on the widget decides it and nothing
- * on this list overrides that.
+ * -- The count is a product decision, and every card on it drills ------------
+ * Eight today: the six this list opened with, plus Staff Attendance and Fee by
+ * Student once they existed. There is no technical limit here — what there IS, and what
+ * test/home-previews.test.ts holds as [MANDATORY], is that every id on this
+ * list has a `DRILL_PATHS` entry AND a `DASHBOARD_DRILL_QUERY` entry. A card
+ * drawing a chart nobody can click lies about what happens when you click it,
+ * so a dashboard joins this list when it can be descended, not before.
  */
 const DASHBOARD_GRID: readonly DashboardId[] = [
   'fee-collection',
   'fee-defaulters',
+  'fee-by-student',
   'attendance-analytics',
+  'staff-attendance',
   'enrollment-overview',
   'staff-overview',
   'transport-analytics',
@@ -496,11 +498,42 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     status: 'available',
   },
   {
+    id: 'fee-by-student',
+    title: 'Fee by Student',
+    blurb: 'What each student owes over the whole year, by school, quarter and class',
+    icon: '🧾',
+    group: 'school',
+    /**
+     * Names children, and says so. `students`'s identity columns are masked at
+     * the MCP layer for a session without `students.read` (rail 6, docs/08
+     * §4.5) -- `fees.read` alone sees the amounts against `[masked]`. That is
+     * the platform's existing policy applied, not a rule this card invents.
+     */
+    status: 'available',
+  },
+  {
     id: 'staff-overview',
     title: 'Staff Overview',
     blurb: 'Headcount by department and employment type, joiners and attrition',
     icon: '👥',
     group: 'school',
+    status: 'available',
+  },
+  {
+    id: 'staff-attendance',
+    title: 'Staff Attendance',
+    blurb: 'Present and absent staff-days by school, quarter and department',
+    icon: '🗂️',
+    group: 'school',
+    /**
+     * `available` since 2026-08-31. docs/11 §2 had recorded staff attendance as
+     * deliberately NOT a dashboard — the table was catalogued so Ask AI could
+     * reach it, but the only staff-attendance entry in docs/06 §2's catalog was
+     * the Director's Cross-School Attendance, which needs the rollup store.
+     * Building a school-level one was therefore a new catalog entry rather than
+     * an implementation of an existing one, which is a decision; it has been
+     * taken and docs/11 records the amendment.
+     */
     status: 'available',
   },
   {

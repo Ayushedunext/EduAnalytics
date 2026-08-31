@@ -222,6 +222,34 @@ export function KpiTile({ widget, hero }: { widget: KpiWidget; hero?: boolean | 
           {widget.delta}
         </span>
       )}
+      {/**
+        * The parts of the figure above, on one row beneath it.
+        *
+        * Rendered as a definition list because that is what it is — a set of
+        * label/value pairs qualifying one headline number — and a screen reader
+        * then announces "Girls, 4,812" as a pair instead of reading a wall of
+        * loose text. `.kpiPartValue` carries `tabular-nums` for the same reason
+        * `.kpiValue` does: these sit in a row and digits that do not line up
+        * read as sloppy at a glance.
+        *
+        * No tone is applied unless the server sent one. A breakdown is mostly
+        * neutral description — "Boys" and "Girls" are not good and bad news —
+        * and colouring parts by default would invent a judgement the data does
+        * not carry. Fees pending is the case that DOES want it, and it says so
+        * in its own spec.
+        */}
+      {widget.breakdown !== undefined && (
+        <dl className="kpiBreakdown">
+          {widget.breakdown.map((part) => (
+            <div key={part.label} className="kpiPart">
+              <dt className="kpiPartLabel">{part.label}</dt>
+              <dd className="kpiPartValue" style={{ color: toneColour(part.tone) }}>
+                {part.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }

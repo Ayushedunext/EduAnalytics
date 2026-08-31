@@ -33,6 +33,7 @@
 import {
   chartSpecSchema,
   type ChartSpec,
+  type KpiPart,
   type Widget,
 } from '@sap/chart-spec';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
@@ -53,14 +54,54 @@ import {
  * — the MCP server injects scope and the row cap itself (docs/04 §3).
  */
 const METRIC_SQL = {
+  /**
+   * Students per year, split by gender for the tile's breakdown.
+   *
+   * `gender` joins the GROUP BY rather than becoming a second statement: the
+   * scan is the same scan, and one extra grouping column is far cheaper than a
+   * second pass over the table. Every caller of these rows already sums `n`
+   * across whatever else is in them (`sumForYear`), so the total is unchanged
+   * by the finer grouping.
+   */
   studentsByYear:
-    'SELECT academicyearname AS ay, COUNT(*) AS n FROM students_data_set ' +
-    'WHERE deactivation_date IS NULL GROUP BY academicyearname',
+    'SELECT academicyearname AS ay, gender, COUNT(*) AS n FROM students_data_set ' +
+    'WHERE deactivation_date IS NULL GROUP BY academicyearname, gender',
+  /**
+   * Staff, split by the ERP's `stafftype` for the tile's breakdown.
+   *
+   * What that column actually holds is the whole difficulty, and it is handled
+   * in `staffParts` rather than here: the SQL reports the column faithfully and
+   * the classification is done where it can be explained and tested.
+   */
   activeStaff:
-    'SELECT COUNT(*) AS n FROM employees_data_set WHERE deactivation_date IS NULL',
-  outstandingByYear:
-    'SELECT academicyearname AS ay, ROUND(SUM(balance_amount)) AS n ' +
-    'FROM fee_compile_data_set WHERE balance_amount > 0 GROUP BY academicyearname',
+    'SELECT stafftype, COUNT(*) AS n FROM employees_data_set ' +
+    'WHERE deactivation_date IS NULL GROUP BY stafftype',
+  /**
+   * The fee book per year: demand raised, received, and still owed.
+   *
+   * -- Why `WHERE balance_amount > 0` had to go --------------------------------
+   * The statement used to filter to rows with a positive balance, which is
+   * correct when outstanding is the only figure wanted and WRONG the moment
+   * `paid` is: a fully-settled instalment has a zero balance, so the filter
+   * excluded precisely the payments that make up most of the collected total.
+   * Keeping it would have reported collections that only counted money received
+   * from students who still owe something.
+   *
+   * `n` is therefore computed with a CASE rather than by filtering rows, and it
+   * is the SAME number the filtered statement produced: positive balances only.
+   * Credits from overpaying students stay out of arrears instead of quietly
+   * cancelling another student's debt (the tile says so on screen).
+   *
+   * The wider scan costs no more in practice. `fee_compile_data_set` carries no
+   * usable index for this predicate (mcp-server/src/reports/catalog.ts), so the
+   * filtered form was already a full scan — the WHERE discarded rows after
+   * reading them rather than avoiding any read.
+   */
+  feesByYear:
+    'SELECT academicyearname AS ay, ROUND(SUM(total_payable_amount)) AS payable, ' +
+    'ROUND(SUM(paid_amount)) AS paid, ' +
+    'ROUND(SUM(CASE WHEN balance_amount > 0 THEN balance_amount ELSE 0 END)) AS n ' +
+    'FROM fee_compile_data_set GROUP BY academicyearname',
   /**
    * Attendance for the tile, by month.
    *
@@ -466,7 +507,7 @@ export async function buildHomeSummary(args: {
     };
   }
 
-  const { students, staff, outstanding, attendance } = await withMcp(
+  const { students, staff, fees, attendance } = await withMcp(
     args.session,
     args.correlationId,
     args.schoolIds,
@@ -477,7 +518,7 @@ export async function buildHomeSummary(args: {
        * running them in parallel costs one round trip instead of three and does
        * not widen that cap.
        */
-      const [students, staff, outstanding, attendance] = await Promise.all([
+      const [students, staff, fees, attendance] = await Promise.all([
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.studentsByYear,
@@ -488,14 +529,14 @@ export async function buildHomeSummary(args: {
         }),
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
-          sql: METRIC_SQL.outstandingByYear,
+          sql: METRIC_SQL.feesByYear,
         }),
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.attendanceByMonth,
         }),
       ]);
-      return { students, staff, outstanding, attendance };
+      return { students, staff, fees, attendance };
     },
   );
 
@@ -521,7 +562,7 @@ export async function buildHomeSummary(args: {
    */
   const studentsOutcome = outcomeOf(students);
   const staffOutcome = outcomeOf(staff);
-  const outstandingOutcome = outcomeOf(outstanding);
+  const feesOutcome = outcomeOf(fees);
   const attendanceOutcome = outcomeOf(attendance);
 
   /**
@@ -532,7 +573,7 @@ export async function buildHomeSummary(args: {
    */
   const academicYear =
     (studentsOutcome.available ? latestYear(students.rows) : null) ??
-    (outstandingOutcome.available ? latestYear(outstanding.rows) : null);
+    (feesOutcome.available ? latestYear(fees.rows) : null);
 
   const widgets: Widget[] = [];
   const blocked: BlockedMetric[] = [];
@@ -544,6 +585,23 @@ export async function buildHomeSummary(args: {
       label: `Students · ${String(scope.length)} school${scope.length > 1 ? 's' : ''}`,
       value: formatCount(sumForYear(students.rows, academicYear)),
       tone: 'neutral',
+      /**
+       * The gender mix, in the ERP's OWN words.
+       *
+       * The part labels are whatever `students_data_set.gender` holds,
+       * title-cased — never a fixed Boys/Girls pair mapped onto them. A school
+       * recording "M"/"F", or a third value, or nothing at all, is reported as
+       * it is, so a category this platform did not anticipate cannot be quietly
+       * folded into one it did.
+       */
+      ...breakdownOf(
+        mixParts(
+          students.rows.filter((row) => row['ay'] === academicYear),
+          'gender',
+          'n',
+          formatCount,
+        ),
+      ),
     });
   } else {
     blocked.push({
@@ -568,29 +626,13 @@ export async function buildHomeSummary(args: {
       label: 'Staff on roll',
       value: formatCount(sumAll(staff.rows)),
       tone: 'neutral',
+      ...breakdownOf(staffParts(staff.rows)),
     });
   } else {
     blocked.push({
       label: 'Staff on roll',
       reason: staffOutcome.reason ?? 'Not available for this session',
       kind: staffOutcome.kind,
-    });
-  }
-
-  if (outstandingOutcome.available && academicYear !== null) {
-    const amount = sumForYear(outstanding.rows, academicYear);
-    widgets.push({
-      id: 'kpi-outstanding',
-      type: 'kpi',
-      label: 'Fees outstanding',
-      value: formatRupees(amount),
-      tone: amount > 0 ? 'warning' : 'neutral',
-    });
-  } else {
-    blocked.push({
-      label: 'Fees outstanding',
-      reason: outstandingOutcome.reason ?? 'Not available for this session',
-      kind: outstandingOutcome.kind,
     });
   }
 
@@ -621,6 +663,24 @@ export async function buildHomeSummary(args: {
         label: `Student attendance · ${monthLabel(attendanceMonth)}`,
         value: `${((present / marked) * 100).toFixed(1)}%`,
         tone: present / marked < 0.75 ? 'warning' : 'neutral',
+        /**
+         * "Present days", not "Present". These are student-DAYS over the month
+         * the tile names — the very denominator the rate above is built from —
+         * and a part labelled "Present" under a monthly figure reads as a
+         * headcount for today. The two differ by roughly the number of school
+         * days in the month.
+         *
+         * Absent is DERIVED as marked − present rather than counted separately,
+         * because that is exactly what the rate's denominator makes it: a day
+         * nobody marked is in neither part. That is the same caveat Attendance
+         * Analytics carries, and the reason both lead with a rate over marked
+         * days rather than over working days — the extract names no school
+         * calendar, so working days are not knowable here.
+         */
+        breakdown: [
+          { label: 'Present days', value: formatCount(present) },
+          { label: 'Absent days', value: formatCount(marked - present) },
+        ],
       });
     }
   } else if (!attendanceOutcome.available) {
@@ -640,6 +700,59 @@ export async function buildHomeSummary(args: {
       label: 'Student attendance',
       reason: 'No attendance has been marked for these schools in the last three months',
       kind: 'no_data',
+    });
+  }
+
+  /**
+   * Fees: the year's whole demand, split into collected and still owed.
+   *
+   * -- Why the headline moved from outstanding to total ------------------------
+   * This tile used to lead with the outstanding balance alone. A bare "₹19.4L
+   * outstanding" cannot be read without the size of the book it came from: it is
+   * alarming against a ₹25L demand and unremarkable against ₹19Cr. Leading with
+   * the demand and naming collected and pending underneath supplies the only
+   * context that makes the figure mean anything, and it costs no extra query —
+   * all three amounts come from columns the one scan was already reading.
+   *
+   * -- The parts need not add to the total, and that is deliberate -------------
+   * `payable` is the demand raised, `paid` what was received against it, and
+   * `pending` the POSITIVE balances only (`feesByYear`). Where a student has
+   * overpaid, that credit is left out of pending rather than netted off against
+   * another student's arrears, so collected + pending can exceed the demand
+   * slightly. Netting would understate what is actually owed, and arrears are
+   * the number a bursar acts on.
+   */
+  if (feesOutcome.available && academicYear !== null) {
+    const payable = sumForYear(fees.rows, academicYear, 'payable');
+    const paid = sumForYear(fees.rows, academicYear, 'paid');
+    const pending = sumForYear(fees.rows, academicYear);
+    widgets.push({
+      id: 'kpi-fees',
+      type: 'kpi',
+      label: `Total fees · ${academicYear}`,
+      value: formatRupees(payable),
+      /**
+       * The tile stays neutral and the PENDING part carries the warning. Every
+       * school has something pending at any moment, so an amber edge on the
+       * whole tile would be permanently lit — a signal that never varies is not
+       * a signal, and it would drown out the tiles where amber means something
+       * happened.
+       */
+      tone: 'neutral',
+      breakdown: [
+        { label: 'Collected', value: formatRupees(paid), tone: 'positive' },
+        {
+          label: 'Pending',
+          value: formatRupees(pending),
+          tone: pending > 0 ? 'warning' : 'positive',
+        },
+      ],
+    });
+  } else {
+    blocked.push({
+      label: 'Total fees',
+      reason: feesOutcome.reason ?? 'Not available for this session',
+      kind: feesOutcome.kind,
     });
   }
 
@@ -698,7 +811,7 @@ export async function buildHomeSummary(args: {
     academic_year: academicYear,
     blocked_metrics: blocked,
     dashboards: DASHBOARDS,
-    degraded_schools: degradedFrom([students, staff, outstanding, attendance]),
+    degraded_schools: degradedFrom([students, staff, fees, attendance]),
   };
 
   /**
@@ -769,9 +882,143 @@ function latestYear(rows: readonly Record<string, unknown>[]): string | null {
   return [...years].sort().reverse()[0] ?? null;
 }
 
-function sumForYear(rows: readonly Record<string, unknown>[], year: string | null): number {
+/**
+ * One field of one academic year, summed across the schools that answered.
+ *
+ * `field` defaults to `n`, the count/amount every one of these statements
+ * carries, so the fee statement's extra `payable` and `paid` columns are read
+ * through the same function rather than a parallel one that could drift from it.
+ */
+function sumForYear(
+  rows: readonly Record<string, unknown>[],
+  year: string | null,
+  field = 'n',
+): number {
   if (year === null) return 0;
-  return rows.reduce((total, row) => (row['ay'] === year ? total + toNumber(row['n']) : total), 0);
+  return rows.reduce((total, row) => (row['ay'] === year ? total + toNumber(row[field]) : total), 0);
+}
+
+/**
+ * `{ breakdown }` when there are parts to show, and nothing at all when there
+ * are not.
+ *
+ * Spread into the widget rather than assigned, because `breakdown` is optional
+ * in the schema and `exactOptionalPropertyTypes` means an explicit `undefined`
+ * is not the same as an absent key. The same shape `dashboards.ts` uses for a
+ * bar's optional `series`.
+ */
+function breakdownOf(parts: readonly KpiPart[]): { breakdown?: KpiPart[] } {
+  return parts.length >= 2 ? { breakdown: [...parts] } : {};
+}
+
+/**
+ * A total's parts, taken from the data's OWN category labels.
+ *
+ * Nothing here knows what a gender or a category is called. Rows are grouped by
+ * whatever string the column holds, ranked by size, and the top ones are
+ * reported under their own names — so a school recording "M"/"F", or "MALE"/
+ * "FEMALE", or a third value this platform has never seen, is described rather
+ * than translated. A blank is "Not recorded", which is a real answer and not
+ * the same as absent.
+ *
+ * Fewer than two parts returns none: a single-part "breakdown" is a second
+ * label for the total, and the schema refuses it for that reason.
+ *
+ * Beyond three, the tail collapses into "Other" rather than being truncated
+ * away. The parts stop being a complete account of the total the moment a
+ * category is silently dropped, and a reader cannot see that it happened.
+ */
+function mixParts(
+  rows: readonly Record<string, unknown>[],
+  labelField: string,
+  valueField: string,
+  format: (value: number) => string,
+): KpiPart[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const raw = String(row[labelField] ?? '').trim();
+    const label = raw === '' ? 'Not recorded' : titleCase(raw);
+    totals.set(label, (totals.get(label) ?? 0) + toNumber(row[valueField]));
+  }
+
+  const ranked = [...totals]
+    .filter(([, value]) => value > 0)
+    .sort(([, a], [, b]) => b - a);
+  if (ranked.length < 2) return [];
+  if (ranked.length <= 3) {
+    return ranked.map(([label, value]) => ({ label, value: format(value) }));
+  }
+
+  const rest = ranked.slice(2).reduce((total, [, value]) => total + value, 0);
+  return [
+    ...ranked.slice(0, 2).map(([label, value]) => ({ label, value: format(value) })),
+    { label: 'Other', value: format(rest) },
+  ];
+}
+
+/**
+ * Employment types this ERP spells out in words, and what they mean.
+ *
+ * Matched as substrings of the upper-cased value because the extract is not
+ * consistent about form — "CONFIRMATION", "CONTRACTUAL", "PROBATION" and
+ * "PART TIME" all appear, and a school is free to add another tomorrow.
+ */
+const PERMANENT_TYPE = /CONFIRM|PERMANENT|REGULAR/;
+const IMPERMANENT_TYPE = /CONTRACT|PROBATION|TEMPORARY|TEMP\b|ADHOC|AD[ -]HOC|GUEST|PART[ -]?TIME|TRAINEE|INTERN|PROVISION/;
+
+/**
+ * Staff split into permanent, not permanent, and the ones the ERP will not say.
+ *
+ * -- Why this is not a two-way split -----------------------------------------
+ * `employees_data_set.stafftype` holds CONFIRMATION / CONTRACTUAL / PROBATION
+ * alongside opaque codes — S0011, S004AD — 19 distinct values across three
+ * schools (mcp-server/src/reports/catalog.ts, `by_stafftype`). The words
+ * classify themselves. The codes do not, and no mapping for them has been
+ * confirmed by anyone.
+ *
+ * Forcing the codes into one bucket or the other would produce two numbers that
+ * look authoritative and are guesses, which is the exact failure this file keeps
+ * warning about: a wrong answer wearing the shape of a right one. Dropping them
+ * is no better — the parts would then quietly fail to account for the headcount
+ * printed directly above them.
+ *
+ * So they get named. "Unclassified" is a third part, visible on the tile, and a
+ * school whose codes dominate can SEE that its employment split is unknown
+ * rather than being told a confident fiction. If a mapping is ever confirmed,
+ * this is the one place that changes and the part disappears on its own.
+ */
+function staffParts(rows: readonly Record<string, unknown>[]): KpiPart[] {
+  let permanent = 0;
+  let impermanent = 0;
+  let unclassified = 0;
+
+  for (const row of rows) {
+    const type = String(row['stafftype'] ?? '').trim().toUpperCase();
+    const count = toNumber(row['n']);
+    if (PERMANENT_TYPE.test(type)) permanent += count;
+    else if (IMPERMANENT_TYPE.test(type)) impermanent += count;
+    else unclassified += count;
+  }
+
+  /**
+   * Nothing self-described: the column is entirely codes for these schools, so
+   * there is no split to report and the tile shows the headcount alone. Three
+   * parts reading 0 / 0 / everything is not information.
+   */
+  if (permanent === 0 && impermanent === 0) return [];
+
+  return [
+    { label: 'Permanent', value: formatCount(permanent) },
+    { label: 'Not permanent', value: formatCount(impermanent) },
+    ...(unclassified > 0
+      ? [{ label: 'Unclassified', value: formatCount(unclassified) }]
+      : []),
+  ];
+}
+
+/** `FEMALE` -> `Female`, `ad-hoc` -> `Ad-Hoc`. Labels are read, not sorted. */
+function titleCase(value: string): string {
+  return value.toLowerCase().replace(/(^|[^a-z])([a-z])/g, (_, lead: string, ch: string) => lead + ch.toUpperCase());
 }
 
 function sumAll(rows: readonly Record<string, unknown>[]): number {

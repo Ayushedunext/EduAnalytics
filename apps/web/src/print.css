@@ -101,6 +101,12 @@ body {
 .printPage .kpi b {
   font-size: 18px;
 }
+/* The breakdown prints, at paper scale. Dropping it would make the PDF and the
+   screen disagree about what the same tile says, which ADR-021 exists to
+   prevent -- both read the one spec, so both show all of it. */
+.printPage .kpiBreakdown { gap: 2px 10px; padding-top: 5px; }
+.printPage .kpiPartLabel { font-size: 7.5px; }
+.printPage .kpiPartValue { font-size: 10px; }
 
 /**
  * One column on paper, two on screen.

@@ -155,6 +155,23 @@ async function connect(): Promise<void> {
  * their own. Four bumps in five days is not churn, it is the shape of this
  * phase: every dashboard that grows a drill grows a widget, and every widget is
  * a change a reader sees.
+ *
+ * v7 -> v8 (2026-08-31): the Dashboard summary's four cards. The strip was
+ * renamed, reordered, given a breakdown under each figure, and the fee card
+ * changed what its headline MEANS (the year's demand, not the arrears) along
+ * with its widget id. Every one of those is a reader-visible change and any one
+ * alone would have earned the bump.
+ *
+ * -- This one was caught by the cache, not by a test -------------------------
+ * Worth recording, because the failure was invisible from inside the code. With
+ * the new build shipped and the orchestrator hot-reloaded, the screen still drew
+ * the OLD four tiles — right down to a "Fees outstanding" label that no longer
+ * existed anywhere in the source. `buildHomeSummary` returned a warm v7 entry
+ * before it ever reached a builder, so nothing ran and nothing failed. The
+ * header above already said this ("a warm cache kept answering with the
+ * pre-change dashboard, correctly by its own rules and wrongly by any other
+ * measure") and it happened anyway, which is the argument for the digit rather
+ * than for remembering to clear Redis: a deploy cannot be asked to remember.
  */
 export function cacheKey(parts: {
   kind: string;
@@ -169,7 +186,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v7:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v8:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

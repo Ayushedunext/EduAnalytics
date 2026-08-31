@@ -492,17 +492,21 @@ body {
    empty 300px column gaps IN the grid (auto-fill reserves them) rather than
    stretching the real cards to fill the row -- the dead-space complaint this
    was written to fix, just moved one level in. */
-/* Fixed 3-up, not auto-fit: at the old `minmax(300px,1fr)` a 1900px page fit
-   4-5 cards a row, which is exactly why the charts read as small and
-   congested -- a card that shares a row with five others has no room for
-   axis ticks. 3 columns give each card roughly double its old width, which
-   is the room the axis labels below (widgets.tsx BarPanel/LinePanel) need to
-   be legible rather than dropped. Two breakpoints, not a bare auto-fit,
-   because auto-fit would silently go back to 4+ columns the moment the
-   viewport is wide enough -- 980px matches docs/10 §4's own single-column
-   floor for this product. */
-.pgallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-@media (max-width: 1400px) { .pgallery { grid-template-columns: repeat(2, 1fr); } }
+/* Fixed 2-up, not auto-fit. This went 4-5 → 3 → 2, and each step was the same
+   complaint: the CHART inside the card was too small to read as a chart. At
+   `minmax(300px,1fr)` a 1900px page fit five cards a row and the axis ticks had
+   nowhere to go. Three columns bought room for the ticks but not for the bars —
+   a 460px card draws a 3-category bar chart as three hairlines with more air
+   than ink, which is what a preview card must not look like, because the
+   preview IS the reason to click it.
+
+   Two columns give roughly 900px a card at the 1900px cap, which is what makes
+   the thicker bars below (widgets.tsx `maxBarSize`) read as solid marks rather
+   than rules. Fewer cards per row costs a scroll; a card that fails to preview
+   its report costs the click. Two breakpoints, not a bare auto-fit, because
+   auto-fit would silently go back to 3+ columns the moment the viewport is wide
+   enough -- 980px matches docs/10 §4's own single-column floor. */
+.pgallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
 @media (max-width: 980px) { .pgallery { grid-template-columns: 1fr; } }
 .pcard {
   padding: 14px 16px 16px;

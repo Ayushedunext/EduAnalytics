@@ -234,11 +234,29 @@ function deltaDirection(delta: string): 'up' | 'down' | 'flat' {
 
 const DELTA_ARROW: Record<'up' | 'down' | 'flat', string> = { up: '▲', down: '▼', flat: '•' };
 
-export function KpiTile({ widget, hero }: { widget: KpiWidget; hero?: boolean | undefined }): ReactElement {
+/**
+ * One metric, one tile — the same tile everywhere, at the same size (§22).
+ *
+ * -- Why there is no headline tile any more (2026-09-01) ---------------------
+ * The first tile in a strip used to render double-width at a 36px figure. The
+ * intent was a reading order, but a strip is already read left to right, and
+ * what the width actually produced was a row that looked broken: on Dashboard's
+ * four cards, one 2× tile beside three 1× tiles reads as a layout accident
+ * before it reads as emphasis, and the eye goes to the odd shape rather than to
+ * the number in it.
+ *
+ * Emphasis a strip can carry without breaking its own grid: ORDER, which is
+ * still the server's (`spec.widgets`, held as contract in
+ * test/home-summary.test.ts), and `tone`, which colours the left edge from
+ * meaning the server assigned. Both survive a tile changing size; a hard-coded
+ * 2× span does not survive the strip growing by one card, which is what the old
+ * "hero up to five tiles, none at six" rule was already conceding.
+ */
+export function KpiTile({ widget }: { widget: KpiWidget }): ReactElement {
   const tone = widget.tone ?? 'neutral';
   const direction = widget.delta !== undefined ? deltaDirection(widget.delta) : null;
   return (
-    <div className={`card kpi kpi--${tone}${hero === true ? ' kpi--hero' : ''}`}>
+    <div className={`card kpi kpi--${tone}`}>
       <span className="kpiLabel">{widget.label}</span>
       <b className="kpiValue" style={{ color: toneColour(widget.tone) }}>
         {widget.value}
@@ -455,6 +473,20 @@ function CategoryTick({ x = 0, y = 0, payload, maxChars = 24 }: TickProps): Reac
  * so nothing changes for a card with no taller neighbour. The full dashboard
  * and the PDF (`compact` unset) are untouched: a plain `ResponsiveContainer`
  * at its original fixed height, exactly as before this existed.
+ *
+ * -- Why the stretch is now BOUNDED (2026-09-01) -----------------------------
+ * It was unbounded, and the 2-up grid made that visible: a 3-school Enrollment
+ * card sharing a row with an 8-department Staff Overview was stretched to the
+ * taller card's height, so three 22px bars sat in 390px with ~110px of blank
+ * band between them. That is not a chart breathing, it is a chart coming apart
+ * — the bars stop reading as one series because nothing visually groups them.
+ *
+ * 1.3× is the ceiling: enough that a card an inch taller than its neighbour
+ * still fills, which is the case this wrapper was written for, and not so much
+ * that a 3-row chart can be stretched to an 8-row one's height. Past the
+ * ceiling the leftover goes back to being space under the chart. Dead space at
+ * the bottom of a card is a smaller problem than a chart whose own rows have
+ * drifted apart, and it is the one the reader does not notice.
  */
 function ChartFrame({
   compact,
@@ -467,7 +499,10 @@ function ChartFrame({
 }): ReactElement {
   if (compact === true) {
     return (
-      <div className="specChartFill" style={{ minHeight: naturalHeight }}>
+      <div
+        className="specChartFill"
+        style={{ minHeight: naturalHeight, maxHeight: Math.round(naturalHeight * 1.3) }}
+      >
         <ResponsiveContainer width="100%" height="100%">
           {children}
         </ResponsiveContainer>
@@ -720,9 +755,16 @@ export function BarPanel({
          */
         const last = index === series.length - 1;
         const square: [number, number, number, number] = [0, 0, 0, 0];
+        /**
+         * 4px at the DATA end, square at the baseline. Both halves of that
+         * matter: the rounded cap is what stops a bar reading as a bare rule,
+         * and the square foot is what keeps every bar starting from one shared
+         * line — a capsule rounded at both ends floats off its own axis and the
+         * eye has to guess where the measurement begins.
+         */
         const rounded: [number, number, number, number] = axis.horizontal
-          ? [0, 3, 3, 0]
-          : [3, 3, 0, 0];
+          ? [0, 4, 4, 0]
+          : [4, 4, 0, 0];
         return (
           <Bar
             key={entry.field}
@@ -736,7 +778,15 @@ export function BarPanel({
              * so it gets the width a single-series bar would have rather than
              * the narrow band a member of a group gets.
              */
-            maxBarSize={stacked ? (axis.horizontal ? 14 : 38) : axis.horizontal ? 11 : 26}
+            maxBarSize={
+              stacked
+                ? axis.horizontal
+                  ? BAR_PX.single
+                  : BAR_PX.singleV
+                : axis.horizontal
+                  ? BAR_PX.grouped
+                  : BAR_PX.groupedV
+            }
             {...animation}
             activeBar={{ stroke: INK, strokeWidth: 1 }}
           />
@@ -747,8 +797,8 @@ export function BarPanel({
           key={widget.y}
           dataKey={widget.y}
           fill={`url(#${gradId})`}
-          radius={axis.horizontal ? [0, 3, 3, 0] : [3, 3, 0, 0]}
-          maxBarSize={axis.horizontal ? 14 : 38}
+          radius={axis.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
+          maxBarSize={axis.horizontal ? BAR_PX.single : BAR_PX.singleV}
           {...animation}
           activeBar={{ fill: seriesColour, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
         >
@@ -856,18 +906,26 @@ export function BarPanel({
      * 26px a row keeps a 12px bar plus air, and the ceiling stops a
      * pathological category list from producing a page-long chart. Compact
      * uses the same idea at a tighter budget -- Home's preview cards are wide
-     * (3-up, tokens.css `.pgallery`) but still a preview, not a full report.
+     * (2-up, tokens.css `.pgallery`) but still a preview, not a full report.
+     */
+    /**
+     * A band's height, per category. Raised with `BAR_PX` on 2026-09-01 and for
+     * the same reason: thickness alone would have made a thicker bar eat the gap
+     * between categories, trading one kind of ugly for another. The rule of
+     * thumb here is bar + roughly half a bar of air — 22px marks in a ~34px
+     * band, 3×16px grouped marks in a ~62px band — which keeps each category
+     * legible as its own row while the marks stay solid.
      *
      * A grouped band holds one bar PER SERIES, so its budget is per-bar rather
      * than per-category: three measures across nine classes is 27 bars, and a
      * band sized for one would draw them on top of each other.
      */
-    const perRow = grouped && !stacked ? 13 * series.length + 10 : 26;
-    const compactPerRow = grouped && !stacked ? 11 * series.length + 8 : 22;
+    const perRow = grouped && !stacked ? 19 * series.length + 12 : 34;
+    const compactPerRow = grouped && !stacked ? 17 * series.length + 10 : 30;
     const height =
       compact === true
-        ? clamp(64 + axis.count * compactPerRow, 220, 340)
-        : clamp(44 + axis.count * perRow + (grouped ? 26 : 0), 180, 640);
+        ? clamp(64 + axis.count * compactPerRow, 230, 380)
+        : clamp(44 + axis.count * perRow + (grouped ? 26 : 0), 190, 680);
     /**
      * The axis takes the width its labels need, up to a ceiling that leaves the
      * bars the larger half of the panel. `- 14` is the tick line and its gap.
@@ -895,7 +953,7 @@ export function BarPanel({
             <CartesianGrid stroke={GRID} horizontal={false} />
             {gradientDefs}
             {/* Both axes render at every size now -- Home's preview cards are wide
-                enough (3-up, tokens.css `.pgallery`) for the same truncate-with-
+                enough (2-up, tokens.css `.pgallery`) for the same truncate-with-
                 tooltip treatment the full dashboard uses (`CategoryTick`,
                 `axisNumber` below) to stay legible; a glance no longer has to
                 guess what a bar's category or scale is. */}

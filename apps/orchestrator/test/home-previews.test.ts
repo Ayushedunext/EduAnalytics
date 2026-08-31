@@ -56,17 +56,33 @@ const {
 
 const buildDashboard = vi.fn();
 
+/**
+ * Reports to pretend have NO curated drill path, for this run only.
+ *
+ * Needed because every dashboard on the grid now has one (`DRILL_PATHS` gained
+ * Staff Overview and Transport on 2026-08-31), so the preview builder's
+ * no-path branch has no real subject left. That branch is not dead code — it is
+ * what a dashboard joining the grid BEFORE it grows a path would take, and it
+ * must keep drawing that report's lead chart inert rather than reaching for a
+ * drill-entry widget no builder emits. Faking the absence is the only way to
+ * hold it, and faking it explicitly is better than deleting the tests and
+ * discovering the branch was broken the next time a card is added.
+ */
+const noPathFor = new Set<string>();
+
 vi.mock('../src/services/dashboards.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/services/dashboards.js')>();
   return {
     ...actual,
     DASHBOARD_IDS,
     isDashboardId: (value: string) => (DASHBOARD_IDS as readonly string[]).includes(value),
+    drillPathFor: (id: Parameters<typeof actual.drillPathFor>[0]) =>
+      noPathFor.has(id) ? undefined : actual.drillPathFor(id),
     buildDashboard: (...args: unknown[]) => buildDashboard(...args),
   };
 });
 
-const { buildHomePreview } = await import('../src/services/home.js');
+const { buildHomePreview, previewableDashboards } = await import('../src/services/home.js');
 
 const SESSION = {
   sub: 'erp-user-3001',
@@ -111,6 +127,7 @@ function build(reportId: string) {
 
 beforeEach(() => {
   buildDashboard.mockReset();
+  noPathFor.clear();
 });
 
 describe('a preview costs one query, not a whole dashboard', () => {
@@ -162,7 +179,8 @@ describe('a preview costs one query, not a whole dashboard', () => {
     expect(REAL_DRILL_QUERY['fee-collection']).not.toBe(REAL_LEAD_QUERY['fee-collection']);
   });
 
-  it('asks for the LEAD query where the report does not drill yet', async () => {
+  it('asks for the LEAD query where the report does not drill', async () => {
+    noPathFor.add('staff-overview');
     buildDashboard.mockResolvedValue(
       specWith([
         { id: 'bar-dept', type: 'bar', title: 'By dept', x: 'd', y: 'n', data: [{ d: 'X', n: 1 }] },
@@ -171,12 +189,25 @@ describe('a preview costs one query, not a whole dashboard', () => {
 
     await build('staff-overview');
 
-    // Staff Overview has no `DRILL_PATHS` entry yet, so its card keeps the
-    // report's own lead chart and renders inert rather than inventing a path.
+    // A gridded report with no path keeps its own lead chart and renders inert,
+    // rather than fetching a drill statement whose widget no builder emits.
     expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
       reportId: 'staff-overview',
       queryKeys: [REAL_LEAD_QUERY['staff-overview']],
     });
+  });
+
+  /**
+   * Every card on the grid drills. This is the actual goal of the curated six —
+   * a card that draws a chart nobody can click is a card that lies about what
+   * happens when you click it — and it is worth asserting rather than assuming,
+   * because adding a seventh card is exactly when it would stop being true.
+   */
+  it('[MANDATORY] every dashboard on the grid has a drill path', () => {
+    for (const card of previewableDashboards()) {
+      expect(REAL_DRILL_PATHS[card.id], `${card.id} is on the grid but does not drill`).toBeTruthy();
+      expect(REAL_DRILL_QUERY[card.id], `${card.id} is on the grid but has no drill query`).toBeTruthy();
+    }
   });
 
   it('passes the request’s own scope and filters through untouched', async () => {
@@ -219,6 +250,7 @@ describe('what a card shows', () => {
   });
 
   it('prefers the lead CHART over a KPI where there is no path -- the strip already has the numbers', async () => {
+    noPathFor.add('staff-overview');
     buildDashboard.mockResolvedValue(
       specWith([
         { id: 'kpi-lead', type: 'kpi', label: 'Headcount', value: '228', tone: 'neutral' },
@@ -232,6 +264,7 @@ describe('what a card shows', () => {
   });
 
   it('falls back to the lead KPI when the lead query produced no chart', async () => {
+    noPathFor.add('staff-overview');
     buildDashboard.mockResolvedValue(
       specWith([{ id: 'kpi-lead', type: 'kpi', label: 'Headcount', value: '0', tone: 'neutral' }]),
     );

@@ -179,6 +179,12 @@ async function connect(): Promise<void> {
  * under the quarter version -- same report, same widget, same level, same
  * `school=<id>` context. Exactly the case this digit exists for.
  *
+ * And once more for Staff Overview and Transport, which each gained a
+ * drill-entry widget. Adding a widget to a dashboard is the change that first
+ * earned this digit at v2 -> v3, and it is the same change here: the report id,
+ * the filters and the school set are all unchanged, so nothing else in the key
+ * moves and a warm entry would answer with the pre-change dashboard.
+ *
  * -- This one was caught by the cache, not by a test -------------------------
  * Worth recording, because the failure was invisible from inside the code. With
  * the new build shipped and the orchestrator hot-reloaded, the screen still drew

@@ -312,6 +312,8 @@ export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
   'fee-collection': 'by_component',
   'fee-defaulters': 'totals',
   'attendance-analytics': 'summary',
+  'staff-overview': 'by_department',
+  'transport-analytics': 'by_pickup_route',
 };
 
 /**
@@ -699,6 +701,114 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
     ],
   },
 
+  /**
+   * Staff: school → department → designation.
+   *
+   * -- No quarter here, and that is the data talking -------------------------
+   * Headcount is a point-in-time question — who is on the payroll on this date —
+   * not a per-period one. `employees_data_set` has no academic year and no term
+   * (the report's own header says why it declares no year filter), so a quarter
+   * level would have nothing to compute from and would mean "staff who existed
+   * during Q2", which nobody asked. Department → designation is the hierarchy
+   * the columns actually describe: TEACHING contains PRT, TGT and PGT.
+   *
+   * The path stops at designation because nothing below it exists short of
+   * naming individuals — a different report with a different PII posture, not a
+   * fourth level ADR-020 would allow anyway.
+   *
+   * These bars add up at every level: a member of staff sits in one department
+   * and holds one designation, so each level partitions the one above it. No
+   * `note`, and the absence is deliberate rather than an oversight — contrast
+   * Fee Defaulters, whose quarters overlap and say so.
+   */
+  'staff-overview': {
+    widget_id: 'bar-school-staff',
+    measures: [{ field: 'staff', label: 'Staff on roll' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Staff on roll by school',
+        group_by: 'school',
+      },
+      {
+        x: 'departmentname',
+        drill_dim: 'department',
+        /** The department name IS the bound value, so no separate value field. */
+        query: 'by_department',
+        narrow: { kind: 'scope' },
+        title: 'Staff on roll by department · {context}',
+        group_by: 'department',
+      },
+      {
+        x: 'designationname',
+        query: 'by_designation_for_department',
+        narrow: { kind: 'param', param: 'drill_department', type: 'string' },
+        title: 'Staff on roll by designation · {context}',
+        group_by: 'designation',
+      },
+    ],
+  },
+
+  /**
+   * Transport: school → pickup route → class.
+   *
+   * -- No quarter here either -------------------------------------------------
+   * Ridership is a standing arrangement rather than a per-period one:
+   * `student_transport_data_set` records which route a student is ON and
+   * carries no date column at all, so there is nothing to bucket a quarter
+   * from. Route is what the report is about, and class beneath it is the
+   * question a transport manager actually asks — which years fill this bus.
+   *
+   * -- The schema under this is UNVERIFIED, and the drill inherits that -------
+   * This dashboard went `available` on an unverified schema
+   * (mcp-server/src/schema/erp-v1.ts): the table's existence was known, its
+   * columns were not. The report says so on its own face, and a drill built on
+   * the same columns is exactly as provisional as the chart it descends from —
+   * which is the honest position, not a reason to withhold the path. If a
+   * column turns out to be named differently the level fails loudly at the
+   * guard rather than drawing something plausible.
+   *
+   * A student rides one route and sits in one class, so these bars add up at
+   * every level.
+   */
+  'transport-analytics': {
+    widget_id: 'bar-school-transport',
+    measures: [{ field: 'students', label: 'Riders' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Riders by school',
+        group_by: 'school',
+      },
+      {
+        x: 'pickuproutename',
+        drill_dim: 'route',
+        query: 'by_pickup_route',
+        narrow: { kind: 'scope' },
+        title: 'Riders by pickup route · {context}',
+        group_by: 'pickup route',
+      },
+      {
+        x: 'classname',
+        query: 'by_class_for_route',
+        narrow: { kind: 'param', param: 'drill_route', type: 'string' },
+        title: 'Riders by class · {context}',
+        group_by: 'class',
+        /**
+         * The classes are ordered by SIZE, not by class ordinal. This table
+         * carries no `classseq` and a drill level fetches one statement, so the
+         * ordinal the dashboard borrows from `students_data_set` is not in
+         * hand — and ordering class labels as text puts X before IX, which is
+         * worse than admitting the axis is ranked by ridership.
+         */
+        note: 'Classes are ordered by number of riders, not by class ordinal — this table carries no class ordering of its own.',
+      },
+    ],
+  },
 };
 
 export function drillPathFor(reportId: DashboardId): DrillPath | undefined {
@@ -1527,7 +1637,7 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
  * staff join on a date and leave on one (mcp-server/src/reports/catalog.ts). The
  * screen says so rather than showing a pill that does nothing.
  */
-function buildStaffOverview(merged: Merged, { asOf }: BuildContext): DashboardBuild {
+function buildStaffOverview(merged: Merged, { asOf, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
 
   const movement = merged.sumAll('movement', ['on_roll', 'joined_12m', 'left_12m']);
@@ -1568,6 +1678,35 @@ function buildStaffOverview(merged: Merged, { asOf }: BuildContext): DashboardBu
         tone: 'neutral',
       },
     );
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — one bar per school, drilling to
+   * department and then designation. Built from the `by_department` rows the
+   * chart below already reads, kept per school instead of summed across them,
+   * so the entry point to the whole path costs no query of its own.
+   */
+  const perSchool = merged.sumPerSchool('by_department', ['staff']);
+  if (perSchool.length > 0) {
+    const path = DRILL_PATHS['staff-overview'] as DrillPath;
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'staff',
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        /** Falls back to the id: an unnamed bar is still a bar someone can act on. */
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        staff: entry.totals['staff'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
   }
 
   if (byDepartment.length > 0) {
@@ -2196,7 +2335,7 @@ function buildPrincipalSnapshot(merged: Merged, { year, asOf }: BuildContext): D
  * `buildAttendance`'s is, joined on `studentprofileid` -- the only student key
  * this table carries, and not the same column every other roster table uses.
  */
-function buildTransportAnalytics(merged: Merged): DashboardBuild {
+function buildTransportAnalytics(merged: Merged, { scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
 
   const totals = merged.sumAll('totals', ['riders', 'pickup_routes', 'drop_routes']);
@@ -2236,6 +2375,33 @@ function buildTransportAnalytics(merged: Merged): DashboardBuild {
         tone: 'neutral',
       },
     );
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — one bar per school, drilling to
+   * route and then class. Built from the `by_pickup_route` rows the chart below
+   * already reads, so the entry point costs no query of its own.
+   */
+  const perSchool = merged.sumPerSchool('by_pickup_route', ['students']);
+  if (perSchool.length > 0) {
+    const path = DRILL_PATHS['transport-analytics'] as DrillPath;
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'students',
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        students: entry.totals['students'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
   }
 
   if (byPickupRoute.length > 0) {

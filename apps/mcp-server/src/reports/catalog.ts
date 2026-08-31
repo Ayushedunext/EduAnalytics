@@ -239,6 +239,37 @@ const DRILL_CLASS: ReportParam = {
 };
 
 /**
+ * The department a drill click narrowed to (ADR-020), as a bound value.
+ *
+ * A string, like `drill_class`, and for the same reason: `departmentname` is
+ * free text in `employees_data_set` and there is no id to bind instead. It
+ * reaches MySQL as a parameter, so a department named `'; DROP` is a department
+ * matching no rows rather than a statement — the guard never sees the value,
+ * only the placeholder.
+ */
+const DRILL_DEPARTMENT: ReportParam = {
+  name: 'drill_department',
+  type: 'string',
+  required: false,
+  description:
+    'Drill context: restrict to one department, as `departmentname` records it. Omitted means every department.',
+};
+
+/**
+ * The pickup route a drill click narrowed to (ADR-020), as a bound value.
+ *
+ * A string for the same reason again — `pickuproutename` is the only identifier
+ * this table carries for a route.
+ */
+const DRILL_ROUTE: ReportParam = {
+  name: 'drill_route',
+  type: 'string',
+  required: false,
+  description:
+    'Drill context: restrict to one pickup route, as `pickuproutename` records it. Omitted means every route.',
+};
+
+/**
  * Enrollment Overview — docs/06 §2, Phase 1.
  *
  * Every query filters on the academic year. That is not cosmetic: these tables
@@ -725,7 +756,7 @@ const STAFF_OVERVIEW: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'employees_data_set',
   domain: 'staff',
-  params: [AS_OF_DATE],
+  params: [AS_OF_DATE, DRILL_DEPARTMENT],
   queries: [
     /**
      * One scan, three numbers. Headcount, joiners and leavers have different
@@ -793,6 +824,38 @@ const STAFF_OVERVIEW: PredefinedReport = {
         'SELECT reason_for_leaving, COUNT(*) AS leavers FROM employees_data_set ' +
         'WHERE DATEDIFF(:as_of_date, deactivation_date) BETWEEN 0 AND 365 ' +
         'GROUP BY reason_for_leaving ORDER BY leavers DESC',
+    },
+    /**
+     * Drill level 3 — designations within the clicked department.
+     *
+     * Levels 1 and 2 introduce no SQL: level 1 keeps `by_department` per school
+     * rather than summing it across schools, and level 2 IS `by_department`.
+     * Only the leaf has to narrow, and narrowing has to happen in the database.
+     *
+     * -- Why this path has no quarter, and stops at designation ----------------
+     * Headcount is a point-in-time question ("who is on the payroll on this
+     * date"), not a per-period one, so there is no honest quarter level to
+     * offer: staff are not enrolled in a term. Department → designation is the
+     * hierarchy the columns actually describe — TEACHING contains PRT, TGT and
+     * PGT — and the path stops there because nothing below designation exists
+     * short of naming individuals, which is a different report with a different
+     * PII posture.
+     *
+     * Deliberately NOT `LIMIT 15` as `by_designation` has. That cap makes sense
+     * for a whole school's designation chart, where the tail is noise; inside
+     * ONE department the tail is the small teams, and dropping them would make
+     * the bars fail to account for the department total directly above them.
+     */
+    {
+      key: 'by_designation_for_department',
+      description: 'Headcount by designation, within one department',
+      drill_only: true,
+      sql:
+        'SELECT designationname, COUNT(*) AS staff FROM employees_data_set ' +
+        'WHERE (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'AND (joining_date IS NULL OR joining_date <= :as_of_date) ' +
+        'AND (:drill_department IS NULL OR departmentname = :drill_department) ' +
+        'GROUP BY designationname ORDER BY staff DESC',
     },
   ],
 };
@@ -1258,7 +1321,7 @@ const TRANSPORT_ANALYTICS: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'student_transport_data_set',
   domain: 'students',
-  params: [],
+  params: [DRILL_ROUTE],
   queries: [
     {
       key: 'totals',
@@ -1292,6 +1355,37 @@ const TRANSPORT_ANALYTICS: PredefinedReport = {
       key: 'class_order',
       description: 'Class ordinals, read from enrolment because this table has none',
       sql: 'SELECT classname, MIN(classseq) AS seq FROM students_data_set GROUP BY classname ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — riders by class, within the clicked pickup route.
+     *
+     * Levels 1 and 2 introduce no SQL: level 1 keeps `by_pickup_route` per
+     * school, level 2 IS `by_pickup_route`. Only the leaf narrows.
+     *
+     * -- Why route and not quarter --------------------------------------------
+     * Ridership is a standing arrangement, not a per-period one: this table
+     * records which route a student is ON, with no date column to bucket by, so
+     * a quarter level would have nothing to compute from. Route is the
+     * dimension the report is actually about ("Route ridership by route, stop
+     * and class"), and class beneath it is the question a transport manager
+     * asks — which years fill this bus.
+     *
+     * -- Ordered by size, not by class ordinal --------------------------------
+     * `student_transport_data_set` carries no `classseq`; the dashboard borrows
+     * one from `students_data_set` via `class_order` and applies it in the
+     * merge. A drill level fetches ONE statement, so that ordinal is not
+     * available here, and ordering by `classname` as TEXT would be worse than
+     * useless — it puts X before IX. Largest first is honest about what it is
+     * sorting by. Same reasoning as `by_class_for_quarter` on Attendance.
+     */
+    {
+      key: 'by_class_for_route',
+      description: 'Riders by class, within one pickup route',
+      drill_only: true,
+      sql:
+        'SELECT classname, COUNT(*) AS students FROM student_transport_data_set ' +
+        'WHERE (:drill_route IS NULL OR pickuproutename = :drill_route) ' +
+        'GROUP BY classname ORDER BY students DESC',
     },
   ],
 };

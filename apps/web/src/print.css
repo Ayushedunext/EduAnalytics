@@ -87,8 +87,12 @@ body {
    a fixed, known width where a flex row's grow/shrink has no page edge to
    respond to -- an even grid is the better fit once the container can't
    change size. `display: grid` is re-declared here because the base `.kpis`
-   rule (tokens.css) is flex on screen; `.kpi--hero`'s `grid-column: span 2`
-   still applies once this makes `.kpis` a grid again. */
+   rule (tokens.css) is flex on screen.
+
+   Even columns is now what the SCREEN does too: the double-width lead tile
+   (`.kpi--hero`, `grid-column: span 2`) was removed on 2026-09-01, so paper no
+   longer differs from the screen in what a strip looks like, only in how the
+   evenness is achieved. */
 .printPage .kpis {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -156,6 +160,13 @@ body {
   max-height: none;
   overflow: visible;
 }
+/* Paper has no interactions. The sort control prints as the plain heading it
+   stands in for, and the ⇅ mark — an affordance for a click nobody can make on
+   a PDF — is dropped entirely (ADR-021: the export shows the spec's own row
+   order, so a sort indicator on paper would be an affordance AND a lie). */
+.printPage .specTable th > .specSort { cursor: default; }
+.printPage .specSortMark { display: none; }
+
 .printPage .specTable {
   font-size: 10.5px;
 }

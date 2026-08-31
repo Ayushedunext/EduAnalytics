@@ -267,18 +267,53 @@ export function previewableDashboards(): readonly (DashboardCard & { id: Dashboa
 }
 
 /**
+ * The catalog as it is SERVED: the menu, the strip, and everything the SPA is
+ * allowed to know exists.
+ *
+ * -- Only what this build can actually open (2026-09-01) ---------------------
+ * docs/10 §3's "locked ≠ hidden" is about GATED features: a padlock is a
+ * signpost to Settings, and hiding it hides the setting that would open it.
+ * That argument does not carry to a card nobody can open from any screen, under
+ * any role, with any key. Those come in two kinds and both are withheld:
+ *
+ *   `coming`  — the serving path is not built. Group Overview, Cross-School
+ *               Attendance and School Comparison wait on the rollup store
+ *               (ADR-010); Workflow Agents waits on the agent runtime
+ *               (ADR-022). Both are still being decided, so there is no date to
+ *               give and nothing an admin can do.
+ *   `blocked` — the ERP extract carries no such data (AUDIT_REPORT C20). Exam
+ *               Performance is the one today. It needs an extract change from
+ *               the ERP team, which is not something the school reading the
+ *               menu can start.
+ *
+ * A menu is a list of places you can go. Five rows that go nowhere teach a
+ * school to skim past the menu, which costs more than the discoverability the
+ * ⛔ was buying — and the reasons themselves survive in `DASHBOARDS` below,
+ * where the people who can act on them read them.
+ *
+ * The CARDS stay, reasons and ADR references intact, and that is the point:
+ * when a serving path lands or an extract arrives, its card flips to
+ * `available` and reappears here on its own — no list to remember, nothing to
+ * re-add. `blocked_metrics` is untouched by this: a KPI tile reading "—  no
+ * data" explains a number the strip is visibly missing, which is a different
+ * thing from a menu row promising a screen.
+ */
+export function servedDashboards(): readonly DashboardCard[] {
+  return DASHBOARDS.filter((card) => card.status === 'available');
+}
+
+/**
  * Everything the grid does NOT draw, for the strip beneath it.
  *
- * Three kinds land here and they are not alike: dashboards that are built and
- * simply not on the grid, ones whose serving path is not written yet
- * (`coming`), and ones the ERP extract has no data for (`blocked`). The first
- * kind is reachable RIGHT NOW, so the strip has to let it be opened rather than
- * showing it greyed beside things that cannot be — which is what the SPA does
- * with the `status` each card already carries.
+ * One kind lands here now: dashboards that are BUILT and simply not among the
+ * eight the grid leads with. They are reachable right now, so every chip in the
+ * strip is a real click. It held two other kinds until `servedDashboards`
+ * stopped serving them, and losing them is what turned the strip from a mix of
+ * live links and dead labels into one list of places to go.
  */
 export function otherDashboards(): readonly DashboardCard[] {
   const onGrid = new Set<string>(DASHBOARD_GRID);
-  return DASHBOARDS.filter((card) => !onGrid.has(card.id));
+  return servedDashboards().filter((card) => !onGrid.has(card.id));
 }
 
 /**
@@ -475,6 +510,42 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'director',
     status: 'coming',
     reason: 'Needs the rollup store (ADR-010, Phase 2)',
+  },
+  {
+    id: 'trend-analysis',
+    title: 'Trend Analysis',
+    blurb: 'Six years of collection, twelve of enrollment, and where each is heading',
+    icon: '📈',
+    /**
+     * `school`, for the reason Comparative Analysis gives one card below: the
+     * `director` half of the menu is reserved for the screens ADR-010 puts
+     * behind the rollup store, all of which are still `coming`. This report is
+     * served by the same per-school fan-out as every other one (ADR-011) and
+     * reads as well for a single school as for twenty — a school looking at its
+     * own six-year collection curve is the common case, not the exception.
+     */
+    group: 'school',
+    status: 'available',
+  },
+  {
+    id: 'fee-comparative',
+    title: 'Comparative Analysis',
+    blurb: 'Recovery this year against last, school by school, instalment by instalment',
+    icon: '📊',
+    /**
+     * `school`, not `director`, even though the page a reader sees is a
+     * school-by-school comparison.
+     *
+     * The group decides which half of the menu a card sits in, and the
+     * `director` half is reserved for the screens ADR-010 puts behind the rollup
+     * store — Group Overview, School Comparison, Cross-School Attendance — all
+     * of which are still `coming`. This report is not one of those: it is served
+     * by the same per-school fan-out every other report uses (ADR-011), it works
+     * for a single school as readily as for twenty, and listing it beside four
+     * cards that cannot be opened would suggest it cannot be either.
+     */
+    group: 'school',
+    status: 'available',
   },
   {
     id: 'fee-collection',
@@ -965,7 +1036,7 @@ export async function buildHomeSummary(args: {
     spec: parsed.data,
     academic_year: academicYear,
     blocked_metrics: blocked,
-    dashboards: DASHBOARDS,
+    dashboards: servedDashboards(),
     grid: previewableDashboards().map((card) => card.id),
     degraded_schools: degradedFrom([students, staff, fees, attendance]),
   };

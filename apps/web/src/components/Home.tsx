@@ -24,15 +24,19 @@
  * admin who cannot see it cannot learn that adding a key would unlock it. Once
  * active it opens the Ask AI screen (components/AskAI.tsx).
  *
- * -- Three card states, deliberately distinct --------------------------------
- * `available` is built. `coming` means the serving path is not written yet.
- * `blocked` means the DATA does not exist -- exams, transport and library have
- * no tables in the ERP extract at all (AUDIT_REPORT C20). Attendance was in that
- * list until 2026-08-21, and watching it leave is the point of keeping the three
- * states apart: a second extract arrived, the server changed one card's verdict,
- * and no screen code changed. The server decides which is which; this component
- * only renders the verdict. They look different because they need different
- * people to fix them.
+ * -- One card state on screen now (2026-09-01) -------------------------------
+ * The catalog still has three verdicts and the server still decides them, but
+ * only `available` is SERVED (`servedDashboards`, services/home.ts). `coming`
+ * meant the serving path was unwritten; `blocked` meant the ERP extract has no
+ * such data (AUDIT_REPORT C20) -- exams today, and transport, library and
+ * attendance before their extracts arrived. Neither opens for any role with any
+ * key, so neither is offered: this screen lists what it can draw.
+ *
+ * Watching attendance leave `blocked` on 2026-08-21 is still the point of
+ * keeping the verdicts apart in the catalog -- a second extract arrived, the
+ * server changed one card's verdict, and no screen code changed. That is also
+ * how a withheld card comes BACK: it turns `available` and the grid, the strip
+ * and the sidebar all pick it up untouched.
  *
  * -- One nav, one overview, not two navs -------------------------------------
  * The sidebar is the menu (every dashboard, Ask AI, Settings — Sidebar.tsx). It
@@ -49,11 +53,8 @@
  * overview leads with is a product decision, and a second copy of the rule here
  * would be free to disagree with the first.
  *
- * Everything else drops to the strip below — which now holds three kinds, not
- * two. Dashboards that are BUILT but not on the grid are clickable there with
- * no pill; `coming` and `blocked` keep their pill and stay inert. A working
- * dashboard greyed out beside things that genuinely cannot be opened would be
- * the same lie the three card states exist to avoid.
+ * Everything else drops to the strip below, where every chip is a real click:
+ * the strip is the rest of the built catalog, not a waiting room.
  *
  * -- Each card draws the chart a click DESCENDS from -------------------------
  * A card shows the report's drill-entry chart (level 1, one bar per school)
@@ -223,11 +224,12 @@ export function Home({
         </div>
 
         <div className="kpis">
-          {home.spec.widgets.map((widget, index) => (
+          {home.spec.widgets.map((widget) => (
             // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
-            // reads identically everywhere in the product. The lead metric
-            // (first in the server's own order) gets the headline treatment.
-            <KpiTile key={widget.id} widget={widget} hero={index === 0 && home.spec.widgets.length > 1} />
+            // reads identically everywhere in the product, and since 2026-09-01
+            // that includes its SIZE: the lead metric leads by being first, not
+            // by being twice as wide (KpiTile's own comment has the reasoning).
+            <KpiTile key={widget.id} widget={widget} />
           ))}
 
           {/*
@@ -404,14 +406,14 @@ function PreviewCard({
  * (Sidebar.tsx), so this strip is a reminder they exist, not the place to learn
  * about them for the first time.
  *
- * -- Three kinds here now, and one of them is clickable -----------------------
+ * -- One kind here, and all of it is clickable --------------------------------
  * This used to hold only `coming` and `blocked` dashboards, because the grid
- * drew every `available` one. The grid is a curated six now (services/home.ts
- * `DASHBOARD_GRID`), so BUILT dashboards land here too — and they must not sit
- * greyed out beside things that genuinely cannot be opened. A card that works
- * gets a real click and no pill; the other two keep their pill and stay inert,
- * which is the same three-state distinction the cards above make and for the
- * same reason: they need different people to fix them.
+ * drew every `available` one. Then the grid became a curated eight
+ * (services/home.ts `DASHBOARD_GRID`) and BUILT dashboards landed here beside
+ * them; now the unopenable two are not served at all, so the strip is exactly
+ * "the rest of the catalog" and every chip opens. The pills that used to say
+ * "soon" and "no data" went with them — a strip of dead labels under a grid of
+ * live charts was the thing worth removing, not the labels' wording.
  */
 function MoreDashboards({
   cards,
@@ -426,6 +428,14 @@ function MoreDashboards({
       <div className="sect">More dashboards</div>
       <div className="moreStrip">
         {cards.map((card) => {
+          /**
+           * Always true today, and still asked rather than assumed, for the
+           * reason Sidebar.tsx gives at the same check: `status` is data off the
+           * wire. An unopenable card that somehow arrives goes inert with its
+           * reason on hover rather than routing to a screen that 404s -- but it
+           * gets no pill, because a pill is an invitation to put the withheld
+           * states back one chip at a time.
+           */
           const open = card.status === 'available';
           return (
             <span
@@ -440,11 +450,6 @@ function MoreDashboards({
             >
               <span aria-hidden="true">{card.icon}</span>
               {card.title}
-              {!open && (
-                <span className={`pill ${card.status === 'blocked' ? 'nodata' : 'soon'}`}>
-                  {card.status === 'blocked' ? 'no data' : 'soon'}
-                </span>
-              )}
             </span>
           );
         })}

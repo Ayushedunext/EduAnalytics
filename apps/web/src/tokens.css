@@ -248,13 +248,32 @@ body {
   background: var(--color-nav-hover);
   border-radius: 3px;
 }
+/* No `transform` in the transition, and none on :hover below -- see why there. */
 .nav li {
   padding: 10px 12px; border-radius: 9px; font-size: 13.5px; margin-bottom: 2px;
   display: flex; gap: 10px; align-items: center; color: var(--color-nav-text);
-  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .nav li.clickable { cursor: pointer; }
-.nav li.clickable:hover { background: var(--color-nav-hover); color: #fff; transform: translateX(1px); }
+/* Colour only. A `transform: translateX(1px)` used to ride along here and it
+   made the whole menu JITTER (fixed 2026-09-01).
+
+   The loop: a transform makes the row its own composited layer, and Chrome
+   snaps a composited layer to whole device pixels. These rows do not sit on
+   whole pixels -- 13.5px text in a 10px-padded flex row lands them on
+   fractions -- so applying the transform nudged the row's box a sliver
+   vertically. With the cursor resting near a row's edge that sliver is enough
+   to move the boundary past it: hover is lost, the transform is dropped, the
+   row snaps back under the cursor, hover returns. Measured at ~27Hz -- 24
+   mouseover/mouseout pairs in 900ms with the mouse held perfectly still, which
+   is what the user saw as the panel vibrating.
+
+   The 1px slide was decoration; the background and colour change is the
+   affordance and it is unaffected. Any hover style that moves an element's own
+   geometry has this failure mode -- if a nudge is ever wanted back here, it has
+   to be something that does not shift the box the cursor is being tested
+   against. */
+.nav li.clickable:hover { background: var(--color-nav-hover); color: #fff; }
 .nav li.active {
   background: linear-gradient(90deg, var(--color-teal) 0%, var(--color-teal-dark) 100%);
   color: #fff; font-weight: 600; box-shadow: var(--shadow-xs);
@@ -349,14 +368,30 @@ body {
  * distributes whatever width a row actually has among the items actually IN
  * it, so a two-tile last row fills the row instead of leaving most of it
  * blank. (print.css re-declares `display: grid` for `.printPage .kpis`, where
- * a fixed page width makes the grid's own even columns the better fit --
- * this rule and `.kpi--hero` below carry both a flex and a grid value for
- * exactly that reason, each ignored by whichever layout mode is not active.)
+ * a fixed page width makes the grid's own even columns the better fit -- and
+ * paper and screen now agree on what a strip looks like, since neither has a
+ * double-width tile in it any more.)
  */
 .kpis { display: flex; flex-wrap: wrap; gap: 16px; }
 
 .kpi {
-  flex: 1 1 210px;
+  /* 190px, not 210px, since Comparative Analysis brought a SIX-tile strip.
+     `flex-grow: 1` means a four-tile strip is pixel-identical either way — the
+     tiles stretch to fill the row regardless — so the basis only decides where
+     the row wraps. At 210px six tiles overflowed a 1330px content column by
+     about ten pixels and broke 4 + 2, leaving two tiles stretched to half the
+     page each; at 190px they fit, and every narrower viewport still wraps
+     exactly as it did.
+
+     EVERY tile takes this rule, with no per-tile override anywhere below
+     (2026-09-01). `1 1 190px` on all of them means one shared basis and one
+     shared growth factor, so a row of four divides its width in four and a row
+     of six in six: the tiles are equal because they are identical, not because
+     a second rule happens to agree. `.kpi--hero` used to break that with
+     `flex: 2 1 436px` and a 36px figure, which made Dashboard's first card read
+     as a layout accident beside its three neighbours. A strip ranks by ORDER
+     and colours by `tone`; neither needs a tile to change size. */
+  flex: 1 1 190px;
   padding: 17px 19px 15px;
   position: relative;
   display: flex;
@@ -383,9 +418,15 @@ body {
   font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.15;
 }
 /* The one-off legacy shape (`<b>` direct child, no wrapper spans) still used by
-   the unavailable-metric tile below keeps its own smaller rule so both read at
-   a consistent weight without every caller needing the new markup. */
-.kpi > b:first-child { display: block; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
+   the unavailable-metric tile below keeps its own rule so both read the same
+   without every caller needing the new markup. Its figure sits at 26px — the
+   same as `.kpiValue` since 2026-09-01, where it was 24px before: an
+   unavailable tile stands in a row of real ones (Dashboard's "Student
+   attendance · NO DATA" beside three live figures), and its em-dash sitting two
+   pixels short was the same unevenness at tile scale that the hero was at strip
+   scale. What marks it as unavailable is its muted colour and its pill, not a
+   size nobody can name. */
+.kpi > b:first-child { display: block; font-size: 26px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
 .kpi > span { font-size: 12px; color: var(--color-text-muted); }
 .kpi.unavailable { border-left-color: var(--color-border); }
 .kpi.unavailable b { color: var(--color-border-strong); }
@@ -422,18 +463,6 @@ body {
   margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.2;
 }
-/* The hero tile leads the strip, so its parts scale with it rather than sitting
-   at body size under a 36px figure. */
-.kpi--hero .kpiPartValue { font-size: 16px; }
-.kpi--hero .kpiPartLabel { font-size: 11px; }
-
-/* The headline metric in a KPI row (§22) — the first tile in the server's own
-   widget order, never chosen by guessing which number "looks important". */
-.kpi--hero { flex: 2 1 436px; grid-column: span 2; }
-.kpi--hero .kpiValue { font-size: 36px; }
-.kpi--hero .kpiLabel { font-size: 12.5px; }
-@media (max-width: 560px) { .kpi--hero { flex: 1 1 210px; grid-column: span 1; } }
-
 .pill {
   display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;
   border-radius: var(--radius-pill); padding: 2.5px 8px; text-transform: uppercase;
@@ -482,17 +511,21 @@ body {
    empty 300px column gaps IN the grid (auto-fill reserves them) rather than
    stretching the real cards to fill the row -- the dead-space complaint this
    was written to fix, just moved one level in. */
-/* Fixed 3-up, not auto-fit: at the old `minmax(300px,1fr)` a 1900px page fit
-   4-5 cards a row, which is exactly why the charts read as small and
-   congested -- a card that shares a row with five others has no room for
-   axis ticks. 3 columns give each card roughly double its old width, which
-   is the room the axis labels below (widgets.tsx BarPanel/LinePanel) need to
-   be legible rather than dropped. Two breakpoints, not a bare auto-fit,
-   because auto-fit would silently go back to 4+ columns the moment the
-   viewport is wide enough -- 980px matches docs/10 §4's own single-column
-   floor for this product. */
-.pgallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-@media (max-width: 1400px) { .pgallery { grid-template-columns: repeat(2, 1fr); } }
+/* Fixed 2-up, not auto-fit. This went 4-5 → 3 → 2, and each step was the same
+   complaint: the CHART inside the card was too small to read as a chart. At
+   `minmax(300px,1fr)` a 1900px page fit five cards a row and the axis ticks had
+   nowhere to go. Three columns bought room for the ticks but not for the bars —
+   a 460px card draws a 3-category bar chart as three hairlines with more air
+   than ink, which is what a preview card must not look like, because the
+   preview IS the reason to click it.
+
+   Two columns give roughly 900px a card at the 1900px cap, which is what makes
+   the thicker bars below (widgets.tsx `maxBarSize`) read as solid marks rather
+   than rules. Fewer cards per row costs a scroll; a card that fails to preview
+   its report costs the click. Two breakpoints, not a bare auto-fit, because
+   auto-fit would silently go back to 3+ columns the moment the viewport is wide
+   enough -- 980px matches docs/10 §4's own single-column floor. */
+.pgallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
 @media (max-width: 980px) { .pgallery { grid-template-columns: 1fr; } }
 .pcard {
   padding: 14px 16px 16px;
@@ -913,6 +946,28 @@ body {
 .specTable tbody tr:hover td { background: var(--color-surface-sunken); }
 .specTable td:first-child, .specTable th:first-child { color: var(--color-text-primary); font-weight: 500; }
 
+/* A sortable column heading (chart-spec `TablePanel`).
+
+   The button inherits the cell's typography entirely, so a sortable heading
+   looks like a heading rather than like a control dropped into a table — the
+   affordance is the hover state and the ⇅ mark, which is the convention every
+   data grid uses and the least chrome that still says "this is clickable".
+   `align-items: baseline` keeps the mark on the label's baseline; `justify-*`
+   inherits from the cell so a right-aligned numeric column's heading stays
+   right-aligned over its digits. */
+.specTable th > .specSort {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+}
+.specTable th > .specSort:hover { color: var(--color-text-primary); }
+.specTable th > .specSort:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 2px; }
+.specTable th > .specSort.active { color: var(--color-primary); }
+/* The idle mark is faint: it says the column CAN be sorted without competing
+   with the arrow on the column that actually is. */
+.specSortMark { font-size: 9px; opacity: 0.45; }
+.specSort.active .specSortMark { opacity: 1; }
+
 /* ---------- My Reports (docs/06 §3, docs/10 §3) ---------- */
 
 .reportsHead { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
@@ -1049,6 +1104,25 @@ body {
 }
 .chipbtn--ai:hover:not(.disabled) { box-shadow: 0 5px 16px rgba(2, 128, 144, 0.36); background: linear-gradient(135deg, var(--color-teal) 0%, var(--color-teal-dark) 100%); }
 .chipbtn--ai.disabled { background: var(--color-disabled); color: #fff; opacity: 0.7; }
+
+/* A chip that IS a filter rather than an action (DashboardPage's "Compare
+   with"). It wears the same pill as its neighbours on purpose: it sits in the
+   same row and does the same job as the affordances beside it, so a second
+   visual language there would read as a control that arrived from somewhere
+   else. The label stays in the chip's own weight and the native <select> is
+   stripped back to the value, which keeps the whole thing one object.
+
+   Native, not a custom menu: it opens correctly on a tablet, it is keyboard-
+   and screen-reader-complete for free, and §19 forbids adding a component
+   library for something the platform already has. */
+.chipSelect { display: inline-flex; align-items: center; gap: 7px; padding-right: 9px; }
+.chipSelect > span { color: var(--color-text-muted); font-weight: 600; }
+.chipSelect select {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: var(--color-primary); cursor: pointer;
+}
+.chipSelect select:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 2px; }
+.chipSelect select:disabled { color: var(--color-disabled); cursor: not-allowed; }
 
 .backLink {
   background: none; border: none; padding: 0; font-family: var(--font-sans);

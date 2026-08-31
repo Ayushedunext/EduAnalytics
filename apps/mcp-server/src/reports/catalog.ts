@@ -493,6 +493,279 @@ const FEE_COLLECTION: PredefinedReport = {
 };
 
 /**
+ * The year the current one is measured AGAINST (the "Compare with" filter).
+ *
+ * A second academic year rather than a boolean "compare to last year", because
+ * the year before is not always the year a reader wants: a school that changed
+ * its fee structure in 2024-25 compares this year with 2023-24 to see the
+ * structure's effect, and a trust that absorbed schools mid-year compares with
+ * the last year its school set was stable. The orchestrator DERIVES the
+ * preceding year when the caller names none (services/dashboards.ts), so the
+ * common case still costs the reader nothing.
+ *
+ * Required here, unlike the drill parameters below, for the same reason
+ * `academic_year` is: every statement in this report is about two years, and a
+ * NULL would silently drop the comparison half of every chart — leaving a
+ * "comparative analysis" that compares nothing while looking complete.
+ */
+const COMPARE_YEAR: ReportParam = {
+  name: 'compare_year',
+  type: 'string',
+  required: true,
+  description:
+    "The academic year to compare against, as the ERP writes it, e.g. '2025-26'. Usually the preceding year.",
+};
+
+/**
+ * The instalment a drill click narrowed to (ADR-020), as a bound value.
+ *
+ * A string, like `drill_class`: `installmentname` is free text on the demand
+ * ledger ("Installment-1", "Term I") and carries no id to bind instead. It
+ * reaches MySQL as a parameter, so an instalment named `'; DROP` matches no
+ * rows rather than becoming a statement.
+ */
+const DRILL_INSTALLMENT: ReportParam = {
+  name: 'drill_installment',
+  type: 'string',
+  required: false,
+  description:
+    'Drill context: restrict to one instalment, as `installmentname` records it. Omitted means every instalment.',
+};
+
+/**
+ * The sortable ordinal of an instalment, as a SQL expression.
+ *
+ * `installmentname` is free text and sorts as text, which puts "Installment-10"
+ * before "Installment-2" — the trap `classseq` exists to avoid for classes. The
+ * demand ledger has no `installmentseq`, but it does carry the period the
+ * instalment was demanded FOR, and instalments are demanded in calendar order by
+ * construction, so the first day of that period IS the ordinal.
+ *
+ * `DATE_FORMAT(..., '%Y%m%d')` rather than the raw date because the value
+ * travels through a JSON result set, where a `MIN(date)` arrives as a
+ * driver-specific date object; a zero-padded YYYYMMDD reads as a number
+ * everywhere. Rows with no period sort to 0, i.e. first — visible rather than
+ * dropped.
+ *
+ * Used only WITHIN one school and one year (the drill levels below), where the
+ * instalment names are internally consistent. Across years or across schools
+ * they are not — see `PERIOD_MONTH`.
+ */
+const INSTALLMENT_SEQ = "MIN(DATE_FORMAT(periodfromdate, '%Y%m%d'))";
+
+/**
+ * The calendar month a fee was demanded FOR — the axis a year-on-year
+ * comparison is drawn against.
+ *
+ * NOT `installmentname`, and this is the single most important line in the
+ * report. That column is free text a school types, and the delivered extract
+ * shows what that means in practice (read 2026-08-31 across eight live schools):
+ * one school writes "APR 2025-26" one year and "April 2026-27" the next, another
+ * writes "Apr", a third "APL (2025-26)", a fourth mixes "Apr-2026" with
+ * "April-June 2026" and "1st Installment" in the same year. Grouping a
+ * comparison on that string puts the two years in DISJOINT categories: every bar
+ * would carry one year and a gap where the other should be, and the chart would
+ * look like a school that raised no fees last year rather than like a bug.
+ *
+ * `MONTH(periodfromdate)` is the one dimension that means the same thing in
+ * every school and every year. It is also the only one that survives the
+ * ERP's date staleness: one school's `periodfromdate` still carries 2023 in
+ * both years' rows, and the MONTH is right there even though the year is not.
+ *
+ * The academic ordering (April first, March last) is applied by the
+ * orchestrator rather than here — it is a presentation fact, the report already
+ * returns the month number, and the same reordering is needed for the label.
+ *
+ * A row with no period recorded returns NULL and is drawn as its own named
+ * category. It carries real money; dropping it would quietly shrink the demand
+ * total below the KPI tile that sums the same rows.
+ */
+const PERIOD_MONTH = 'MONTH(periodfromdate)';
+
+/**
+ * How late a receipt was, in whole months, relative to the instalment it settled.
+ *
+ * Negative → paid before the due month opened (advance). 0 → paid within the due
+ * month. 1 → the month after. >1 → later still. NULL on either side → the row
+ * cannot be classified at all, which is counted separately rather than folded
+ * into a bucket it did not earn.
+ *
+ * MONTHS, not days, and that is the definition the whole timeline is built on. A
+ * school's fee calendar is monthly: a circular says "October instalment", a
+ * parent pays "in October", and a bursar asks who paid in the month and who paid
+ * the month after. Measuring in days from `installment_enddate` would file a
+ * payment made on the 31st as on-time and one made on 1 November as four weeks
+ * late, when both are "the month it was due" and "the month after".
+ *
+ * `installment_enddate` and not `installment_startdate`: the end of the
+ * collection window is the date money is expected BY, which is what "on time"
+ * means to whoever sent the circular.
+ */
+const PAYMENT_LATENESS =
+  "PERIOD_DIFF(DATE_FORMAT(feedate, '%Y%m'), DATE_FORMAT(installment_enddate, '%Y%m'))";
+
+/**
+ * Comparative Analysis — year-on-year fee recovery, school by school.
+ *
+ * -- What this report is FOR, and how it differs from Fee Collection ----------
+ * Fee Collection answers "where did this year's money come from?" — by month, by
+ * class, by payment mode, for the schools in view summed together. Comparative
+ * Analysis answers the two questions a trust's management asks instead: is
+ * recovery better or worse than LAST year, and which school is dragging the
+ * number down. So every measure here arrives twice, this year and the comparison
+ * year, and nothing is summed across schools without also being available per
+ * school.
+ *
+ * -- Two statements, and why that is the whole report -------------------------
+ * The demand ledger is scanned ONCE for both years: the year joins the GROUP BY
+ * rather than becoming a second statement, so a comparison costs one pass over
+ * `fee_compile_data_set` where two year-filtered statements would cost two — and
+ * on a table with no usable index for these predicates (see the cost note at the
+ * top of this file) a pass is measured in seconds, not milliseconds. Splitting
+ * the rows by year afterwards is free.
+ *
+ * The per-SCHOOL split costs nothing either. `run_predefined` already answers per
+ * school (one connection per tenant, ADR-013), so the orchestrator has each
+ * school's rows in hand and re-groups them (`Merged.concatRows`) rather than
+ * issuing a query per school. A trust of twenty schools is twenty scans because
+ * it is twenty databases, not because this report asks twenty questions.
+ *
+ * -- Why payment timing reads the RECEIPT ledger ------------------------------
+ * "Paid in advance" and "paid the month after" are facts about WHEN money
+ * arrived, and only `fee_collection_data_set` carries a payment date. The demand
+ * ledger is a current snapshot: it knows what is still owed, never when the
+ * settled part was settled. So the timeline's paid states come from receipts
+ * while its "still pending" state comes from demand — which is exactly why the
+ * orchestrator states on screen that the two ledgers do not tie to the rupee.
+ */
+const FEE_COMPARATIVE: PredefinedReport = {
+  id: 'fee-comparative',
+  title: 'Comparative Analysis',
+  schema_version: 'erp-v1',
+  source: 'fee_compile_data_set · fee_collection_data_set',
+  domain: 'fees',
+  params: [ACADEMIC_YEAR, COMPARE_YEAR, DRILL_INSTALLMENT],
+  queries: [
+    /**
+     * Both years, both broken down by instalment, in one pass.
+     *
+     * There is deliberately no `totals` query and no per-school query: every KPI
+     * on the page is a column sum of these rows, and the school breakdown is
+     * these same rows grouped by the school that returned them. One scan of the
+     * demand ledger answers the entire left-hand side of the report.
+     *
+     * `outstanding` is the ledger's own `balance_amount` rather than payable
+     * minus collected. A fee head that has been over-received would otherwise
+     * show as negative outstanding — a number the ledger never reports, and one
+     * that would quietly reduce a school's arrears on screen.
+     *
+     * Two `=` predicates rather than `IN (...)`: both bind by name and mean the
+     * same thing to MySQL, and the guard's parameter walk has one shape of node
+     * to recognise instead of two.
+     */
+    {
+      key: 'demand_by_period',
+      description: 'Demand, collection and outstanding by fee period, for both years',
+      sql:
+        `SELECT academicyearname AS ay, ${PERIOD_MONTH} AS period_month, ` +
+        'ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS collected, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year OR academicyearname = :compare_year ' +
+        `GROUP BY academicyearname, ${PERIOD_MONTH} ORDER BY ay, period_month`,
+    },
+    /**
+     * When the money actually arrived, against when it was due — the receipt
+     * ledger's half of the recovery timeline.
+     *
+     * Five sums over one scan rather than five statements: the CASE arms are
+     * mutually exclusive by construction (a lateness is one of <0, 0, 1, >1, or
+     * unknown), so each row is read once and lands in exactly one bucket. That
+     * exclusivity is the property the whole timeline depends on, and expressing
+     * it as arms of one expression is what makes it checkable by reading.
+     *
+     * `undated` is not a rounding bucket to be hidden. A receipt whose instalment
+     * carries no end date, or which carries no payment date, cannot be called
+     * early or late by anyone: counting it as on-time would flatter the school
+     * and counting it as late would libel it. It is returned so the orchestrator
+     * can draw it as its own segment when it is non-zero, and say nothing when it
+     * is not.
+     */
+    {
+      key: 'timing',
+      description: 'Receipts by how they fell relative to the instalment due month',
+      sql:
+        'SELECT ' +
+        `ROUND(SUM(CASE WHEN ${PAYMENT_LATENESS} < 0 THEN paidamount ELSE 0 END)) AS advance, ` +
+        `ROUND(SUM(CASE WHEN ${PAYMENT_LATENESS} = 0 THEN paidamount ELSE 0 END)) AS same_month, ` +
+        `ROUND(SUM(CASE WHEN ${PAYMENT_LATENESS} = 1 THEN paidamount ELSE 0 END)) AS next_month, ` +
+        `ROUND(SUM(CASE WHEN ${PAYMENT_LATENESS} > 1 THEN paidamount ELSE 0 END)) AS later, ` +
+        'ROUND(SUM(CASE WHEN installment_enddate IS NULL OR feedate IS NULL ' +
+        'THEN paidamount ELSE 0 END)) AS undated, ' +
+        'ROUND(SUM(paidamount)) AS receipts ' +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year',
+    },
+    /**
+     * Drill level 2 — the clicked school's own instalments, current year only.
+     *
+     * `demand_by_period` above cannot serve this level, for two reasons. It
+     * returns BOTH years, and the drill renderer sums a level's rows by its axis
+     * field, which would add last year's period to this year's under one bar;
+     * and it groups by month rather than by the school's own instalment names,
+     * which is right for comparing years and wrong for a bursar looking at one
+     * school's own book. Inside a single school and a single year those names
+     * ARE consistent, so this level uses them.
+     *
+     * The school never appears in this SQL. Narrowing to one school is a SCOPE
+     * narrowing, handled where every other scope decision is (the launch token,
+     * checked at the orchestrator and again at `requireInScope`), so a drill
+     * click cannot reach a school the session was not already entitled to.
+     */
+    {
+      key: 'installments_current',
+      description: 'Demand, collection and outstanding by instalment, current year',
+      drill_only: true,
+      sql:
+        'SELECT installmentname, ' +
+        `${INSTALLMENT_SEQ} AS seq, ` +
+        'ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS collected, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        'GROUP BY installmentname ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the same three measures by class, within the clicked school
+     * and instalment.
+     *
+     * `:drill_installment IS NULL OR …` rather than two statements, for the
+     * reason Fee Collection's level 3 gives: a `variants` pair differing only in
+     * a WHERE clause would, the day one of them gained a measure, answer a
+     * different question under the same heading. Level 3 always arrives WITH an
+     * instalment by construction; the null branch keeps the statement honest if
+     * it is ever run alone.
+     *
+     * Ordered by `classseq`, never `classname`: class labels sort as text, which
+     * puts X before IX.
+     */
+    {
+      key: 'classes_current',
+      description: 'Demand, collection and outstanding by class, current year',
+      drill_only: true,
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, ' +
+        'ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS collected, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        'AND (:drill_installment IS NULL OR installmentname = :drill_installment) ' +
+        'GROUP BY classname ORDER BY seq',
+    },
+  ],
+};
+
+/**
  * Fee Defaulters (aging 30/60/90) — docs/06 §2, Phase 1 (docs/11 §1).
  *
  * -- What "defaulter" means here, exactly ------------------------------------
@@ -1799,8 +2072,432 @@ const LIBRARY_TEXTBOOKS: PredefinedReport = {
   ],
 };
 
+
+/**
+ * The academic year a DATE falls in, as the calendar year that year STARTED.
+ *
+ * The same 1 April boundary `academicQuarter` above draws, expressed as a year
+ * rather than a quarter and derived from the same rule so the two cannot drift.
+ * An Indian school year runs April to March, so a receipt dated 12 February 2026
+ * belongs to 2025-26, and grouping it under 2026 would move a third of every
+ * year's money into the next one.
+ *
+ * Returns a NUMBER (the starting year, 2025) and not a label ('2025-26'), for
+ * the reason `PERIOD_MONTH` returns a month number: the label is a presentation
+ * fact, the orchestrator already has to build one for the axis, and a number is
+ * the only shape that sorts correctly and binds as a drill parameter without
+ * either side agreeing on a string format the ERP writes three different ways
+ * ('2025-26', '2025-2026', 'APR 2025-26').
+ *
+ * Written with CASE rather than the boolean arithmetic `YEAR(d) - (MONTH(d) < 4)`
+ * that would also work: the guard's parser must read every shipped statement
+ * (test: reports-catalog.test.ts), and a comparison used as an integer is the
+ * kind of MySQL-ism that parses in the server and not necessarily in the parser.
+ */
+function academicYearStart(column: string): string {
+  return `CASE WHEN MONTH(${column}) < 4 THEN YEAR(${column}) - 1 ELSE YEAR(${column}) END`;
+}
+
+/** The receipt ledger's academic year — the only date column this report trends on. */
+const RECEIPT_AY_START = academicYearStart('feedate');
+
+/**
+ * That same academic year as the label a school writes it with — '2025-26'.
+ *
+ * Built in SQL, which is the exception to the rule the paragraph above states,
+ * and the exception is narrow: it is used ONLY by the drilled levels. A drill
+ * level's axis text is whatever its `x` column contains (services/drill.ts
+ * stringifies it), because the drill renderer is generic across every report and
+ * has nowhere to put a per-report labelling rule. The base dashboard's charts
+ * still label years in the orchestrator, where the same shift orders the
+ * seasonality axis — so the label exists twice, in the one place each mechanism
+ * can reach, rather than in neither.
+ *
+ * `LPAD(MOD(start + 1, 100), 2, '0')` and not a bare `start + 1`: the second
+ * half is a two-digit suffix, so 2025-26 rather than 2025-2026, and a year
+ * ending in a single digit ('2009-10' from 2009) needs the pad or it reads
+ * '2009-1'. The century rollover is handled by the MOD rather than assumed away.
+ */
+const RECEIPT_AY_LABEL =
+  `CONCAT(${RECEIPT_AY_START}, '-', LPAD(MOD(${RECEIPT_AY_START} + 1, 100), 2, '0'))`;
+
+/**
+ * The earliest date this report will treat as real.
+ *
+ * Not a business rule — a data-quality floor, and it is here rather than in the
+ * orchestrator because the row it excludes should never travel. The delivered
+ * extract carries sentinel dates where a date was never entered: `employees_data_set`
+ * holds a `joining_date` of `0002-11-30` and `students_data_set` a `1900-01-19`
+ * (read 2026-08-31 across the three St Marks schools). One such row puts a
+ * category on a year axis eighteen centuries wide, which does not distort the
+ * trend so much as erase it — every real year collapses into a single pixel at
+ * the right-hand edge.
+ *
+ * 1950, and the number was MEASURED rather than picked. The floor should exclude
+ * only what is impossible, not what is merely old, and reading every pre-1950
+ * date in the three St Marks schools on 2026-08-31 shows exactly two distinct
+ * values in the whole extract: `0002-11-30` (4 staff rows) and `1900-01-19` (1
+ * student row). Everything else runs continuously from 1976 — real teachers with
+ * thirty-year careers, who belong on the chart. An earlier draft of this constant
+ * said 1990, which excluded fifteen of them while claiming to exclude only the
+ * impossible; nobody can join a school before 1950 and still appear in a current
+ * staff table, and nobody in this data did.
+ *
+ * This floor removes what is IMPOSSIBLE. What is merely stranded — a genuine
+ * 1976 joiner followed by a six-year gap — is dropped further downstream by
+ * `contiguousRun` (services/dashboards.ts), because a line drawn across a gap is
+ * not a trend. Two different problems, two different mechanisms, and both say on
+ * screen how much they removed rather than dropping it silently (§10: a row
+ * removed without a word is a row a reader believes was never there).
+ */
+const DATE_FLOOR = "'1950-01-01'";
+
+/**
+ * Why a student left, collapsed from free text into categories that survive
+ * being counted.
+ *
+ * -- The problem this exists to solve ----------------------------------------
+ * `reason_for_leaving` is free text a clerk types, and the delivered extract
+ * shows what that means: 118 distinct values in one school alone, in which
+ * "CLASS XII PASS OUT" (3,032), "CLASS XII PASSOUT" (2,620), "CLASS-XII PASS
+ * OUT" (49) and "CLASS XII-PASS OUT" (40) are one reason written four ways, and
+ * "ON PARENT'S REQUEST" (2,175), "ON PARENTS REQUEST" (963), "ON PARENT REQUEST"
+ * (45) and "ON PARENT''S REQUEST" (19) are another. Trending the raw column
+ * draws one real cause as four separate declining lines, none of which is the
+ * truth and all of which look like findings.
+ *
+ * -- The decision that matters more than the spelling ------------------------
+ * GRADUATION IS NOT ATTRITION, and in this data it is the majority of it.
+ * Measured 2026-08-31 across the three St Marks schools: 5,744 of 9,879
+ * departures — 58% — are Class XII completing. A "students leaving" trend that
+ * folds them in reports every school as losing a sixth of its roll every March,
+ * which is the school working exactly as intended. So completion is its own
+ * category, named for what it is, and the orchestrator's attrition figures
+ * exclude it explicitly rather than by hoping a reader notices the legend.
+ *
+ * -- The arms are ORDERED, and the order is a judgement ----------------------
+ * A CASE stops at its first match, and these reasons genuinely overlap: "NAME
+ * STRUCK OFF DUE TO LONG ABSENCE AND NON PAYMENT OF FEE" is two causes in one
+ * string. Fees are tested before absence, and withdrawal before the family's
+ * request, because in each pair the earlier is the cause a school can ACT on —
+ * a bursar reads "fees unpaid" as a collections problem and "prolonged absence"
+ * as a welfare one, and filing a row that says both under the actionable half is
+ * the more useful of two defensible answers. Stated here because it is a choice,
+ * not an arithmetic fact, and a school that wants the other reading changes this
+ * order rather than hunting through a builder.
+ *
+ * -- What the residue is ------------------------------------------------------
+ * "Not recorded" is tested FIRST and matches empty strings and the dash-only
+ * placeholders this extract is full of ('--', and one row of forty-one hyphens).
+ * "Other reason" is the honest remainder: 77 of 9,879 rows, 0.8%. Both are drawn
+ * rather than hidden — a category that exists and is not on the chart is a bar
+ * that silently does not add up, and these arms are mutually exclusive by
+ * construction so the eight categories together ARE the departures.
+ */
+const LEAVING_REASON =
+  'CASE ' +
+  "WHEN reason_for_leaving IS NULL OR TRIM(REPLACE(REPLACE(reason_for_leaving, '-', ''), '.', '')) = '' " +
+  "THEN 'Not recorded' " +
+  "WHEN UPPER(reason_for_leaving) LIKE '%XII%' AND UPPER(reason_for_leaving) LIKE '%PASS%' " +
+  "THEN 'Completed Class XII' " +
+  "WHEN UPPER(reason_for_leaving) LIKE '%NON PAYMENT%' " +
+  "OR UPPER(reason_for_leaving) LIKE '%NONPAYMENT%' " +
+  "OR UPPER(reason_for_leaving) LIKE '%DEFAULTER%' THEN 'Fees unpaid' " +
+  "WHEN UPPER(reason_for_leaving) LIKE '%ABSEN%' OR UPPER(reason_for_leaving) LIKE '%ABSAN%' " +
+  "THEN 'Prolonged absence' " +
+  "WHEN UPPER(reason_for_leaving) LIKE '%WITHDRAW%' " +
+  "OR UPPER(reason_for_leaving) LIKE '%WITHDRWAL%' " +
+  "OR UPPER(reason_for_leaving) LIKE '%CANCEL%' THEN 'Admission withdrawn' " +
+  "WHEN UPPER(reason_for_leaving) LIKE '%PARENT%' OR UPPER(reason_for_leaving) LIKE '%PERSONAL%' " +
+  "THEN 'At the family request' " +
+  "WHEN UPPER(reason_for_leaving) LIKE '%T.C%' OR UPPER(TRIM(reason_for_leaving)) = 'TC' " +
+  "THEN 'Transfer certificate' " +
+  "ELSE 'Other reason' END";
+
+/**
+ * The academic year a drill click narrowed to, as the calendar year it STARTED
+ * (ADR-020: clicked values enter as bound parameters, never concatenated).
+ *
+ * Typed `number`, so `run_predefined` refuses a string before it reaches the
+ * guard — the value arrives from a click in a browser, which is to say from
+ * outside — and so the comparison against `academicYearStart` is integer against
+ * integer rather than a string match against a label the ERP writes three ways.
+ *
+ * Optional, like every other drill parameter: the base dashboard runs this same
+ * report with no drill context every time someone opens it, and a required drill
+ * filter would refuse that request outright.
+ */
+const DRILL_YEAR: ReportParam = {
+  name: 'drill_year',
+  type: 'number',
+  required: false,
+  description:
+    'Drill context: restrict to one academic year, as the calendar year it began (2025 means 2025-26). Omitted means every year.',
+};
+
+/**
+ * Trend Analysis — how the school has moved over the years the extract can see.
+ *
+ * -- What this report is FOR, and how it differs from Comparative Analysis ----
+ * Comparative Analysis answers "is this year better than last?" — two years,
+ * every measure twice, school by school. Trend Analysis answers the question
+ * that needs more than two points: which way has this been going, for how long,
+ * and is the current year continuing it or breaking it. So nothing here is a
+ * pair; everything is a series, and the axis is time rather than school.
+ *
+ * -- Why it binds NO academic year -------------------------------------------
+ * Every other fee report on this platform filters `academicyearname =
+ * :academic_year`. This one must not, and that is the decision the whole report
+ * follows from: the year is the AXIS here, and binding one would collapse every
+ * series to a single point while leaving a page that still looked like a trend.
+ * The only filter is the as-of date, which is where the series STOPS — the same
+ * reproducibility argument `AS_OF_DATE` already makes, applied to the right-hand
+ * end of a line instead of to an aging band.
+ *
+ * -- The depth each source actually has, which is why these five queries ------
+ * Read from the delivered extract on 2026-08-31 rather than assumed, and it
+ * decided the report's contents:
+ *
+ *   fee_collection_data_set   Apr 2020 - Aug 2026, daily, no null `feedate`
+ *   students_data_set         2015-16 - 2026-27, twelve consecutive years
+ *   employees_data_set        joins from 2011, exits from 2014
+ *   fee_compile_data_set      three years only -- too few to draw a line
+ *   attendance / transport    49 rows / 0 rows / 185 rows in one school
+ *   / library
+ *
+ * The last two rows are why this report reads three tables and not eight. A
+ * trend drawn through four points of attendance data would be a shape made of
+ * noise, and on the page it would look exactly like the ones above it that are
+ * real.
+ *
+ * -- One scan of the receipt ledger, three charts -----------------------------
+ * `collection_by_month` groups by month AND payment mode in a single pass, and
+ * the orchestrator re-groups those rows three ways: as a continuous monthly
+ * timeline, as one line per academic year over an April-to-March axis, and as
+ * the payment-mode mix per year. Three separate statements would be three full
+ * scans of 1.7M unindexed rows (see the cost note at the top of this file);
+ * splitting rows already in hand costs nothing. The same reasoning
+ * `demand_by_period` follows in Comparative Analysis, one table over.
+ *
+ * -- Why COUNT(DISTINCT studentid) is correct here, and would not be in a
+ *    hand-written cross-school query -----------------------------------------
+ * `studentid` RESTARTS PER SCHOOL in this extract: ids 1 to 5 exist in all three
+ * St Marks schools. `run_predefined` runs each statement against one school at a
+ * time (ADR-013), so within a result set the id is unique and this count is
+ * exact; the orchestrator then SUMS the per-school counts, which is the
+ * composite (school, student) count by construction. Verified on 2026-08-31 —
+ * the summed per-school figures reproduce the composite count in all twelve
+ * years exactly.
+ *
+ * The trap is worth stating because the naive cross-school version does not
+ * merely lose precision, it INVERTS the finding: `COUNT(DISTINCT studentid)`
+ * over three schools returns 4,226 for 2015-16 against a true 9,560, and the
+ * collision decays as the id ranges diverge — so it draws a trust doubling over
+ * a decade where enrollment actually moved 9,560 to 9,838. Anyone adding a query
+ * here inherits the per-school guarantee only for as long as they leave the scan
+ * inside one school.
+ */
+const TREND_ANALYSIS: PredefinedReport = {
+  id: 'trend-analysis',
+  title: 'Trend Analysis',
+  schema_version: 'erp-v1',
+  source: 'fee_collection_data_set · students_data_set · employees_data_set',
+  domain: 'fees',
+  params: [AS_OF_DATE, DRILL_YEAR],
+  queries: [
+    /**
+     * The receipt ledger by month and payment mode — one scan, three charts.
+     *
+     * `feedate` and nothing else, because it is the only column on this table
+     * that records when money actually ARRIVED, and it is clean: 1.2M rows
+     * across the three St Marks schools with not one NULL, spanning April 2020
+     * to August 2026 without a gap (read 2026-08-31).
+     *
+     * `academicyearname` is NOT used, and deliberately. The same table writes it
+     * as both '2025-26' and '2025-2026', and receipts against 2018-19 are still
+     * arriving in 2025 — so grouping the timeline on it would file money under
+     * the year it was OWED FOR rather than the year it was RECEIVED, which is
+     * the opposite of what a collection trend means.
+     *
+     * `<= :as_of_date` rather than an open right-hand end. A trend must stop
+     * somewhere a reader chose, or the same saved report grows a point every
+     * night and the PDF printed last week stops reproducing (`AS_OF_DATE`). It
+     * also fences off future-dated receipts, which a fee ledger does carry.
+     *
+     * ~250-320 rows per school over the whole six years, so the 5,000-row cap is
+     * not close and no bucketing is needed to stay under it.
+     */
+    {
+      key: 'collection_by_month',
+      description: 'Receipts by calendar month and payment mode, over all recorded history',
+      sql:
+        "SELECT DATE_FORMAT(feedate, '%Y-%m') AS ym, paymenttype, " +
+        'ROUND(SUM(paidamount)) AS collected, COUNT(*) AS receipts ' +
+        'FROM fee_collection_data_set ' +
+        `WHERE feedate IS NOT NULL AND feedate >= ${DATE_FLOOR} AND feedate <= :as_of_date ` +
+        'GROUP BY ym, paymenttype ORDER BY ym',
+    },
+    /**
+     * Students on roll per academic year, with the gender split.
+     *
+     * `academicyearname` here rather than a derived date, because enrollment is
+     * not an event with a date — a student is on the roll OF a year, and this
+     * table says which. Its grain is one row per student per year, so the count
+     * equals the row count in all but the earliest years; `COUNT(DISTINCT
+     * studentid)` regardless, because that grain is a property of the extract
+     * rather than a promise it makes, and a duplicated row would otherwise
+     * become a student.
+     *
+     * The label is returned RAW and filtered by the orchestrator, which is the
+     * unusual half of this statement. The column is free text and the extract
+     * proves it: alongside twelve well-formed years it holds '04', '05',
+     * '2010-11 New', '1995-96' and 'Demo_Palak_2030-2031'. Filtering in SQL
+     * would need a REGEXP the guard has no reason to permit; filtering in the
+     * orchestrator keeps the rejected labels visible, so the page can say how
+     * many it dropped rather than quietly drawing eleven years and calling it
+     * twelve.
+     *
+     * No `:as_of_date`. An academic year is not a date, and there is no honest
+     * way to ask this table what the roll looked like mid-year. The guard binds
+     * only the parameters a statement uses, so declaring one here and not
+     * applying it would be a filter that narrows nothing.
+     */
+    {
+      key: 'enrollment_by_year',
+      description: 'Students on roll by academic year, with the gender split',
+      sql:
+        'SELECT academicyearname AS ay, COUNT(DISTINCT studentid) AS students, ' +
+        "COUNT(DISTINCT CASE WHEN gender = 'Girl' THEN studentid END) AS girls, " +
+        "COUNT(DISTINCT CASE WHEN gender = 'Boy' THEN studentid END) AS boys " +
+        'FROM students_data_set GROUP BY ay ORDER BY ay',
+    },
+    /**
+     * Departures by the calendar year they happened in, and why.
+     *
+     * By CALENDAR year rather than academic, and this is the one place in the
+     * report where that is the right choice: `deactivation_date` is a real date,
+     * departures cluster in March and April around the year boundary, and an
+     * academic bucket would split one exit season across two categories. The
+     * enrollment series above is academic because a roll IS academic; this one
+     * is an event, and events are dated.
+     *
+     * See `LEAVING_REASON` for why the reason is bucketed at all, and why Class
+     * XII completion is a category of its own rather than part of the total.
+     */
+    {
+      key: 'student_exits',
+      description: 'Students leaving by calendar year, grouped by a normalised reason',
+      sql:
+        `SELECT YEAR(deactivation_date) AS y, ${LEAVING_REASON} AS reason, ` +
+        'COUNT(DISTINCT studentid) AS students ' +
+        'FROM students_data_set WHERE deactivation_date IS NOT NULL ' +
+        `AND deactivation_date >= ${DATE_FLOOR} AND deactivation_date <= :as_of_date ` +
+        'GROUP BY y, reason ORDER BY y',
+    },
+    /**
+     * Staff joining, by the year they joined.
+     *
+     * Two statements rather than one for joins and exits, because they group by
+     * two DIFFERENT date columns of the same row and no single GROUP BY serves
+     * both. A `UNION ALL` inside a derived table would do it in one pass, and is
+     * not worth it: `employees_data_set` is 6,747 rows against the receipt
+     * ledger's 1.7M, so the second scan is free, while the union would put a
+     * shape through the guard's tenant-injection walk that nothing else in this
+     * catalog uses. Cheap and ordinary beats clever on a table this size.
+     */
+    {
+      key: 'staff_joins',
+      description: 'Staff joining by calendar year',
+      sql:
+        'SELECT YEAR(joining_date) AS y, COUNT(DISTINCT employeeid) AS staff ' +
+        'FROM employees_data_set WHERE joining_date IS NOT NULL ' +
+        `AND joining_date >= ${DATE_FLOOR} AND joining_date <= :as_of_date ` +
+        'GROUP BY y ORDER BY y',
+    },
+    /** Staff leaving, by the year they left. The other half of `staff_joins`. */
+    {
+      key: 'staff_exits',
+      description: 'Staff leaving by calendar year',
+      sql:
+        'SELECT YEAR(deactivation_date) AS y, COUNT(DISTINCT employeeid) AS staff ' +
+        'FROM employees_data_set WHERE deactivation_date IS NOT NULL ' +
+        `AND deactivation_date >= ${DATE_FLOOR} AND deactivation_date <= :as_of_date ` +
+        'GROUP BY y ORDER BY y',
+    },
+    /**
+     * Drill level 2 — the clicked school's own collection by academic year.
+     *
+     * `collection_by_month` cannot serve this level even though it holds the
+     * same money. The drill renderer sums a level's rows by its axis field, and
+     * those rows are keyed by calendar month across every school in scope;
+     * re-grouping them into academic years is exactly what the base page does
+     * for its own charts, but a drilled level must be a statement the report
+     * VETS and the audit trail can name (Invariant 6), not a second re-grouping
+     * the orchestrator performs off-screen.
+     *
+     * The school never appears in this SQL. Narrowing to one school is a SCOPE
+     * narrowing, handled where every other scope decision is (the launch token,
+     * checked at the orchestrator and again at `requireInScope`), so a drill
+     * click cannot reach a school the session was not already entitled to.
+     *
+     * The starting year is returned as `seq` and NOT under a name of its own,
+     * which is a constraint of the drill renderer rather than a preference. That
+     * renderer merges a level's rows with `sumBy(key, level.x, measures, 'seq')`
+     * (services/drill.ts), and `sumBy` carries exactly three things through the
+     * merge: the axis field, the measures, and the column literally called
+     * `seq`. A year returned as `ay_start` would be dropped there and reach the
+     * widget as 0, so every click at this level would drill into the year zero —
+     * which is the same trick Fee Collection's quarter level already relies on,
+     * for the same reason.
+     */
+    {
+      key: 'collection_by_year',
+      description: 'Receipts by academic year, for one school',
+      drill_only: true,
+      sql:
+        `SELECT ${RECEIPT_AY_LABEL} AS ay, ${RECEIPT_AY_START} AS seq, ` +
+        'ROUND(SUM(paidamount)) AS collected, COUNT(*) AS receipts ' +
+        'FROM fee_collection_data_set ' +
+        `WHERE feedate IS NOT NULL AND feedate >= ${DATE_FLOOR} AND feedate <= :as_of_date ` +
+        'GROUP BY ay, seq ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the months of the clicked academic year, within the
+     * clicked school.
+     *
+     * `:drill_year IS NULL OR …` rather than two statements, for the reason Fee
+     * Collection's level 3 gives: a `variants` pair differing only in a WHERE
+     * clause would, the day one of them gained a measure, answer a different
+     * question under the same heading. Level 3 always arrives WITH a year by
+     * construction; the null branch keeps the statement honest if it is ever run
+     * alone.
+     *
+     * `seq` is `MIN(DATE_FORMAT(feedate, '%Y%m'))` and not `MONTH(feedate)`,
+     * because this level spans an ACADEMIC year: sorting on the calendar month
+     * would draw January, February and March first, three months that are the
+     * END of the year being looked at. A zero-padded YYYYMM sorts April 2025
+     * before March 2026 without the orchestrator's April shift, and it reads as
+     * a number everywhere — which a `MIN(date)` travelling through a JSON result
+     * set does not (the reason `INSTALLMENT_SEQ` uses the same trick).
+     */
+    {
+      key: 'collection_months_in_year',
+      description: 'Receipts by month within one academic year, for one school',
+      drill_only: true,
+      sql:
+        "SELECT DATE_FORMAT(feedate, '%b %Y') AS month, " +
+        "MIN(DATE_FORMAT(feedate, '%Y%m')) AS seq, " +
+        'ROUND(SUM(paidamount)) AS collected, COUNT(*) AS receipts ' +
+        'FROM fee_collection_data_set ' +
+        `WHERE feedate IS NOT NULL AND feedate >= ${DATE_FLOOR} AND feedate <= :as_of_date ` +
+        `AND (:drill_year IS NULL OR ${RECEIPT_AY_START} = :drill_year) ` +
+        'GROUP BY month ORDER BY seq',
+    },
+  ],
+};
 const REPORTS: readonly PredefinedReport[] = [
   ENROLLMENT_OVERVIEW,
+  FEE_COMPARATIVE,
   FEE_COLLECTION,
   FEE_DEFAULTERS,
   STAFF_OVERVIEW,
@@ -1811,6 +2508,7 @@ const REPORTS: readonly PredefinedReport[] = [
   PRINCIPAL_SNAPSHOT,
   TRANSPORT_ANALYTICS,
   LIBRARY_TEXTBOOKS,
+  TREND_ANALYSIS,
 ];
 
 const BY_ID = new Map(REPORTS.map((report) => [report.id, report]));

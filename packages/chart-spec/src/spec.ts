@@ -23,6 +23,8 @@
  * are NOT an addition to that vocabulary and needed no new ADR: a grouped bar
  * is still a `bar`, so the union, the PDF route and every `switch` over
  * `WidgetType` are untouched. What WOULD need one is a sixth widget type.
+ * Stacked bars (`bar.stacked`, added 2026-08-31 for Comparative Analysis'
+ * recovery timeline) are the same kind of change for the same reason.
  *
  * -- Two-stage spec: draft (model) then hydrated (renderer) ----------------
  * Decided 2026-08-18 (AUDIT_REPORT C15). A widget's DATA is attached
@@ -281,6 +283,34 @@ export const barWidgetSchema = z
      * a one-entry group is a single-series bar with extra ceremony.
      */
     series: z.array(barSeriesSchema).min(2).optional(),
+    /**
+     * The same measures drawn ON TOP of each other in one bar per category,
+     * rather than side by side.
+     *
+     * Within ADR-015's clarification of 2026-08-27 for exactly the reason
+     * grouped bars were: a stacked bar is still a `bar`. The union, the
+     * `WidgetType` switch, the PDF route and the AI spec validator are
+     * untouched, and a bar without this flag is byte-identically the chart it
+     * was before. A sixth widget TYPE would still need a new ADR.
+     *
+     * It exists because a PARTITION is a different fact from a comparison, and
+     * drawing one as the other misreads it. Comparative Analysis' recovery
+     * timeline splits a school's payable into advance / same month / next month
+     * / later / still pending — five mutually exclusive states that together
+     * are the whole of the money. Side by side they read as five independent
+     * measures a reader must add up mentally; stacked, the bar IS the payable
+     * and each segment is its share.
+     *
+     * Requires `series`: stacking is a statement about several measures, and a
+     * single-measure "stack" is a bar. `checkWidgetInvariants` enforces the
+     * pair rather than leaving each renderer to notice.
+     *
+     * Note what this does NOT claim. The schema cannot know that the segments
+     * partition anything — that is the emitter's responsibility, stated on
+     * screen in the report's notes, exactly as `kpi.breakdown` refuses to
+     * require its parts to sum.
+     */
+    stacked: z.boolean().optional(),
   })
   .strict();
 
@@ -315,6 +345,24 @@ export const tableColumnSchema = z
      * silently absent column is a success-shaped failure (CODING §10).
      */
     masked: z.boolean().optional(),
+    /**
+     * A sibling field on each row carrying this column's RAW value, for sorting.
+     *
+     * Amounts and rates reach a table pre-formatted — "₹2.4 Cr", "93.4%" —
+     * because currency and locale are decided once, server-side, so a screen and
+     * its PDF cannot format the same number two ways (see `kpi.value`). The cost
+     * is that the displayed cell is a string, and sorting strings puts "₹9.8 L"
+     * above "₹2.4 Cr". This names where the comparable number lives instead.
+     *
+     * Not a widget type and not a new widget: an optional attribute on a column,
+     * exactly like `align` and `masked` beside it. Absent means the column sorts
+     * on what it displays, which is right for text.
+     *
+     * Sorting itself is INTERACTIVE and therefore presentation: the emitted row
+     * order is the report's own answer (the emitter ranks rows for a reason), a
+     * reader may re-sort on screen, and the PDF prints the emitted order.
+     */
+    sort_field: safeFieldName.optional(),
   })
   .strict();
 
@@ -375,6 +423,20 @@ function checkWidgetInvariants(widget: Widget, ctx: z.RefinementCtx): void {
       code: z.ZodIssueCode.custom,
       message: "the first series must be the widget's y field",
       path: ['series', 0, 'field'],
+    });
+  }
+
+  /**
+   * Stacking says "these measures are parts of one whole". One measure has no
+   * other part to sit on, so a stacked single-series bar is a bar drawn with a
+   * claim it cannot support -- and the renderer would silently draw it as an
+   * ordinary one, which is the success-shaped failure §10 names.
+   */
+  if (widget.type === 'bar' && widget.stacked === true && widget.series === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'a stacked bar must name the measures it stacks (series)',
+      path: ['series'],
     });
   }
 }

@@ -225,13 +225,38 @@ export interface DashboardResponse {
   degraded_schools: { school_id: string; message: string }[];
 }
 
+/**
+ * The comparison year a year-on-year report is measured against.
+ *
+ * Omitted for every report that does not take one, and omissible even for the
+ * one that does: the server derives the preceding year, so the SPA never has to
+ * hold an opinion it did not get from the reader. Passing it is what makes the
+ * "Compare with" control do something.
+ */
+export interface ReportFilters {
+  compareYear?: string | undefined;
+}
+
+function reportQuery(
+  schoolIds: readonly string[],
+  academicYear: string,
+  filters: ReportFilters = {},
+): URLSearchParams {
+  const query = new URLSearchParams({ academic_year: academicYear });
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  if (filters.compareYear !== undefined && filters.compareYear !== '') {
+    query.set('compare_year', filters.compareYear);
+  }
+  return query;
+}
+
 export function getReport(
   reportId: string,
   schoolIds: readonly string[],
   academicYear: string,
+  filters: ReportFilters = {},
 ): Promise<DashboardResponse> {
-  const query = new URLSearchParams({ academic_year: academicYear });
-  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  const query = reportQuery(schoolIds, academicYear, filters);
   return request<DashboardResponse>(`/api/report/${encodeURIComponent(reportId)}?${query.toString()}`);
 }
 
@@ -279,9 +304,9 @@ export function drillReport(
   schoolIds: readonly string[],
   academicYear: string,
   body: { widget_id: string; level: number; context: readonly DrillStep[] },
+  filters: ReportFilters = {},
 ): Promise<DrillResponse> {
-  const query = new URLSearchParams({ academic_year: academicYear });
-  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  const query = reportQuery(schoolIds, academicYear, filters);
   return request<DrillResponse>(
     `/api/report/${encodeURIComponent(reportId)}/drill?${query.toString()}`,
     { method: 'POST', body: JSON.stringify({ ...body, context: [...body.context] }) },
@@ -407,6 +432,8 @@ export function cloneReport(body: {
   name: string;
   academic_year: string;
   as_of?: string;
+  /** The comparison year on screen, for a year-on-year report (see `getReport`). */
+  compare_year?: string;
   school_ids: readonly string[];
   /** Per-widget clone (docs/06 §3): clone just this one chart. */
   widget_id?: string;
@@ -421,6 +448,7 @@ export function cloneReport(body: {
       base_report_id: body.base_report_id,
       name: body.name,
       academic_year: body.academic_year,
+      ...(body.compare_year === undefined ? {} : { compare_year: body.compare_year }),
       ...(body.as_of === undefined ? {} : { as_of: body.as_of }),
       ...(body.widget_id === undefined ? {} : { widget_id: body.widget_id }),
       ...(body.bucket === undefined ? {} : { bucket: body.bucket }),
@@ -631,10 +659,9 @@ export function reportPdfUrl(
   reportId: string,
   schoolIds: readonly string[],
   academicYear: string,
-  options: { logic?: boolean } = {},
+  options: { logic?: boolean } & ReportFilters = {},
 ): string {
-  const query = new URLSearchParams({ academic_year: academicYear });
-  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  const query = reportQuery(schoolIds, academicYear, options);
   if (options.logic === true) query.set('logic', '1');
   return `${API_BASE}/api/report/${encodeURIComponent(reportId)}/export.pdf?${query.toString()}`;
 }

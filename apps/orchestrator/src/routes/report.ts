@@ -52,6 +52,45 @@ export const ACADEMIC_YEAR = /^\d{4}-\d{2}$/;
  */
 export const AS_OF_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * The comparison year a year-on-year report measures against.
+ *
+ * Optional. Absent means "the year before", which the service derives
+ * (`resolveReportParams`) — a reader who has no opinion should not have to
+ * express one, and a report that declares no comparison filter ignores the value
+ * entirely.
+ *
+ * Validated for shape like the academic year is, and then for one more thing:
+ * it may not equal the academic year. Comparing a year with itself is not a
+ * degenerate view that draws two identical lines — it is a request the SQL
+ * cannot honour, because both halves of `academicyearname = :academic_year OR
+ * academicyearname = :compare_year` select the same rows and the comparison side
+ * of every chart comes back empty. That renders as a 100% collapse in recovery
+ * against a year that has no data, which is a confident false statement rather
+ * than a blank (§10). Refusing it says what happened.
+ */
+function parseCompareYear(req: Request, academicYear: string): string | undefined {
+  const raw = req.query['compare_year'];
+  if (typeof raw !== 'string' || raw === '') return undefined;
+  if (!ACADEMIC_YEAR.test(raw)) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'The comparison year must be an academic year.',
+      details: { expected: 'YYYY-YY' },
+      correlationId: req.correlationId,
+    });
+  }
+  if (raw === academicYear) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'Choose a different year to compare against.',
+      details: { academic_year: academicYear },
+      correlationId: req.correlationId,
+    });
+  }
+  return raw;
+}
+
 export function isRealDate(value: string): boolean {
   const parsed = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
@@ -112,14 +151,17 @@ async function parseReportRequest(req: Request) {
     });
   }
 
+  const compareYear = parseCompareYear(req, academicYear);
+
   const schoolIds = await resolveRequestedSchools(req);
 
-  return { session, reportId, academicYear, asOfDate, schoolIds };
+  return { session, reportId, academicYear, asOfDate, compareYear, schoolIds };
 }
 
 reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
-    const { session, reportId, academicYear, asOfDate, schoolIds } = await parseReportRequest(req);
+    const { session, reportId, academicYear, asOfDate, compareYear, schoolIds } =
+      await parseReportRequest(req);
 
     const dashboard = await buildDashboard({
       session,
@@ -127,6 +169,7 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
       reportId,
       academicYear,
       asOfDate,
+      compareYear,
       correlationId: req.correlationId,
     });
 
@@ -151,7 +194,18 @@ reportRouter.get('/api/report/:id', (req: Request, res: Response, next: NextFunc
        * reconstructible months later — a defaulted-to-today value that was never
        * written down is not reconstructible at all.
        */
-      filters: { academic_year: academicYear, as_of: asOfDate },
+      filters: {
+        academic_year: academicYear,
+        as_of: asOfDate,
+        /**
+         * Recorded only when the request carried one. The trail answers "what
+         * did this person see?", and writing a derived default into it would
+         * claim the reader chose a comparison year they never named — while
+         * omitting a year they DID choose would lose the only thing that makes
+         * "recovery is up 1.7 points" checkable months later.
+         */
+        ...(compareYear === undefined ? {} : { compare_year: compareYear }),
+      },
     });
 
     res.json(dashboard);
@@ -204,7 +258,8 @@ const drillBodySchema = z
 
 reportRouter.post('/api/report/:id/drill', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
-    const { session, reportId, academicYear, asOfDate, schoolIds } = await parseReportRequest(req);
+    const { session, reportId, academicYear, asOfDate, compareYear, schoolIds } =
+      await parseReportRequest(req);
 
     const body = drillBodySchema.safeParse(req.body);
     if (!body.success) {
@@ -225,6 +280,7 @@ reportRouter.post('/api/report/:id/drill', (req: Request, res: Response, next: N
       context: body.data.context,
       academicYear,
       asOfDate,
+      compareYear,
       correlationId: req.correlationId,
     });
 
@@ -271,17 +327,25 @@ reportRouter.get(
   '/api/report/:id/export.pdf',
   (req: Request, res: Response, next: NextFunction): void => {
     void (async () => {
-      const { session, reportId, academicYear, asOfDate, schoolIds } = await parseReportRequest(req);
+      const { session, reportId, academicYear, asOfDate, compareYear, schoolIds } =
+        await parseReportRequest(req);
 
       /** docs/06 §5: the logic summary prints as an appendix, on request. */
       const includeLogic = req.query['logic'] === '1' || req.query['logic'] === 'true';
 
+      /**
+       * The same filters the SCREEN was built from, comparison year included.
+       * An export that silently fell back to the derived year would print a
+       * different comparison from the one that was approved on screen — the one
+       * thing ADR-021 exists to prevent.
+       */
       const dashboard = await buildDashboard({
         session,
         schoolIds,
         reportId,
         academicYear,
         asOfDate,
+        compareYear,
         correlationId: req.correlationId,
       });
 

@@ -21,6 +21,7 @@ import {
   getHome,
   getHomePreview,
   getSession,
+  type DashboardCard,
   type HomePreview,
   type HomeResponse,
   type SessionResponse,
@@ -265,7 +266,7 @@ export function App(): JSX.Element {
                   ? 'Ask AI'
                   : route.kind === 'my-reports' || route.kind === 'report-edit'
                     ? 'My Reports'
-                    : titleOf(route.id)
+                    : titleOf(route.id, home?.dashboards ?? [])
           }
         />
 
@@ -358,8 +359,19 @@ function orgLabel(session: SessionResponse): string {
   return session.org_name;
 }
 
-/** The crumb for a report route, before its spec has loaded. */
-function titleOf(id: string): string {
+/**
+ * The crumb for a report route, before its spec has loaded.
+ *
+ * Read out of the CATALOG the server already sent, so the breadcrumb says what
+ * the sidebar item the reader just clicked says. Title-casing the id is only the
+ * fallback, and it is a poor one: `fee-comparative` becomes "Fee Comparative"
+ * where the report is called "Comparative Analysis", and `fee-by-student`
+ * becomes "Fee By Student". A crumb that renames the page a reader arrived on is
+ * a small lie about where they are.
+ */
+function titleOf(id: string, dashboards: readonly DashboardCard[]): string {
+  const card = dashboards.find((d) => d.id === id);
+  if (card !== undefined) return card.title;
   return id
     .split('-')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))

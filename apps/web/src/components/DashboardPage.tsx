@@ -60,6 +60,29 @@ export function DashboardPage({
   const [loading, setLoading] = useState(true);
   const [showLogic, setShowLogic] = useState(false);
   const [cloning, setCloning] = useState(false);
+  /**
+   * The "Compare with" year, for a report that takes one.
+   *
+   * `null` means "whatever the server derives", which is the preceding year —
+   * so the page opens on the comparison a reader almost always wants without
+   * this component having to know how academic-year labels are spelled. The
+   * value only ever LEAVES this component as a query parameter; the year the
+   * report was actually built against comes back on `logic.filters` and is what
+   * the control displays, so the chip, the charts and the selector cannot
+   * disagree.
+   */
+  const [compareYear, setCompareYear] = useState<string | null>(null);
+
+  /**
+   * Which reports offer the control is read off the LOADED report, never from a
+   * list of report ids kept here. `logic.filters` is the server's own statement
+   * of what it bound (Invariant 6), so a report that gains or loses a comparison
+   * filter changes this screen without touching this file — the same rule the
+   * scope line and the as-of chip already follow.
+   */
+  const comparesYears = report?.logic.filters.some((f) => f.label === 'Compare with') === true;
+  const shownCompareYear =
+    report?.logic.filters.find((f) => f.label === 'Compare with')?.value ?? null;
 
   /**
    * Drill navigation, shared with the Dashboard grid's cards (components/
@@ -70,8 +93,23 @@ export function DashboardPage({
     reportId,
     schoolIds,
     academicYear,
+    compareYear: compareYear ?? undefined,
     onError: useCallback((message: string | null) => { setError(message); }, []),
   });
+
+  /**
+   * A new report, or a new academic year, drops the chosen comparison year.
+   *
+   * Not tidiness: the years on offer are derived from the CURRENT academic year,
+   * so a reader who compared 2026-27 with 2023-24 and then moved to 2024-25
+   * would be left comparing a year with one four years before it — and, if the
+   * years happened to coincide, with itself, which the server refuses. Falling
+   * back to `null` re-derives the preceding year, which is right for every
+   * report and every year.
+   */
+  useEffect(() => {
+    setCompareYear(null);
+  }, [reportId, academicYear]);
 
   useEffect(() => {
     if (academicYear === null) return undefined;
@@ -85,7 +123,7 @@ export function DashboardPage({
      * stack is cleared with the fetch that replaces the data under it.
      */
     clearDrills();
-    getReport(reportId, schoolIds, academicYear)
+    getReport(reportId, schoolIds, academicYear, { compareYear: compareYear ?? undefined })
       .then((data) => {
         if (!cancelled) setReport(data);
       })
@@ -97,7 +135,7 @@ export function DashboardPage({
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [reportId, schoolIds, academicYear, clearDrills]);
+  }, [reportId, schoolIds, academicYear, compareYear, clearDrills]);
 
   /**
    * The spec as it should be DRAWN: every drilled widget replaced in place by
@@ -183,6 +221,40 @@ export function DashboardPage({
             </div>
 
             <div className="affordances">
+              {/**
+                * The one filter this screen owns.
+                *
+                * Scope and academic year are chosen in the Topbar, because they
+                * apply to every screen; a comparison year applies to exactly the
+                * report that declares one, so it sits with that report's own
+                * affordances rather than in global chrome that would show a dead
+                * control on ten other pages.
+                *
+                * The options are DERIVED from the academic year rather than
+                * fetched, and that is a deliberate limit: there is no endpoint
+                * that says which years a school holds fee data for, and adding
+                * a query to find out would cost a scan of the fee tables on
+                * every page load. A year with no demand recorded is not hidden
+                * from the list — it is chosen, and the report then shows blank
+                * comparison columns with the reason in its notes, which is the
+                * honest answer rather than a quietly shortened list.
+                */}
+              {comparesYears && academicYear !== null && (
+                <label className="chipbtn chipSelect">
+                  <span>Compare with</span>
+                  <select
+                    value={compareYear ?? shownCompareYear ?? ''}
+                    disabled={loading}
+                    onChange={(event) => { setCompareYear(event.target.value); }}
+                  >
+                    {precedingYears(academicYear).map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button
                 type="button"
                 className="chipbtn"
@@ -208,6 +280,13 @@ export function DashboardPage({
                     name: name.trim(),
                     academic_year: academicYear,
                     ...(asOfValue === undefined ? {} : { as_of: asOfValue }),
+                    /**
+                     * The comparison the screen is SHOWING, read off the logic
+                     * panel like the as-of date beside it — a clone captures
+                     * this view, and this view compares against a year the
+                     * reader may have chosen.
+                     */
+                    ...(shownCompareYear === null ? {} : { compare_year: shownCompareYear }),
                     school_ids: schoolIds,
                   })
                     .then((cloned) => { onCloned(cloned.id); })
@@ -236,7 +315,17 @@ export function DashboardPage({
                 href={
                   academicYear === null
                     ? undefined
-                    : reportPdfUrl(reportId, schoolIds, academicYear, { logic: true })
+                    : reportPdfUrl(reportId, schoolIds, academicYear, {
+                        logic: true,
+                        /**
+                         * The export carries the comparison on screen, not the
+                         * server's default — a PDF that compared against a
+                         * different year from the page it was taken from is
+                         * exactly the screen/export divergence ADR-021 exists to
+                         * prevent.
+                         */
+                        compareYear: compareYear ?? undefined,
+                      })
                 }
                 title="Download this report as a branded PDF, with the SQL appendix"
               >
@@ -333,6 +422,32 @@ export function DashboardPage({
       </div>
     </main>
   );
+}
+
+/**
+ * The four academic years before this one, newest first.
+ *
+ * Four because a fee comparison is a management question about recent
+ * behaviour, and a select of fifteen years is a scroll rather than a choice.
+ * Derived here in the SPELLING the current year uses — `2026-27` gives
+ * `2025-26`, the longer `2026-2027` gives `2025-2026` — so the value posted back
+ * matches what the ERP writes rather than a shape this component preferred.
+ *
+ * An unreadable label yields an empty list, and the control then renders no
+ * options rather than made-up ones; the report still loads on the server's
+ * derived comparison.
+ */
+export function precedingYears(academicYear: string, howMany = 4): string[] {
+  const long = /^(\d{4})-(\d{4})$/.exec(academicYear);
+  const short = /^(\d{4})-(\d{2})$/.exec(academicYear);
+  const start = Number(long?.[1] ?? short?.[1]);
+  if (!Number.isInteger(start)) return [];
+  return Array.from({ length: howMany }, (_unused, index) => {
+    const from = start - index - 1;
+    return long !== null
+      ? `${String(from)}-${String(from + 1)}`
+      : `${String(from)}-${String((from + 1) % 100).padStart(2, '0')}`;
+  });
 }
 
 function asOf(iso: string): string {

@@ -23,7 +23,7 @@
  * at 25 schools by the MCP layer.
  */
 
-import { chartSpecSchema, type ChartSpec, type Widget } from '@sap/chart-spec';
+import { chartSpecSchema, type ChartSpec, type Tone, type Widget } from '@sap/chart-spec';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
 import { withMcp } from '../mcp/client.js';
@@ -78,6 +78,8 @@ export interface DashboardResult {
 
 export const DASHBOARD_IDS = [
   'enrollment-overview',
+  'trend-analysis',
+  'fee-comparative',
   'fee-collection',
   'fee-defaulters',
   'fee-by-student',
@@ -110,19 +112,44 @@ export function isDashboardId(value: string): value is DashboardId {
  */
 export const REPORT_FILTERS: Record<
   DashboardId,
-  { academicYear: boolean; asOf: boolean; dateWindow: boolean }
+  { academicYear: boolean; asOf: boolean; dateWindow: boolean; compareYear: boolean }
 > = {
-  'enrollment-overview': { academicYear: true, asOf: false, dateWindow: false },
-  'fee-collection': { academicYear: true, asOf: false, dateWindow: false },
-  'fee-defaulters': { academicYear: true, asOf: true, dateWindow: false },
+  'enrollment-overview': { academicYear: true, asOf: false, dateWindow: false, compareYear: false },
+  /**
+   * The only report that binds NO academic year, and the only one for which
+   * that is a feature rather than an absence.
+   *
+   * Every other fee report narrows to one year. Here the year is the AXIS —
+   * the page draws six years of monthly collection, twelve of enrollment and
+   * fifteen of staff movement — so binding one would collapse every series to a
+   * single point while leaving a page that still looked like a trend. The same
+   * rule the other entries follow ("a filter that does nothing is worse than a
+   * filter that is absent") pointing the other way.
+   *
+   * The as-of date IS bound, and does real work: it is where every series
+   * STOPS. Without it the same saved report grows a point every night and last
+   * week's PDF stops reproducing, which is the argument `AS_OF_DATE` already
+   * makes for aging bands, applied to the right-hand end of a line.
+   */
+  'trend-analysis': { academicYear: false, asOf: true, dateWindow: false, compareYear: false },
+  /**
+   * The only report that binds a SECOND academic year. Everything on it is a
+   * this-year/that-year pair, so the comparison year is a filter of the report
+   * rather than a view option — it appears as its own chip on the logic panel
+   * and in the audit record, because two readers looking at "recovery is up 1.7
+   * points" must be able to see what it is up against.
+   */
+  'fee-comparative': { academicYear: true, asOf: false, dateWindow: false, compareYear: true },
+  'fee-collection': { academicYear: true, asOf: false, dateWindow: false, compareYear: false },
+  'fee-defaulters': { academicYear: true, asOf: true, dateWindow: false, compareYear: false },
   /**
    * Year only. Nothing here depends on what has FALLEN DUE — this report reads
    * the whole book per student, due or not — so an as-of pill would appear to
    * move the numbers and would not. A filter that does nothing is worse than a
    * filter that is absent (the same rule Staff Overview's missing year follows).
    */
-  'fee-by-student': { academicYear: true, asOf: false, dateWindow: false },
-  'staff-overview': { academicYear: false, asOf: true, dateWindow: false },
+  'fee-by-student': { academicYear: true, asOf: false, dateWindow: false, compareYear: false },
+  'staff-overview': { academicYear: false, asOf: true, dateWindow: false, compareYear: false },
   /**
    * A date WINDOW and nothing else. Staff are not enrolled in an academic year,
    * so there is none to bind (the same reason Staff Overview declares none);
@@ -130,8 +157,8 @@ export const REPORT_FILTERS: Record<
    * as-of date would answer 'who was marked on exactly this day' under the
    * heading of a report about a period.
    */
-  'staff-attendance': { academicYear: false, asOf: false, dateWindow: true },
-  'admissions-funnel': { academicYear: true, asOf: false, dateWindow: false },
+  'staff-attendance': { academicYear: false, asOf: false, dateWindow: true, compareYear: false },
+  'admissions-funnel': { academicYear: true, asOf: false, dateWindow: false, compareYear: false },
   /**
    * Attendance binds BOTH, against two different tables, because neither table
    * can answer for the other. The year goes to `students_data_set` to count who
@@ -139,9 +166,9 @@ export const REPORT_FILTERS: Record<
    * year column is stamped with the current year rather than the row's and
    * cannot be filtered on (mcp-server/src/reports/catalog.ts, FROM_DATE).
    */
-  'attendance-analytics': { academicYear: true, asOf: false, dateWindow: true },
+  'attendance-analytics': { academicYear: true, asOf: false, dateWindow: true, compareYear: false },
   /** Reads students, fees, staff, admissions AND attendance -- all four filters. */
-  'principal-snapshot': { academicYear: true, asOf: true, dateWindow: true },
+  'principal-snapshot': { academicYear: true, asOf: true, dateWindow: true, compareYear: false },
   /**
    * No filters at all -- corrected 2026-08-26 once the real schema showed why:
    * `student_transport_data_set` has no trustworthy date column (its
@@ -149,7 +176,7 @@ export const REPORT_FILTERS: Record<
    * attendance tables, and there is nothing else to filter on instead), so a
    * query here reads whatever the table holds, unfiltered by time.
    */
-  'transport-analytics': { academicYear: false, asOf: false, dateWindow: false },
+  'transport-analytics': { academicYear: false, asOf: false, dateWindow: false, compareYear: false },
   /**
    * As-of date plus a date WINDOW, not an academic year -- corrected
    * 2026-08-26 for the same reason as Attendance: `book_issue_data_set`'s
@@ -158,7 +185,7 @@ export const REPORT_FILTERS: Record<
    * `issues_by_month` filters on `issuedate` directly via the same
    * `from_date`/`to_date` window Attendance already binds.
    */
-  'library-textbooks': { academicYear: false, asOf: true, dateWindow: true },
+  'library-textbooks': { academicYear: false, asOf: true, dateWindow: true, compareYear: false },
 };
 
 /**
@@ -189,6 +216,37 @@ function academicYearWindow(year: string): { from: string; to: string } {
 }
 
 /**
+ * The academic year BEFORE this one, in whatever shape the ERP writes years.
+ *
+ * The comparison year is a filter a reader may choose, and this is only the
+ * default they get for choosing nothing — but it is the value used far more
+ * often than any other, so it must be right for both label shapes this codebase
+ * has seen: the route's `YYYY-YY` (`2026-27` → `2025-26`) and the longer
+ * `YYYY-YYYY` the schema catalog documents on the fee tables (`2025-2026` →
+ * `2024-2025`).
+ *
+ * A year it cannot read comes back UNCHANGED rather than guessed at. That is
+ * deliberate: the caller compares the result against the current year and
+ * refuses the report if they are equal (routes/report.ts), so an unreadable
+ * label produces a clear refusal instead of a comparison against a year that
+ * does not exist — which would draw every previous-year figure as zero and
+ * report a 100% collapse in recovery.
+ */
+export function previousAcademicYear(year: string): string {
+  const long = /^(\d{4})-(\d{4})$/.exec(year);
+  if (long !== null) {
+    const start = Number(long[1]) - 1;
+    return `${String(start)}-${String(start + 1)}`;
+  }
+  const short = /^(\d{4})-(\d{2})$/.exec(year);
+  if (short !== null) {
+    const start = Number(short[1]) - 1;
+    return `${String(start)}-${String((start + 1) % 100).padStart(2, '0')}`;
+  }
+  return year;
+}
+
+/**
  * Turn (report id, year, as-of date) into the `run_predefined` params AND the
  * Logic-panel filter chips — the same two things `buildDashboard` always
  * derived inline. Exported so services/custom-reports.ts can build the
@@ -199,11 +257,31 @@ function academicYearWindow(year: string): { from: string; to: string } {
  */
 export function resolveReportParams(
   reportId: DashboardId,
-  args: { academicYear: string; asOfDate: string },
+  args: {
+    academicYear: string;
+    asOfDate: string;
+    /**
+     * The year a comparative report measures against. Optional, and DERIVED
+     * from the academic year when it is absent — a clone stored before this
+     * filter existed, and every caller of a report that does not declare it,
+     * would otherwise have to know a value they have no opinion about. Ignored
+     * outright by a report whose `REPORT_FILTERS` entry says it takes none, for
+     * the same reason the as-of date is: `run_predefined` refuses a filter a
+     * report does not declare, and a silently-ignored one would put a chip on
+     * screen that narrows nothing.
+     */
+    compareYear?: string | undefined;
+  },
 ): { params: Record<string, string>; filterChips: { label: string; value: string }[] } {
   const filters = REPORT_FILTERS[reportId];
   const params: Record<string, string> = {};
   if (filters.academicYear) params['academic_year'] = args.academicYear;
+  if (filters.compareYear) {
+    params['compare_year'] =
+      args.compareYear === undefined || args.compareYear === ''
+        ? previousAcademicYear(args.academicYear)
+        : args.compareYear;
+  }
   if (filters.asOf) params['as_of_date'] = args.asOfDate;
   const window = filters.dateWindow ? academicYearWindow(args.academicYear) : null;
   if (window !== null) {
@@ -213,6 +291,15 @@ export function resolveReportParams(
 
   const filterChips = [
     ...(filters.academicYear ? [{ label: 'Academic year', value: args.academicYear }] : []),
+    /**
+     * The chip carries the RESOLVED value, never the caller's blank. Invariant
+     * 6: the panel states what was actually bound, and "Compare with —" beside
+     * a chart of two years would be a report that will not say what its second
+     * year is.
+     */
+    ...(filters.compareYear && params['compare_year'] !== undefined
+      ? [{ label: 'Compare with', value: params['compare_year'] }]
+      : []),
     ...(filters.asOf ? [{ label: 'As of', value: args.asOfDate }] : []),
     ...(window === null
       ? []
@@ -238,6 +325,40 @@ export function resolveReportParams(
  * `services/custom-reports.ts` refuses the request rather than guessing.
  */
 export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<string, string>>>> = {
+  /**
+   * The four widgets that ONE query answers on its own — all four of them the
+   * receipt ledger's, because `collection_by_month` is deliberately scanned once
+   * and re-grouped three ways.
+   *
+   * The year-by-year table and the highlights are absent, and that absence is
+   * the rule this table exists to state: both read the fee, enrollment and
+   * departure result sets together, so cloning either alone would produce a
+   * widget whose numbers silently lost two thirds of their inputs —
+   * `run_predefined` would run one query and the builder would fill the rest
+   * with the em dashes it prints for "not known". The staff and enrollment
+   * charts are absent for the opposite reason: each needs two queries
+   * (`staff_joins` with `staff_exits`), and this table maps a widget to exactly
+   * one.
+   */
+  'trend-analysis': {
+    'line-collection': 'collection_by_month',
+    'line-seasonality': 'collection_by_month',
+    'bar-mode': 'collection_by_month',
+    'bar-school': 'collection_by_month',
+  },
+  /**
+   * Only the two panels that a SINGLE query answers on its own. The KPI strip,
+   * the school table and the highlights each read the demand result set and the
+   * timing result set together, so cloning one of those alone would produce a
+   * widget whose numbers silently lost half their inputs — `run_predefined`
+   * would run one query and the builder would fill the rest with zeroes.
+   */
+  'fee-comparative': {
+    'bar-period': 'demand_by_period',
+    'line-recovery': 'demand_by_period',
+    'bar-outstanding': 'demand_by_period',
+    'bar-school': 'demand_by_period',
+  },
   'fee-collection': {
     'line-month': 'by_month',
     'bar-class': 'by_class',
@@ -281,6 +402,8 @@ export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<stri
  */
 export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
   'enrollment-overview': 'by_class',
+  'trend-analysis': 'collection_by_month',
+  'fee-comparative': 'demand_by_period',
   'fee-collection': 'by_month',
   'fee-defaulters': 'aging',
   'fee-by-student': 'by_class',
@@ -328,6 +451,8 @@ export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
  */
 export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
   'enrollment-overview': 'by_class',
+  'trend-analysis': 'collection_by_month',
+  'fee-comparative': 'demand_by_period',
   'fee-collection': 'by_component',
   'fee-defaulters': 'totals',
   'fee-by-student': 'dues',
@@ -477,6 +602,132 @@ export interface DrillPath {
  * seconds (apps/mcp-server/src/reports/catalog.ts).
  */
 export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
+  /**
+   * Trend Analysis: school → academic year → month.
+   *
+   * A descent through TIME rather than through the fee book's structure, which
+   * is what makes it the right path for this report and the wrong one for the
+   * two below. Fee Collection and Comparative Analysis descend school →
+   * quarter/instalment → class because their question is "where in the book is
+   * the money?"; this report's question is "which way is it going?", so a click
+   * on a school opens that school's own year-by-year series, and a click on a
+   * year opens the twelve months inside it.
+   *
+   * ONE measure, so every level renders as a plain single-series bar with the
+   * gradient and tallest-bar highlight that only make sense when a chart is
+   * comparing within itself. Receipts are carried by the queries and shown in
+   * the table instead: rupees and a receipt count on one axis would draw the
+   * count as a flat line at zero, since a year's collection is measured in
+   * hundreds of millions and its receipts in tens of thousands.
+   *
+   * Level 1 costs no query of its own — `collection_by_month` is already on the
+   * page for the timeline, and grouping those rows by the school that returned
+   * them answers "which school?" for free.
+   */
+  'trend-analysis': {
+    widget_id: 'bar-school',
+    measures: [{ field: 'collected', label: 'Collected' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        /** The axis reads the name; the click pushes the id (see Fee Collection). */
+        drill_value_field: 'school_id',
+        title: 'Fee collected by school, over all recorded history',
+        group_by: 'school',
+      },
+      {
+        x: 'ay',
+        drill_dim: 'year',
+        /**
+         * The axis reads '2025-26'; the click binds 2025 (see `DRILL_YEAR`).
+         *
+         * `seq` and not a column named for what it holds, because `sumBy` carries
+         * only the axis field, the measures and `seq` through the per-school
+         * merge — the same field Fee Collection's quarter level drills on, for
+         * the same reason. The catalog's `collection_by_year` returns the
+         * starting year under that name deliberately.
+         */
+        drill_value_field: 'seq',
+        query: 'collection_by_year',
+        /** A school is a SCOPE narrowing, never a bound value (ADR-020 as amended). */
+        narrow: { kind: 'scope' },
+        title: 'Fee collected by academic year · {context}',
+        group_by: 'academic year',
+        /**
+         * Said at the level where it stops being obvious. The page above draws a
+         * continuous monthly timeline whose right-hand end is the as-of date;
+         * these bars are whole academic years, so the most recent one is a
+         * part-year sitting beside complete ones and reads as a collapse unless
+         * a reader is told.
+         */
+        note: 'The most recent year runs only to the as-of date, so its bar is a part-year beside full ones.',
+      },
+      {
+        x: 'month',
+        query: 'collection_months_in_year',
+        narrow: { kind: 'param', param: 'drill_year', type: 'number' },
+        title: 'Fee collected by month · {context}',
+        group_by: 'month',
+        /** The leaf: no `drill_dim`, so this chart is not clickable. */
+      },
+    ],
+  },
+  /**
+   * Comparative Analysis: school → instalment → class.
+   *
+   * The same three-level shape as Fee Collection one bucket finer. Fee
+   * Collection descends through academic QUARTERS because it reads the demand
+   * ledger's period dates; this report is organised around the instalment a
+   * school actually billed, which is the unit its circulars and its parents use,
+   * so that is what a click on a school opens.
+   *
+   * Level 1 costs no query of its own: `demand_by_period` is already on the
+   * page for the charts above, and grouping those rows by the school that
+   * returned them answers "which school is behind?" for free.
+   */
+  'fee-comparative': {
+    widget_id: 'bar-school',
+    measures: [
+      { field: 'payable', label: 'Demand raised' },
+      { field: 'collected', label: 'Collected' },
+      { field: 'outstanding', label: 'Outstanding' },
+    ],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        /** The axis reads the name; the click pushes the id (see Fee Collection). */
+        drill_value_field: 'school_id',
+        title: 'Demand, collection and outstanding by school',
+        group_by: 'school',
+      },
+      {
+        x: 'installmentname',
+        drill_dim: 'installment',
+        query: 'installments_current',
+        /** A school is a SCOPE narrowing, never a bound value (ADR-020 as amended). */
+        narrow: { kind: 'scope' },
+        title: 'Demand, collection and outstanding by instalment · {context}',
+        group_by: 'instalment',
+        /**
+         * The levels above and below this one are drawn for the CURRENT year
+         * only, while the page they were reached from draws two. Said here, at
+         * the level where it stops being true, rather than in the report's notes
+         * where a reader has already scrolled past it.
+         */
+        note: 'Drilled levels show the current year only. The comparison year is on the charts above, not inside a drill.',
+      },
+      {
+        x: 'classname',
+        query: 'classes_current',
+        narrow: { kind: 'param', param: 'drill_installment', type: 'string' },
+        title: 'Demand, collection and outstanding by class · {context}',
+        group_by: 'class',
+        /** The leaf: no `drill_dim`, so this chart is not clickable. */
+      },
+    ],
+  },
   'fee-collection': {
     widget_id: 'bar-school',
     measures: [
@@ -949,6 +1200,13 @@ export function drillPathFor(reportId: DashboardId): DrillPath | undefined {
 export interface BuildContext {
   readonly year: string;
   readonly asOf: string;
+  /**
+   * The year a comparative report measures against — the resolved value, never
+   * a blank, so a builder never has to decide what "no comparison year" means.
+   * Reports that declare no comparison filter receive the derived preceding year
+   * and ignore it, exactly as they ignore the as-of date they never bind.
+   */
+  readonly compareYear: string;
   readonly scope: readonly { school_id: string; school_name: string }[];
 }
 
@@ -959,6 +1217,13 @@ export async function buildDashboard(args: {
   academicYear: string;
   /** The date "overdue" and "on roll" are measured against (YYYY-MM-DD). */
   asOfDate: string;
+  /**
+   * The year a comparative report measures against. Absent means "the one
+   * before" — derived in `resolveReportParams`, so every caller that has no
+   * opinion (Home's preview cards, a clone stored before this filter existed)
+   * gets the same answer as one that does.
+   */
+  compareYear?: string | undefined;
   correlationId: string;
   /**
    * Run only these of the report's named queries, instead of all of them.
@@ -988,6 +1253,7 @@ export async function buildDashboard(args: {
   const { params, filterChips } = resolveReportParams(args.reportId, {
     academicYear: args.academicYear,
     asOfDate: args.asOfDate,
+    compareYear: args.compareYear,
   });
 
   /**
@@ -1053,7 +1319,18 @@ export async function buildDashboard(args: {
   );
 
   const merged = new Merged(result);
-  const context: BuildContext = { year: args.academicYear, asOf: args.asOfDate, scope };
+  const context: BuildContext = {
+    year: args.academicYear,
+    asOf: args.asOfDate,
+    /**
+     * The value that was BOUND, read back out of the params rather than off the
+     * request: the builder's labels ("vs 2025-26") must name the year the SQL
+     * actually filtered on, and `resolveReportParams` is where a blank became a
+     * derived year.
+     */
+    compareYear: params['compare_year'] ?? previousAcademicYear(args.academicYear),
+    scope,
+  };
 
   const built = BUILDERS[args.reportId](merged, context);
 
@@ -1166,6 +1443,8 @@ export interface DashboardBuild {
  */
 export const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) => DashboardBuild> = {
   'enrollment-overview': buildEnrollment,
+  'trend-analysis': buildTrendAnalysis,
+  'fee-comparative': buildFeeComparative,
   'fee-collection': buildFeeCollection,
   'fee-defaulters': buildFeeDefaulters,
   'fee-by-student': buildFeeByStudent,
@@ -1469,6 +1748,875 @@ function buildFeeCollection(merged: Merged, { year, scope }: BuildContext): Dash
       'The KPI tiles and the payable/collected/pending chart come from the fee demand ledger (what was owed and settled). The month, class and payment-mode charts come from the receipt ledger (what was banked, and when). The two will not tie exactly.',
       'Fee pending is the demand ledger’s own outstanding balance, not payable minus collected — the two differ wherever a head has been over-received.',
       'Quarters are ACADEMIC quarters measured from the period a fee was demanded for: Q1 is April–June, Q4 is January–March. Demand with no period recorded is left out of the quarter view, so the four quarters can add up to less than the school total — no such rows exist in any school today.',
+    ],
+  };
+}
+
+// -- Comparative Analysis ----------------------------------------------------
+
+/**
+ * One year's money for one grouping — the shape every figure on Comparative
+ * Analysis is built from.
+ *
+ * `outstanding` is carried rather than derived as payable minus collected. The
+ * demand ledger reports its own `balance_amount`, and a fee head that has been
+ * over-received makes the two disagree; recomputing here would quietly reduce a
+ * school's arrears by the amount another family overpaid.
+ */
+interface Money {
+  payable: number;
+  collected: number;
+  outstanding: number;
+}
+
+/** One year against another, for one school or one instalment. */
+interface YearPair {
+  readonly current: Money;
+  readonly compare: Money;
+}
+
+function zeroMoney(): Money {
+  return { payable: 0, collected: 0, outstanding: 0 };
+}
+
+function addMoney(into: Money, row: Record<string, unknown>): void {
+  into.payable += num(row['payable']);
+  into.collected += num(row['collected']);
+  into.outstanding += num(row['outstanding']);
+}
+
+/**
+ * Where a school's recovery rate puts it, and what to call that.
+ *
+ * A table rather than a chain of `if`s, and a table declared HERE rather than
+ * inside the builder, because these are the only numbers on this dashboard that
+ * are a judgement rather than a measurement. Nothing in the ERP extract, the
+ * registry or docs/06 defines a recovery band — there is no existing business
+ * rule to reuse, which was checked before inventing one — so the bands are
+ * stated in one place, in descending order, and a school that wants different
+ * thresholds gets them by editing this table rather than by finding four
+ * comparisons scattered through a builder.
+ *
+ * `floor` is a SHARE, not a percentage: the same units the rate is computed in,
+ * so nobody has to remember which side of the ×100 they are on.
+ */
+const RECOVERY_BANDS: readonly {
+  readonly floor: number;
+  readonly label: string;
+  readonly tone: Tone;
+}[] = [
+  { floor: 0.9, label: 'Excellent', tone: 'positive' },
+  { floor: 0.8, label: 'Good', tone: 'neutral' },
+  { floor: 0.7, label: 'Moderate', tone: 'warning' },
+  { floor: 0, label: 'Needs attention', tone: 'negative' },
+];
+
+function recoveryBand(share: number | null): { label: string; tone: Tone } {
+  /**
+   * An unknowable rate is NOT "needs attention". A school with no demand raised
+   * has no recovery rate at all, and grading it as the worst band would put a
+   * red badge on a school that has done nothing wrong (§10: a zero standing in
+   * for an unknown is the failure this codebase names first).
+   */
+  if (share === null) return { label: 'No demand raised', tone: 'neutral' };
+  const band = RECOVERY_BANDS.find((entry) => share >= entry.floor);
+  return band === undefined
+    ? { label: 'Needs attention', tone: 'negative' }
+    : { label: band.label, tone: band.tone };
+}
+
+/**
+ * A rate as a share, or null when there is no denominator to divide by.
+ *
+ * Null and not zero, and every caller has to deal with it — which is the point.
+ * "0% recovered" and "nothing was owed" are opposite facts that a zero renders
+ * identically, and this dashboard's whole job is to rank schools by that number.
+ */
+function share(numerator: number, denominator: number): number | null {
+  if (!(denominator > 0)) return null;
+  return numerator / denominator;
+}
+
+/** A share as a display percentage, or an em dash when it is not knowable. */
+function pct(value: number | null, digits = 1): string {
+  return value === null ? '—' : `${(value * 100).toFixed(digits)}%`;
+}
+
+/** A share as a NUMBER for a chart axis. Charts cannot draw "not known". */
+function pctValue(value: number | null): number {
+  return value === null ? 0 : Number((value * 100).toFixed(1));
+}
+
+/**
+ * The change between two rates, in PERCENTAGE POINTS.
+ *
+ * 90% → 94% is four percentage points, and calling it "+4%" is wrong twice
+ * over: as arithmetic (the percentage change is +4.4%) and as meaning (a reader
+ * who compounds it gets a different school). The unit is written out on every
+ * label this produces so the distinction survives being read aloud in a meeting.
+ */
+function pointsDelta(current: number | null, previous: number | null): string | null {
+  if (current === null || previous === null) return null;
+  const points = (current - previous) * 100;
+  const sign = points >= 0 ? '+' : '−';
+  return `${sign}${Math.abs(points).toFixed(1)} pp`;
+}
+
+/**
+ * The proportional change between two amounts.
+ *
+ * A percentage up to tenfold, and a MULTIPLE beyond it. That is not a style
+ * choice — it is what the live extract forced. A trust's arrears at the end of a
+ * settled year are near zero, so this year's mid-year arrears against them came
+ * out as "+14,435%", which is arithmetically exact and unreadable: nobody
+ * converts five-figure percentages into a sense of scale, and a tile that has to
+ * be decoded is a tile that gets ignored. "145× higher" is the same fact in the
+ * words a person would use.
+ *
+ * Null when there is nothing to divide by. A tile with no delta renders no pill
+ * at all, which is the honest answer for "compared with a year that raised
+ * nothing" — the alternative is an infinity, or a 100% that means the opposite
+ * of what it says.
+ */
+function amountDelta(current: number, previous: number): string | null {
+  if (!(previous > 0)) return null;
+  const ratio = current / previous;
+  if (ratio >= 10) return `+${ratio < 100 ? ratio.toFixed(1) : String(Math.round(ratio))}×`;
+  const change = (ratio - 1) * 100;
+  const sign = change >= 0 ? '+' : '−';
+  return `${sign}${Math.abs(change).toFixed(1)}%`;
+}
+
+/**
+ * A fee period's position in the ACADEMIC year, from its calendar month.
+ *
+ * An Indian school year runs April to March, so sorting on the calendar month
+ * would file January, February and March first — three months that are the END
+ * of the year a reader is looking at. Shifting so April lands on 0 puts the axis
+ * in the order a fee circular is read in, and it is the same `(month + 8) % 12`
+ * the demand ledger's academic quarters already use
+ * (mcp-server/src/reports/catalog.ts), so the two cannot drift.
+ *
+ * A period the ledger did not record sorts LAST, where it reads as the remainder
+ * it is rather than as the opening month it is not.
+ */
+const PERIOD_UNRECORDED = 99_999;
+
+function periodOrder(month: number): number {
+  if (!Number.isInteger(month) || month < 1 || month > 12) return PERIOD_UNRECORDED;
+  return (month + 8) % 12;
+}
+
+/**
+ * What that period is CALLED on the axis.
+ *
+ * A bare month name, deliberately, and not the school's own `installmentname`:
+ * that column is free text a school types, and across the delivered extract the
+ * same instalment is "APR 2025-26" one year and "April 2026-27" the next, or
+ * "Apr", or "APL (2025-26)". Drawing a comparison on those strings would put the
+ * two years in disjoint categories — which is why the SQL groups on the month at
+ * all (see `PERIOD_MONTH` in the catalog). A reader who wants their school's own
+ * instalment names clicks into it: the drill's second level is grouped by
+ * exactly those, within the one school and year where they are consistent.
+ */
+function periodLabel(month: number): string {
+  return MONTH_NAMES[month - 1] ?? 'No period recorded';
+}
+
+/**
+ * The five states a rupee of this year's demand can be in, in the order they
+ * are drawn — earliest money first, unpaid money last.
+ *
+ * They are MUTUALLY EXCLUSIVE by construction and the exclusivity is enforced
+ * where it can be: the four paid states are arms of one CASE expression in the
+ * SQL (mcp-server/src/reports/catalog.ts), so a receipt is read once and lands
+ * in exactly one of them, and the fifth is the demand ledger's own unpaid
+ * balance, which by definition is money no receipt covers. That is what lets
+ * the timeline be drawn as a stacked bar at all: the segments partition the
+ * money rather than merely sitting beside each other.
+ *
+ * `undated` is a sixth state and is deliberately not in this list. It is
+ * appended by the builder only when it is non-zero — see `buildFeeComparative`.
+ */
+const TIMELINE_STATES: readonly { readonly field: string; readonly label: string }[] = [
+  { field: 'advance', label: 'Paid in advance' },
+  { field: 'same_month', label: 'Paid in the due month' },
+  { field: 'next_month', label: 'Paid the month after' },
+  { field: 'later', label: 'Paid later still' },
+  { field: 'pending', label: 'Still pending' },
+];
+
+/** A receipt that cannot be dated against its instalment. Named, never dropped. */
+const UNDATED_STATE = { field: 'undated', label: 'Timing not recorded' } as const;
+
+/**
+ * Comparative Analysis — year-on-year fee recovery, school by school.
+ *
+ * The management view of the fee book: is recovery better or worse than last
+ * year, which school is dragging it, and how late does the money arrive. Every
+ * figure is computed here from two result sets (services/../reports/catalog.ts:
+ * `demand_by_period` for both years, `timing` for this year's receipts) —
+ * nothing on this page is a constant, and nothing is averaged across schools.
+ *
+ * -- Why nothing here averages percentages -----------------------------------
+ * Every rate on this page is computed from SUMMED totals, never as the mean of
+ * per-school rates. A trust with a 4,000-pupil school at 92% and a 200-pupil
+ * school at 60% has recovered 90.5% of its money; the average of the two rates
+ * is 76%, which is a number about schools rather than about money and would put
+ * the trust two bands lower than it belongs. The one figure that IS a mean of
+ * rates is labelled as one ("Average school recovery" in the highlights), where
+ * the difference between the two readings is the point being made.
+ *
+ * -- What the two ledgers can and cannot say together -------------------------
+ * The paid states of the timeline come from the RECEIPT ledger and the pending
+ * state from the DEMAND ledger, because only one of them records when money
+ * arrived and only the other records what is still owed. They will not tie to
+ * the rupee. Rather than hide that, the timeline's denominator is stated for
+ * what it is — receipts plus outstanding demand — and the report says so on
+ * screen, so a reader who notices the KPI strip's collected figure differing
+ * from the timeline's base has already been told why.
+ */
+function buildFeeComparative(
+  merged: Merged,
+  { year, compareYear, scope }: BuildContext,
+): DashboardBuild {
+  const widgets: Widget[] = [];
+  /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
+  const path = DRILL_PATHS['fee-comparative'] as DrillPath;
+  const named = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+
+  /**
+   * Rows kept per school rather than summed across them, because this report
+   * needs both readings and the per-school one cannot be recovered from a
+   * total. `sumBy` would have answered the charts and lost the table.
+   */
+  const demandRows = merged.concatRows('demand_by_period');
+
+  const bySchool = new Map<string, { current: Money; compare: Money }>();
+  const byPeriod = new Map<number, { label: string; current: Money; compare: Money }>();
+  const total = { current: zeroMoney(), compare: zeroMoney() };
+
+  for (const { school_id, row } of demandRows) {
+    const ay = label(row['ay']);
+    /**
+     * The statement filtered to these two years, so a third is impossible —
+     * but a row is external data until it has been read (§3), and silently
+     * folding an unexpected year into the current one would inflate every
+     * figure on the page rather than fail.
+     */
+    const which = ay === year ? 'current' : ay === compareYear ? 'compare' : null;
+    if (which === null) continue;
+
+    let school = bySchool.get(school_id);
+    if (school === undefined) {
+      school = { current: zeroMoney(), compare: zeroMoney() };
+      bySchool.set(school_id, school);
+    }
+    addMoney(school[which], row);
+
+    /**
+     * The MONTH the fee was demanded for, which is what makes a period in one
+     * year the same category as the period in the other. `period_month` is null
+     * where the ledger recorded no period; `periodOrder` files that last and
+     * `periodLabel` names it, so the money is drawn rather than dropped.
+     */
+    const month = periodOrder(num(row['period_month']));
+    let period = byPeriod.get(month);
+    if (period === undefined) {
+      period = {
+        label: periodLabel(num(row['period_month'])),
+        current: zeroMoney(),
+        compare: zeroMoney(),
+      };
+      byPeriod.set(month, period);
+    }
+    addMoney(period[which], row);
+
+    addMoney(total[which], row);
+  }
+
+  const periods = [...byPeriod.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, entry]) => entry);
+
+  /**
+   * A school appears in the table if the demand ledger answered for it AT ALL —
+   * including a school with rows only in the comparison year, which is exactly
+   * the school a reader most needs to see (it raised no demand this year).
+   * Schools whose query FAILED are absent rather than zeroed; they are named
+   * separately in the page's degraded notice (`Merged.schoolFailures`).
+   */
+  const schools = [...bySchool.entries()].map(([schoolId, money]) => ({
+    schoolId,
+    name: named.get(schoolId) ?? schoolId,
+    ...money,
+  }));
+
+  /** Receipts split by how late they were, per school and in total. */
+  const timingFields = ['advance', 'same_month', 'next_month', 'later', 'undated', 'receipts'];
+  const timingBySchool = new Map(
+    merged
+      .sumPerSchool('timing', timingFields)
+      .map((entry) => [entry.school_id, entry.totals] as const),
+  );
+  const timingTotal = merged.sumAll('timing', timingFields);
+
+  /**
+   * What the timeline's percentages are OF: money that arrived (receipt ledger)
+   * plus money still owed (demand ledger). Not `payable`, and the difference is
+   * not pedantry — the two ledgers disagree slightly, so dividing receipt-ledger
+   * states by a demand-ledger total produces five segments that do not add to
+   * 100% and a stacked bar that is visibly short. This base makes the partition
+   * exact, and the report says on screen what it is made of.
+   */
+  function timelineBase(receipts: number, outstanding: number): number {
+    return receipts + outstanding;
+  }
+
+  const recoveryNow = share(total.current.collected, total.current.payable);
+  const recoveryThen = share(total.compare.collected, total.compare.payable);
+
+  // -- KPI strip -------------------------------------------------------------
+  if (demandRows.length > 0) {
+    const schoolsNow = schools.filter((s) => s.current.payable > 0).length;
+    const schoolsThen = schools.filter((s) => s.compare.payable > 0).length;
+
+    widgets.push({
+      id: 'kpi-schools',
+      type: 'kpi',
+      label: 'Schools compared',
+      value: count(schoolsNow),
+      /**
+       * Named as a count of schools with demand, not of schools in scope. A
+       * school in the picker whose ledger raised nothing this year is in scope
+       * and is not in this figure, and the two differing is information.
+       */
+      ...(schoolsThen > 0
+        ? { delta: `${count(schoolsThen)} in ${compareYear}` }
+        : {}),
+      tone: 'neutral',
+    });
+
+    widgets.push({
+      id: 'kpi-payable',
+      type: 'kpi',
+      label: `Demand raised · ${year}`,
+      value: rupees(total.current.payable),
+      ...(amountDelta(total.current.payable, total.compare.payable) === null
+        ? {}
+        : { delta: `${amountDelta(total.current.payable, total.compare.payable) ?? ''} vs ${compareYear}` }),
+      tone: 'neutral',
+    });
+
+    widgets.push({
+      id: 'kpi-collected',
+      type: 'kpi',
+      label: `Collected · ${year}`,
+      value: rupees(total.current.collected),
+      ...(amountDelta(total.current.collected, total.compare.collected) === null
+        ? {}
+        : { delta: `${amountDelta(total.current.collected, total.compare.collected) ?? ''} vs ${compareYear}` }),
+      tone: 'positive',
+    });
+
+    /**
+     * The one tile whose delta is deliberately NOT signed.
+     *
+     * The KPI renderer colours a delta pill from its leading sign — a `+` is
+     * green (widgets.tsx, `deltaDirection`). That is right for demand and for
+     * collections, where more is better, and exactly wrong for arrears, where a
+     * rise is the bad news this dashboard exists to surface. Rather than lie
+     * about the arithmetic to get the colour right, the change is stated in
+     * words, which renders in the neutral pill; the tile's own `warning` tone
+     * carries the judgement.
+     */
+    const arrearsChange = amountDelta(total.current.outstanding, total.compare.outstanding);
+    widgets.push({
+      id: 'kpi-outstanding',
+      type: 'kpi',
+      label: `Outstanding · ${year}`,
+      value: rupees(total.current.outstanding),
+      ...(arrearsChange === null
+        ? {}
+        : {
+            delta: `${arrearsChange.startsWith('−') ? 'down' : 'up'} ${arrearsChange.replace(/^[+−]/, '')} on ${compareYear}`,
+          }),
+      tone: total.current.outstanding > 0 ? 'warning' : 'neutral',
+      /**
+       * Last year's figure spelled out beside the change, because the change on
+       * its own is the one number here a reader cannot sanity-check: arrears at
+       * the end of a settled year are near zero, so almost any current figure is
+       * a large multiple of them, and "145× higher" only means something next to
+       * "which was ₹0.3Cr".
+       */
+      breakdown: [
+        { label: `Was · ${compareYear}`, value: rupees(total.compare.outstanding) },
+        {
+          label: 'Of demand',
+          value: pct(share(total.current.outstanding, total.current.payable)),
+          tone: 'warning',
+        },
+      ],
+    });
+
+    const band = recoveryBand(recoveryNow);
+    widgets.push({
+      id: 'kpi-recovery',
+      type: 'kpi',
+      label: 'Overall recovery',
+      value: pct(recoveryNow),
+      ...(pointsDelta(recoveryNow, recoveryThen) === null
+        ? {}
+        : { delta: `${pointsDelta(recoveryNow, recoveryThen) ?? ''} vs ${compareYear}` }),
+      tone: band.tone,
+      /**
+       * Both halves of the quotient, because a rate on its own cannot be
+       * checked. A reader who wants to know whether 93% is good news needs to
+       * see that it is 93% of a demand that grew 12%.
+       */
+      breakdown: [
+        { label: 'Collected', value: rupees(total.current.collected), tone: 'positive' },
+        {
+          label: 'Outstanding',
+          value: rupees(total.current.outstanding),
+          tone: total.current.outstanding > 0 ? 'warning' : 'neutral',
+        },
+      ],
+    });
+
+    /**
+     * Advance collection, and its two neighbours as the tile's breakdown.
+     *
+     * Present only when the receipt ledger answered. A zero here would say "no
+     * family paid early", which is a strong claim to make on the strength of a
+     * query that did not run (§10) — so the tile is absent instead, and the
+     * report's notes say the timing half is unavailable.
+     */
+    if (timingTotal !== null) {
+      const base = timelineBase(num(timingTotal['receipts']), total.current.outstanding);
+      const advance = share(num(timingTotal['advance']), base);
+      const onTime = share(num(timingTotal['same_month']), base);
+      const late = share(
+        num(timingTotal['next_month']) + num(timingTotal['later']),
+        base,
+      );
+      widgets.push({
+        id: 'kpi-advance',
+        type: 'kpi',
+        label: 'Paid in advance',
+        value: pct(advance),
+        tone: 'positive',
+        breakdown: [
+          { label: 'In the due month', value: pct(onTime) },
+          { label: 'After it', value: pct(late), tone: 'warning' },
+        ],
+      });
+    }
+  }
+
+  // -- Estimated vs collected, by fee period ---------------------------------
+  if (periods.length > 0) {
+    widgets.push({
+      id: 'bar-period',
+      type: 'bar',
+      title: `Demand versus collection by fee period · ${year} against ${compareYear}`,
+      x: 'period',
+      y: 'payable',
+      series: [
+        { field: 'payable', label: `Demand · ${year}` },
+        { field: 'collected', label: `Collected · ${year}` },
+        { field: 'collected_prev', label: `Collected · ${compareYear}` },
+      ],
+      data: periods.map((entry) => ({
+        period: entry.label,
+        payable: entry.current.payable,
+        collected: entry.current.collected,
+        collected_prev: entry.compare.collected,
+      })),
+    });
+
+    widgets.push({
+      id: 'bar-outstanding',
+      type: 'bar',
+      title: `Outstanding by fee period · ${year} against ${compareYear}`,
+      x: 'period',
+      y: 'outstanding',
+      /** Money that is late, so amber wherever it is drawn (docs/10 §1). */
+      tone: 'warning',
+      series: [
+        { field: 'outstanding', label: `Outstanding · ${year}` },
+        { field: 'outstanding_prev', label: `Outstanding · ${compareYear}` },
+      ],
+      data: periods.map((entry) => ({
+        period: entry.label,
+        outstanding: entry.current.outstanding,
+        outstanding_prev: entry.compare.outstanding,
+      })),
+    });
+
+    /**
+     * Recovery as a RATE per fee period, both years on one pair of axes.
+     *
+     * Long-format rows (one per period per year) with `series` naming the field
+     * that splits them — the shape the spec describes and the renderer pivots
+     * (chart-spec react/widgets.tsx). A period with no demand in a year
+     * contributes no row for that year rather than a zero: a rate nobody can
+     * compute must not be drawn as a line diving to the floor.
+     *
+     * Emitted THIRD, after the two half-width bars, so the reading order matches
+     * the order the grid paints: two bars share row one and this spans row two.
+     * `.specPanels` uses `grid-auto-flow: dense`, so a mismatch would only be a
+     * paint-order effect — but a screen reader follows the DOM, and it should not
+     * be told a different story from the one on screen.
+     */
+    widgets.push({
+      id: 'line-recovery',
+      type: 'line',
+      title: `Recovery rate by fee period · ${year} against ${compareYear}`,
+      x: 'period',
+      y: 'recovery',
+      series: 'ay',
+      data: periods.flatMap((entry) => [
+        ...(entry.current.payable > 0
+          ? [
+              {
+                period: entry.label,
+                ay: year,
+                recovery: pctValue(share(entry.current.collected, entry.current.payable)),
+              },
+            ]
+          : []),
+        ...(entry.compare.payable > 0
+          ? [
+              {
+                period: entry.label,
+                ay: compareYear,
+                recovery: pctValue(share(entry.compare.collected, entry.compare.payable)),
+              },
+            ]
+          : []),
+      ]),
+    });
+  }
+
+  // -- Drill level 1: one group of bars per school ---------------------------
+  if (schools.length > 0) {
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'payable',
+      series: [...path.measures],
+      data: schools.map((entry) => ({
+        school_id: entry.schoolId,
+        school_name: entry.name,
+        payable: entry.current.payable,
+        collected: entry.current.collected,
+        outstanding: entry.current.outstanding,
+      })),
+      /**
+       * Drillable with one school in scope as well as twenty: a single group of
+       * three bars is a legitimate reading, and it is the entry point to the
+       * instalment and class levels that every school wants regardless.
+       */
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+  }
+
+  // -- The recovery timeline, as a partition of each school's money ----------
+  const timelineRows = schools
+    .map((entry) => {
+      const timing = timingBySchool.get(entry.schoolId);
+      if (timing === undefined) return null;
+      const base = timelineBase(num(timing['receipts']), entry.current.outstanding);
+      if (!(base > 0)) return null;
+      return {
+        school_name: entry.name,
+        advance: pctValue(share(num(timing['advance']), base)),
+        same_month: pctValue(share(num(timing['same_month']), base)),
+        next_month: pctValue(share(num(timing['next_month']), base)),
+        later: pctValue(share(num(timing['later']), base)),
+        undated: pctValue(share(num(timing['undated']), base)),
+        pending: pctValue(share(entry.current.outstanding, base)),
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null);
+
+  /**
+   * The sixth segment is drawn only if it exists anywhere. A legend entry for a
+   * state no school is in is chrome; a state a school IS in, left undrawn, is a
+   * bar that silently does not add to 100%.
+   */
+  const hasUndated = timelineRows.some((row) => row.undated > 0);
+  /**
+   * Appended LAST, after "still pending", rather than slotted in among the paid
+   * states where it belongs chronologically.
+   *
+   * Two reasons, both about reading the bar. The renderer paints the fifth and
+   * sixth series in neutrals (react/widgets.tsx, `SERIES_NEUTRALS`), the second
+   * of which is the paler one — and "still pending" is typically half the bar
+   * while "timing not recorded" is a fraction of a percent, so slotting the tiny
+   * state fifth would give the dominant segment the faintest colour on the
+   * chart. And a residual reads as a residual at the end: money nobody can date
+   * is the remainder of the story, not a step in the middle of it.
+   */
+  const timelineSeries = hasUndated ? [...TIMELINE_STATES, UNDATED_STATE] : TIMELINE_STATES;
+
+  if (timelineRows.length > 0) {
+    widgets.push({
+      id: 'bar-timeline',
+      type: 'bar',
+      title: `When this year's money arrived, as a share of each school's book · ${year}`,
+      x: 'school_name',
+      y: timelineSeries[0]?.field ?? 'advance',
+      series: [...timelineSeries],
+      /** A partition, not a comparison — see `bar.stacked` in the spec. */
+      stacked: true,
+      data: timelineRows.map((row) => {
+        const out: Record<string, string | number> = { school_name: row.school_name };
+        for (const state of timelineSeries) {
+          out[state.field] = row[state.field as keyof typeof row] as number;
+        }
+        return out;
+      }),
+    });
+  }
+
+  // -- The school-by-school table -------------------------------------------
+  if (schools.length > 0) {
+    /**
+     * Worst arrears first. The reference layout lists schools alphabetically,
+     * which is the right order for looking a school UP and the wrong one for
+     * the question this page is opened with — a management reader wants the
+     * school that needs attention in the first row, not the one beginning with
+     * A. Stated in the notes so nobody reads the order as alphabetical and
+     * concludes their school is missing.
+     */
+    const ranked = [...schools].sort((a, b) => b.current.outstanding - a.current.outstanding);
+
+    widgets.push({
+      id: 'table-school',
+      type: 'table',
+      title: `School by school · ${year} against ${compareYear}`,
+      columns: [
+        { field: 'rank', label: '#', align: 'right' },
+        { field: 'school_name', label: 'School' },
+        { field: 'payable', label: 'Demand raised', align: 'right', sort_field: 'payable_n' },
+        { field: 'payable_share', label: '% of demand', align: 'right', sort_field: 'payable_share_n' },
+        { field: 'collected', label: 'Collected', align: 'right', sort_field: 'collected_n' },
+        { field: 'collected_share', label: '% of collected', align: 'right', sort_field: 'collected_share_n' },
+        { field: 'outstanding', label: 'Outstanding', align: 'right', sort_field: 'outstanding_n' },
+        { field: 'recovery', label: `Recovery · ${year}`, align: 'right', sort_field: 'recovery_n' },
+        { field: 'recovery_prev', label: `Recovery · ${compareYear}`, align: 'right', sort_field: 'recovery_prev_n' },
+        { field: 'change', label: 'Change', align: 'right', sort_field: 'change_n' },
+        { field: 'payable_prev', label: `Demand · ${compareYear}`, align: 'right', sort_field: 'payable_prev_n' },
+        { field: 'collected_prev', label: `Collected · ${compareYear}`, align: 'right', sort_field: 'collected_prev_n' },
+        { field: 'advance', label: 'In advance', align: 'right', sort_field: 'advance_n' },
+        { field: 'same_month', label: 'In the month', align: 'right', sort_field: 'same_month_n' },
+        { field: 'late', label: 'After the month', align: 'right', sort_field: 'late_n' },
+        { field: 'pending', label: 'Pending', align: 'right', sort_field: 'pending_n' },
+        { field: 'status', label: 'Status' },
+      ],
+      rows: ranked.map((entry, index) => {
+        const now = share(entry.current.collected, entry.current.payable);
+        const then = share(entry.compare.collected, entry.compare.payable);
+        const timing = timingBySchool.get(entry.schoolId);
+        const base =
+          timing === undefined
+            ? 0
+            : timelineBase(num(timing['receipts']), entry.current.outstanding);
+        const advance = timing === undefined ? null : share(num(timing['advance']), base);
+        const sameMonth = timing === undefined ? null : share(num(timing['same_month']), base);
+        const late =
+          timing === undefined
+            ? null
+            : share(num(timing['next_month']) + num(timing['later']), base);
+        const pending = timing === undefined ? null : share(entry.current.outstanding, base);
+        return {
+          rank: index + 1,
+          school_name: entry.name,
+          /**
+           * Amounts and rates travel as PRE-FORMATTED strings, the same rule
+           * every KPI value on this platform follows (ADR-015/021): the screen
+           * and the PDF must not each decide what a rupee looks like. The raw
+           * number travels beside it under `*_n` purely so the reader can SORT
+           * the column — sorting "₹2.4 Cr" as text puts it under "₹9.8 L".
+           */
+          payable: rupees(entry.current.payable),
+          payable_n: entry.current.payable,
+          payable_share: pct(share(entry.current.payable, total.current.payable)),
+          payable_share_n: pctValue(share(entry.current.payable, total.current.payable)),
+          collected: rupees(entry.current.collected),
+          collected_n: entry.current.collected,
+          collected_share: pct(share(entry.current.collected, total.current.collected)),
+          collected_share_n: pctValue(share(entry.current.collected, total.current.collected)),
+          outstanding: rupees(entry.current.outstanding),
+          outstanding_n: entry.current.outstanding,
+          recovery: pct(now),
+          recovery_n: pctValue(now),
+          recovery_prev: pct(then),
+          recovery_prev_n: pctValue(then),
+          change: pointsDelta(now, then) ?? '—',
+          change_n: now === null || then === null ? 0 : Number(((now - then) * 100).toFixed(1)),
+          payable_prev: rupees(entry.compare.payable),
+          payable_prev_n: entry.compare.payable,
+          collected_prev: rupees(entry.compare.collected),
+          collected_prev_n: entry.compare.collected,
+          advance: pct(advance),
+          advance_n: pctValue(advance),
+          same_month: pct(sameMonth),
+          same_month_n: pctValue(sameMonth),
+          late: pct(late),
+          late_n: pctValue(late),
+          pending: pct(pending),
+          pending_n: pctValue(pending),
+          status: recoveryBand(now).label,
+        };
+      }),
+    });
+  }
+
+  // -- Where to look first ---------------------------------------------------
+  /**
+   * The reference layout draws these as a strip of small cards under the table.
+   * They are a TABLE here for a reason that is not laziness: the shared renderer
+   * gathers every `kpi` widget in a spec into the one strip at the top of the
+   * page (chart-spec react/ChartSpecView.tsx), which is what makes every report
+   * in this product lay out the same way — so a second strip at the bottom is a
+   * renderer change, not a report's decision to make. Three columns say the same
+   * thing the cards do: what the highlight is, which school it names, and the
+   * number behind it.
+   */
+  const rated = schools
+    .map((entry) => ({ entry, recovery: share(entry.current.collected, entry.current.payable) }))
+    .filter((row): row is { entry: (typeof schools)[number]; recovery: number } => row.recovery !== null);
+
+  if (rated.length > 0) {
+    const best = rated.reduce((a, b) => (b.recovery > a.recovery ? b : a));
+    const worst = rated.reduce((a, b) => (b.recovery < a.recovery ? b : a));
+    const arrears = schools.reduce((a, b) => (b.current.outstanding > a.current.outstanding ? b : a));
+    /**
+     * The mean of the SCHOOLS' rates, and labelled as exactly that. It is a
+     * different number from the overall recovery in the KPI strip — that one is
+     * money-weighted — and the gap between them is the point: a trust whose
+     * average school recovers 88% while its money recovers 93% is a trust whose
+     * small schools are the problem.
+     */
+    const averageRate = rated.reduce((sum, row) => sum + row.recovery, 0) / rated.length;
+
+    const advanceRanked = schools
+      .map((entry) => {
+        const timing = timingBySchool.get(entry.schoolId);
+        if (timing === undefined) return null;
+        const base = timelineBase(num(timing['receipts']), entry.current.outstanding);
+        const value = share(num(timing['advance']), base);
+        return value === null ? null : { entry, value };
+      })
+      .filter((row): row is { entry: (typeof schools)[number]; value: number } => row !== null);
+    const mostAdvance =
+      advanceRanked.length === 0
+        ? null
+        : advanceRanked.reduce((a, b) => (b.value > a.value ? b : a));
+
+    const onTimeTotal =
+      timingTotal === null
+        ? null
+        : share(
+            num(timingTotal['advance']) + num(timingTotal['same_month']),
+            timelineBase(num(timingTotal['receipts']), total.current.outstanding),
+          );
+    const lateTotal =
+      timingTotal === null
+        ? null
+        : share(
+            num(timingTotal['next_month']) + num(timingTotal['later']) + total.current.outstanding,
+            timelineBase(num(timingTotal['receipts']), total.current.outstanding),
+          );
+
+    widgets.push({
+      id: 'table-highlights',
+      type: 'table',
+      title: 'Where to look first',
+      columns: [
+        { field: 'highlight', label: 'Highlight' },
+        { field: 'school_name', label: 'School' },
+        { field: 'value', label: 'Value', align: 'right' },
+      ],
+      rows: [
+        { highlight: 'Best recovery', school_name: best.entry.name, value: pct(best.recovery) },
+        { highlight: 'Lowest recovery', school_name: worst.entry.name, value: pct(worst.recovery) },
+        {
+          highlight: 'Largest outstanding',
+          school_name: arrears.name,
+          value: rupees(arrears.current.outstanding),
+        },
+        ...(mostAdvance === null
+          ? []
+          : [
+              {
+                highlight: 'Most paid in advance',
+                school_name: mostAdvance.entry.name,
+                value: pct(mostAdvance.value),
+              },
+            ]),
+        {
+          highlight: 'Average school recovery',
+          /**
+           * A figure about the whole selection, so the school column says so
+           * rather than naming one — and says how many schools it averaged,
+           * because a mean of two is a different claim from a mean of twenty.
+           */
+          school_name: `across ${count(rated.length)} schools`,
+          value: pct(averageRate),
+        },
+        ...(onTimeTotal === null
+          ? []
+          : [
+              {
+                highlight: 'Collected on time or early',
+                school_name: 'across the selection',
+                value: pct(onTimeTotal),
+              },
+            ]),
+        ...(lateTotal === null
+          ? []
+          : [
+              {
+                highlight: 'Late or still pending',
+                school_name: 'across the selection',
+                value: pct(lateTotal),
+              },
+            ]),
+      ],
+    });
+  }
+
+  return {
+    widgets,
+    groupBy: ['academic year', 'school', 'fee period', 'instalment', 'class'],
+    notes: [
+      /**
+       * First in the list, because it is the caveat that decides how every
+       * other number on the page should be read, and because the shape of the
+       * data makes it invisible: a school five months into the year shows ~52%
+       * recovery against a closed year's ~99%, which the status bands then grade
+       * "Needs attention" for every school at once. That is not a school in
+       * trouble, it is a year in progress — and a reader who is not told will
+       * either panic or, worse, learn to ignore the badge.
+       */
+      `The two years are NOT like for like unless ${year} has finished. Fee demand is raised for the whole year up front while collection is still arriving, so a mid-year total will always look far behind a completed year — read the per-period charts, where each month is compared against the same month, rather than the year totals.`,
+      `Every figure compares ${year} with ${compareYear}. A change in a RATE is quoted in percentage points (pp) and a change in an AMOUNT as a percentage — 90% to 94% is +4 pp, not +4%. A change beyond tenfold is quoted as a multiple, because a five-figure percentage is exact and unreadable.`,
+      'Rates are computed from summed totals, never averaged across schools, so a large school weighs more than a small one — except the "average school recovery" highlight, which is the mean of the schools’ own rates and is labelled as such.',
+      'Demand, collection and outstanding come from the fee demand ledger (what was owed and settled). Outstanding is the ledger’s own balance, not demand minus collection: the two differ wherever a fee head has been over-received.',
+      'The payment-timing states come from the RECEIPT ledger, which records when money arrived; "still pending" comes from the demand ledger. The two ledgers do not tie to the rupee, so the timeline is drawn as a share of receipts plus outstanding demand rather than of demand raised.',
+      'A receipt is early, on time or late by the MONTH it was banked against the month its instalment closed: before that month is "in advance", the same month is on time, and after it is late. A receipt whose instalment records no closing date is shown separately as "timing not recorded" rather than counted either way.',
+      `Recovery bands: ${RECOVERY_BANDS.map((b) => `${b.label} at ${(b.floor * 100).toFixed(0)}% and above`).join(', ')}. A school that raised no demand has no rate and is not graded.`,
+      'The school table is ordered by outstanding amount, largest first — not alphabetically. Any column can be sorted by clicking its heading.',
+      'The charts are grouped by the MONTH a fee was demanded for, not by the instalment’s name: schools write that name differently every year ("APR 2025-26" one year, "April 2026-27" the next), so comparing on it would put the two years in separate columns. Click a school to see its own instalment names.',
     ],
   };
 }
@@ -3042,6 +4190,1174 @@ function buildLibraryTextbooks(merged: Merged, { asOf }: BuildContext): Dashboar
 // -- Merging ------------------------------------------------------------------
 
 /** Exported for services/custom-reports.ts, which merges a `run_predefined` result the same way `buildDashboard` does. */
+
+// -- Trend Analysis -----------------------------------------------------------
+
+/**
+ * The category the catalog's `LEAVING_REASON` files Class XII completion under.
+ *
+ * A STRING shared across two modules, which is a coupling worth naming rather
+ * than hiding. The MCP server buckets free-text leaving reasons into a small set
+ * (reports/catalog.ts) and this module has to know which of those buckets is
+ * graduation, because every attrition figure on this page is defined as
+ * departures EXCLUDING it — 58% of all departures in the delivered extract, so
+ * getting it wrong does not shade a number, it triples one.
+ *
+ * There is no shared enum to import: the buckets exist only as arms of a SQL
+ * CASE, and lifting them into a package that both apps depend on would put
+ * presentation vocabulary into the data plane's contract for one string. So the
+ * coupling is declared here and CHECKED — test/trend.test.ts asserts the
+ * catalog's SQL still contains this exact literal, which turns a silent
+ * miscount into a failing test the day someone rewords the arm.
+ */
+const GRADUATION_REASON = 'Completed Class XII';
+
+/**
+ * How many months the rolling average is taken over.
+ *
+ * Twelve, because the series it smooths is seasonal by construction: a school's
+ * fee calendar peaks every April and troughs every June (measured across the
+ * extract — April 2026 collected ₹15.8Cr against June's ₹5.0Cr). Any window that
+ * is not a whole number of years leaves that seasonality in the "trend" line,
+ * which would then rise and fall for reasons the trend has nothing to do with.
+ */
+const ROLLING_WINDOW = 12;
+
+/**
+ * How many academic years the seasonality chart draws.
+ *
+ * Four, and this is a CAP rather than a natural limit — the report holds seven.
+ * The renderer's categorical palette is four steps before it folds into two
+ * repeating neutrals (react/widgets.tsx), and seven overlaid lines on one pair of
+ * axes is a chart nobody reads regardless of colour. The four most recent answer
+ * the question the chart exists for ("is this year tracking last year's shape?");
+ * the older ones are on the timeline above it and in the table below.
+ *
+ * The years NOT drawn are named in the report's notes, because a silently
+ * truncated chart reads as a complete one.
+ */
+const SEASONALITY_YEARS = 4;
+
+/**
+ * How many categories a multi-series chart names before folding the rest.
+ *
+ * Four named plus one "other", which is the renderer's palette: four steps and
+ * then two repeating neutrals (react/widgets.tsx). A stack whose fifth and sixth
+ * segments are both grey is a stack with one segment as far as a reader can
+ * tell, and a sixth LINE in a repeated colour is a line a reader will attribute
+ * to the wrong school.
+ *
+ * The fold is never silent — the folded category is drawn and labelled with how
+ * many it stands for, so a stacked bar still sums to the whole and a folded line
+ * is visibly a sum rather than a missing school.
+ */
+const SERIES_CATEGORIES = 4;
+
+/** One month of the receipt ledger, summed across whatever schools are in scope. */
+interface MonthTotals {
+  collected: number;
+  receipts: number;
+}
+
+function zeroMonth(): MonthTotals {
+  return { collected: 0, receipts: 0 };
+}
+
+/** `2026-04` → `{ year: 2026, month: 4 }`, or null for anything else. */
+function parseYm(value: unknown): { year: number; month: number } | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value ?? ''));
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+/**
+ * The academic year a calendar month belongs to, as the year it STARTED.
+ *
+ * The same 1 April boundary `academicYearWindow` fixes and `periodOrder` shifts
+ * on, applied to a (year, month) pair: February 2026 is 2025-26, so it returns
+ * 2025. Derived here rather than read back from the SQL because the base
+ * dashboard's charts group months the orchestrator already holds — the drilled
+ * levels, which cannot re-group in the orchestrator, get the same arithmetic
+ * from `academicYearStart` in the catalog.
+ */
+function academicYearStartOf(point: { year: number; month: number }): number {
+  return point.month < 4 ? point.year - 1 : point.year;
+}
+
+/** `2025` → `2025-26`, the shape the ERP writes and the rest of the UI shows. */
+function academicYearLabel(start: number): string {
+  return `${String(start)}-${String((start + 1) % 100).padStart(2, '0')}`;
+}
+
+/**
+ * An academic year LABEL back to the year it started, or null if it is not one.
+ *
+ * Strict on purpose. `students_data_set.academicyearname` is free text, and
+ * beside twelve well-formed years the delivered extract holds '04', '05',
+ * '2010-11 New', '1995-96' and 'Demo_Palak_2030-2031' (read 2026-08-31). A
+ * lenient parse that took the leading four digits would turn '2010-11 New' into a
+ * second 2010-11 and silently double that year's roll.
+ *
+ * Both shapes are accepted because the ERP writes both — `2025-26` on the student
+ * table and `2025-2026` on the fee tables — and the two-digit form is checked
+ * against the century it claims, so '2025-99' is rejected rather than drawn as a
+ * year that cannot exist.
+ */
+function parseAcademicYearLabel(value: unknown): number | null {
+  const text = String(value ?? '').trim();
+  const long = /^(\d{4})-(\d{4})$/.exec(text);
+  if (long !== null) {
+    const start = Number(long[1]);
+    return Number(long[2]) === start + 1 ? start : null;
+  }
+  const short = /^(\d{4})-(\d{2})$/.exec(text);
+  if (short !== null) {
+    const start = Number(short[1]);
+    return Number(short[2]) === (start + 1) % 100 ? start : null;
+  }
+  return null;
+}
+
+/**
+ * The longest run of consecutive years ending at the most recent one.
+ *
+ * A trend line drawn across a gap is not a trend, and this dataset has gaps: a
+ * scope that includes the extract's older schools picks up a single student
+ * filed under '1995-96' and then nothing until 2006. Drawn literally that is a
+ * thirty-year axis carrying one point at the far left and the real series
+ * squeezed into the right-hand third — the same axis destruction the catalog's
+ * `DATE_FLOOR` exists to prevent, arriving through a different door.
+ *
+ * Anchored at the RECENT end rather than the long end because this is a report
+ * about where things are heading: a school with 2015-2019 and 2023-2026 on file
+ * should be shown the recent run, not the older one because it happens to be
+ * longer. The years this drops are counted and named on screen.
+ */
+function contiguousRun(years: readonly number[]): number[] {
+  const sorted = [...new Set(years)].sort((a, b) => a - b);
+  const latest = sorted[sorted.length - 1];
+  if (latest === undefined) return [];
+  let start = latest;
+  for (let i = sorted.length - 1; i > 0; i -= 1) {
+    const previous = sorted[i - 1];
+    const current = sorted[i];
+    if (previous === undefined || current === undefined || previous !== current - 1) break;
+    start = previous;
+  }
+  return sorted.filter((year) => year >= start);
+}
+
+/**
+ * The categories to draw by name, largest first, and whether a fold is needed.
+ *
+ * Returns the named set only; the caller folds everything else into one labelled
+ * remainder. Split out because both stacked charts on this page need it — payment
+ * modes and leaving reasons — and they must fold the same way or one chart's
+ * "Other" means something different from the other's.
+ */
+function topCategories(totals: ReadonlyMap<string, number>, limit: number): string[] {
+  return [...totals.entries()]
+    .filter(([, value]) => value > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([name]) => name);
+}
+
+/**
+ * Trend Analysis — how the school has moved over the years the extract can see.
+ *
+ * The long view of the same book Comparative Analysis reads two years of: fee
+ * collection month by month since April 2020, enrollment across twelve academic
+ * years, and staff joining and leaving since 2011. Every figure is computed here
+ * from five result sets; nothing on this page is a constant.
+ *
+ * -- The one thing this page must not do -------------------------------------
+ * Draw a partial year as if it were a whole one. The report is opened mid-year
+ * by definition — on 31 August the current academic year is five months old —
+ * and a bar chart that puts ₹18.6Cr for 2026-27 beside ₹36.7Cr for 2025-26
+ * reports a school that has lost half its income, which is the opposite of the
+ * truth. So the current year is compared LIKE FOR LIKE: the same academic months
+ * of the previous year, counted from the as-of date, with the full previous year
+ * shown beside it so the reader can see both readings rather than trust one.
+ *
+ * -- Where each series stops, and why they differ ----------------------------
+ * Fees and departures are bounded by the as-of date, because both are events with
+ * dates. Enrollment is not — a student is on the roll OF a year, and there is no
+ * honest way to ask this extract what a roll looked like in August. So the
+ * enrollment series runs to the latest academic year the data holds and says so,
+ * rather than pretending to a precision the table cannot support.
+ */
+function buildTrendAnalysis(merged: Merged, { asOf, scope }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+  /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
+  const path = DRILL_PATHS['trend-analysis'] as DrillPath;
+  const named = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+  const notes: string[] = [];
+
+  // -- The receipt ledger: one result set, three charts ----------------------
+  const monthRows = merged.concatRows('collection_by_month');
+
+  const byMonth = new Map<string, MonthTotals>();
+  const byYear = new Map<number, MonthTotals>();
+  /** Academic year → academic month index (April = 0) → money. */
+  const byYearMonth = new Map<number, Map<number, number>>();
+  /** Academic year → payment mode → money. */
+  const byYearMode = new Map<number, Map<string, number>>();
+  const modeTotals = new Map<string, number>();
+  const bySchool = new Map<string, number>();
+  /** School → month → money, for the per-school timeline. */
+  const bySchoolMonth = new Map<string, Map<string, number>>();
+
+  for (const { school_id, row } of monthRows) {
+    const point = parseYm(row['ym']);
+    /**
+     * A month the ledger could not date is dropped rather than bucketed. Every
+     * chart built from these rows is a TIME series, and a row with no position
+     * on the axis has nowhere honest to go — unlike Comparative Analysis' "no
+     * period recorded", which is a category on a categorical axis and is drawn.
+     * The SQL already excludes NULL `feedate`, so this is defence against a
+     * shape change rather than a live loss (§3: a row is external data).
+     */
+    if (point === null) continue;
+
+    const ym = `${String(point.year)}-${String(point.month).padStart(2, '0')}`;
+    const collected = num(row['collected']);
+    const receipts = num(row['receipts']);
+
+    const month = byMonth.get(ym) ?? zeroMonth();
+    month.collected += collected;
+    month.receipts += receipts;
+    byMonth.set(ym, month);
+
+    const ayStart = academicYearStartOf(point);
+    const year = byYear.get(ayStart) ?? zeroMonth();
+    year.collected += collected;
+    year.receipts += receipts;
+    byYear.set(ayStart, year);
+
+    /** The same April-first shift the seasonality axis and the drill both use. */
+    const monthIndex = periodOrder(point.month);
+    const months = byYearMonth.get(ayStart) ?? new Map<number, number>();
+    months.set(monthIndex, (months.get(monthIndex) ?? 0) + collected);
+    byYearMonth.set(ayStart, months);
+
+    const mode = label(row['paymenttype']);
+    const modes = byYearMode.get(ayStart) ?? new Map<string, number>();
+    modes.set(mode, (modes.get(mode) ?? 0) + collected);
+    byYearMode.set(ayStart, modes);
+    modeTotals.set(mode, (modeTotals.get(mode) ?? 0) + collected);
+
+    bySchool.set(school_id, (bySchool.get(school_id) ?? 0) + collected);
+    const schoolMonths = bySchoolMonth.get(school_id) ?? new Map<string, number>();
+    schoolMonths.set(ym, (schoolMonths.get(ym) ?? 0) + collected);
+    bySchoolMonth.set(school_id, schoolMonths);
+  }
+
+  const months = [...byMonth.keys()].sort();
+  const feeYears = [...byYear.keys()].sort((a, b) => a - b);
+  const latestFeeYear = feeYears[feeYears.length - 1];
+
+  /**
+   * How much of the current academic year the as-of date has covered, as a count
+   * of academic months — 1 on 15 April, 5 on 31 August.
+   *
+   * Derived from the as-of date rather than from the data, and the difference
+   * matters: a school that has collected nothing since June still has five months
+   * elapsed, and measuring elapsed time by "months with receipts" would compare
+   * its three months against last year's three best and report it as ahead.
+   */
+  const asOfPoint = parseYm(asOf.slice(0, 7));
+  const monthsElapsed = asOfPoint === null ? 12 : periodOrder(asOfPoint.month) + 1;
+
+  /** One academic year's money over only its first `count` months. */
+  function partialYear(ayStart: number, count: number): number {
+    const yearMonths = byYearMonth.get(ayStart);
+    if (yearMonths === undefined) return 0;
+    let total = 0;
+    for (const [index, value] of yearMonths) {
+      if (index < count) total += value;
+    }
+    return total;
+  }
+
+  // -- KPI strip -------------------------------------------------------------
+  if (months.length > 0) {
+    const first = months[0] ?? '';
+    const last = months[months.length - 1] ?? '';
+
+    widgets.push({
+      id: 'kpi-span',
+      type: 'kpi',
+      label: 'History covered',
+      value: `${count(feeYears.length)} academic years`,
+      tone: 'neutral',
+      breakdown: [
+        { label: 'From', value: monthLabel(first) },
+        { label: 'To', value: monthLabel(last) },
+      ],
+    });
+
+    if (latestFeeYear !== undefined) {
+      const previousYear = latestFeeYear - 1;
+      const currentToDate = partialYear(latestFeeYear, monthsElapsed);
+      const previousToDate = partialYear(previousYear, monthsElapsed);
+      const previousFull = byYear.get(previousYear)?.collected ?? 0;
+      /**
+       * The comparison is against the SAME months of the previous year, never
+       * against its full total — see the header note. The full total is shown
+       * beside it in the breakdown rather than used as the denominator, so both
+       * readings are on screen and only the honest one drives the pill.
+       */
+      const delta = amountDelta(currentToDate, previousToDate);
+      widgets.push({
+        id: 'kpi-collected',
+        type: 'kpi',
+        label: `Collected · ${academicYearLabel(latestFeeYear)}`,
+        value: rupees(currentToDate),
+        ...(delta === null
+          ? {}
+          : { delta: `${delta} vs same months of ${academicYearLabel(previousYear)}` }),
+        tone: 'positive',
+        breakdown: [
+          {
+            label: `First ${count(monthsElapsed)} months · ${academicYearLabel(previousYear)}`,
+            value: rupees(previousToDate),
+          },
+          { label: `Full year · ${academicYearLabel(previousYear)}`, value: rupees(previousFull) },
+        ],
+      });
+
+      /**
+       * Digital adoption, as a share of the year's money rather than of its
+       * receipts. Both are true and they differ — cash receipts are many and
+       * small — but a bursar deciding whether to keep a cash counter open is
+       * asking about money, and the share of RECEIPTS would overstate how much
+       * of the book still arrives in person.
+       */
+      const currentModes = byYearMode.get(latestFeeYear);
+      const previousModes = byYearMode.get(feeYears[0] ?? latestFeeYear);
+      const onlineNow = share(currentModes?.get('Online') ?? 0, byYear.get(latestFeeYear)?.collected ?? 0);
+      const onlineThen = share(
+        previousModes?.get('Online') ?? 0,
+        byYear.get(feeYears[0] ?? latestFeeYear)?.collected ?? 0,
+      );
+      const firstYearLabel = academicYearLabel(feeYears[0] ?? latestFeeYear);
+      widgets.push({
+        id: 'kpi-online',
+        type: 'kpi',
+        label: 'Paid online',
+        value: pct(onlineNow),
+        ...(pointsDelta(onlineNow, onlineThen) === null
+          ? {}
+          : { delta: `${pointsDelta(onlineNow, onlineThen) ?? ''} since ${firstYearLabel}` }),
+        tone: 'positive',
+        breakdown: [
+          { label: `Was · ${firstYearLabel}`, value: pct(onlineThen) },
+          {
+            label: 'Cash and cheque now',
+            value: pct(
+              share(
+                (currentModes?.get('Cash') ?? 0) + (currentModes?.get('Cheque') ?? 0),
+                byYear.get(latestFeeYear)?.collected ?? 0,
+              ),
+            ),
+          },
+        ],
+      });
+    }
+  }
+
+  // -- Enrollment ------------------------------------------------------------
+  const enrollmentRows = merged.sumBy('enrollment_by_year', 'ay', ['students', 'girls', 'boys']);
+  const byAy = new Map<number, { students: number; girls: number; boys: number }>();
+  const rejectedYears: string[] = [];
+  for (const row of enrollmentRows) {
+    const start = parseAcademicYearLabel(row['ay']);
+    if (start === null) {
+      rejectedYears.push(label(row['ay']));
+      continue;
+    }
+    byAy.set(start, {
+      students: num(row['students']),
+      girls: num(row['girls']),
+      boys: num(row['boys']),
+    });
+  }
+  const drawnYears = contiguousRun([...byAy.keys()]);
+  const droppedYears = [...byAy.keys()].filter((year) => !drawnYears.includes(year)).sort((a, b) => a - b);
+  const latestAy = drawnYears[drawnYears.length - 1];
+  const earliestAy = drawnYears[0];
+
+  if (latestAy !== undefined && earliestAy !== undefined && drawnYears.length > 0) {
+    const now = byAy.get(latestAy);
+    const then = byAy.get(earliestAy);
+    if (now !== undefined && then !== undefined) {
+      const delta = amountDelta(now.students, then.students);
+      widgets.push({
+        id: 'kpi-students',
+        type: 'kpi',
+        label: `Students on roll · ${academicYearLabel(latestAy)}`,
+        value: count(now.students),
+        ...(delta === null
+          ? {}
+          : { delta: `${delta} since ${academicYearLabel(earliestAy)}` }),
+        tone: 'neutral',
+        breakdown: [
+          { label: 'Girls', value: count(now.girls) },
+          { label: 'Boys', value: count(now.boys) },
+        ],
+      });
+    }
+  }
+
+  // -- Departures ------------------------------------------------------------
+  const exitRows = merged.concatRows('student_exits');
+  /** Calendar year → reason → students. */
+  const exitsByYear = new Map<number, Map<string, number>>();
+  const reasonTotals = new Map<string, number>();
+  const graduatedByYear = new Map<number, number>();
+  for (const { row } of exitRows) {
+    const year = num(row['y']);
+    if (!Number.isInteger(year) || year <= 0) continue;
+    const reason = label(row['reason']);
+    const students = num(row['students']);
+    if (reason === GRADUATION_REASON) {
+      graduatedByYear.set(year, (graduatedByYear.get(year) ?? 0) + students);
+      continue;
+    }
+    const reasons = exitsByYear.get(year) ?? new Map<string, number>();
+    reasons.set(reason, (reasons.get(reason) ?? 0) + students);
+    exitsByYear.set(year, reasons);
+    reasonTotals.set(reason, (reasonTotals.get(reason) ?? 0) + students);
+  }
+
+  /**
+   * The most recent CALENDAR year the as-of date has seen all of.
+   *
+   * Departure counts are per calendar year, so the current one is partial for the
+   * same reason the current academic year is, and the KPI would otherwise report
+   * a collapse in attrition every January. A year is complete only if the as-of
+   * date is on or after its 31 December.
+   */
+  const asOfYear = Number(asOf.slice(0, 4));
+  const lastCompleteYear = Number.isInteger(asOfYear)
+    ? asOf >= `${String(asOfYear)}-12-31`
+      ? asOfYear
+      : asOfYear - 1
+    : null;
+
+  if (lastCompleteYear !== null && exitsByYear.has(lastCompleteYear)) {
+    const early = [...(exitsByYear.get(lastCompleteYear)?.values() ?? [])].reduce((a, b) => a + b, 0);
+    const earlyBefore = [...(exitsByYear.get(lastCompleteYear - 1)?.values() ?? [])].reduce(
+      (a, b) => a + b,
+      0,
+    );
+    const graduated = graduatedByYear.get(lastCompleteYear) ?? 0;
+    const change = amountDelta(early, earlyBefore);
+    widgets.push({
+      id: 'kpi-attrition',
+      type: 'kpi',
+      label: `Left before finishing · ${String(lastCompleteYear)}`,
+      value: count(early),
+      /**
+       * Stated in words rather than as a signed pill, the same decision
+       * Comparative Analysis makes for arrears: the renderer colours a leading
+       * `+` green, and more students leaving is not good news.
+       */
+      ...(change === null
+        ? {}
+        : {
+            delta: `${change.startsWith('−') ? 'down' : 'up'} ${change.replace(/^[+−]/, '')} on ${String(lastCompleteYear - 1)}`,
+          }),
+      tone: early > 0 ? 'warning' : 'neutral',
+      breakdown: [
+        { label: 'Completed Class XII', value: count(graduated) },
+        {
+          label: 'Of all departures',
+          value: pct(share(early, early + graduated)),
+          tone: 'warning',
+        },
+      ],
+    });
+  }
+
+  // -- Staff -----------------------------------------------------------------
+  const joinRows = merged.sumBy('staff_joins', 'y', ['staff']);
+  const exitStaffRows = merged.sumBy('staff_exits', 'y', ['staff']);
+  const staffByYear = new Map<number, { joins: number; exits: number }>();
+  for (const row of joinRows) {
+    const year = num(row['y']);
+    if (!Number.isInteger(year) || year <= 0) continue;
+    const entry = staffByYear.get(year) ?? { joins: 0, exits: 0 };
+    entry.joins += num(row['staff']);
+    staffByYear.set(year, entry);
+  }
+  for (const row of exitStaffRows) {
+    const year = num(row['y']);
+    if (!Number.isInteger(year) || year <= 0) continue;
+    const entry = staffByYear.get(year) ?? { joins: 0, exits: 0 };
+    entry.exits += num(row['staff']);
+    staffByYear.set(year, entry);
+  }
+  const staffYears = contiguousRun([...staffByYear.keys()]);
+  /**
+   * The same stranded-year problem enrollment has, and it is live here rather
+   * than defensive: across the three St Marks schools the staff record holds
+   * genuine joiners in 1976, 1977, 1983 and 1984 and then gaps, before running
+   * unbroken from 1987. Those four are real people and are not corruption — the
+   * catalog's `DATE_FLOOR` already removed the one corrupt value — so they are
+   * dropped by the run rule and COUNTED here, not quietly discarded.
+   */
+  const droppedStaffYears = [...staffByYear.keys()]
+    .filter((year) => !staffYears.includes(year))
+    .sort((a, b) => a - b);
+
+  if (lastCompleteYear !== null && staffByYear.has(lastCompleteYear)) {
+    const entry = staffByYear.get(lastCompleteYear) ?? { joins: 0, exits: 0 };
+    const net = entry.joins - entry.exits;
+    widgets.push({
+      id: 'kpi-staff',
+      type: 'kpi',
+      label: `Net staff change · ${String(lastCompleteYear)}`,
+      /**
+       * Signed explicitly, because a net of zero and a net of −40 are both
+       * "0" once a minus sign goes missing, and this is the one tile whose
+       * whole content is a direction.
+       */
+      value: `${net > 0 ? '+' : net < 0 ? '−' : ''}${count(Math.abs(net))}`,
+      tone: net >= 0 ? 'positive' : 'warning',
+      breakdown: [
+        { label: 'Joined', value: count(entry.joins) },
+        { label: 'Left', value: count(entry.exits), tone: 'warning' },
+      ],
+    });
+  }
+
+  // -- The monthly timeline ---------------------------------------------------
+  /**
+   * ONE LINE PER SCHOOL when there are several, and the aggregate with its
+   * twelve-month trend when there is only one.
+   *
+   * -- Why the chart changes shape with the scope ------------------------------
+   * The two versions answer the questions their scope can actually pose. With
+   * three schools selected, the useful question is which of them is growing and
+   * which is flat, and a single summed line cannot be asked it at all — three
+   * schools moving in opposite directions and one moving steadily produce the
+   * same total. With ONE school selected there is no comparison to draw, so the
+   * axis is better spent on the twelve-month average, which is what separates a
+   * genuine trend from the April spike that recurs every year.
+   *
+   * They are not merged into one chart because the merge is unreadable rather
+   * than merely busy: three schools plus their three averages is six lines in a
+   * four-colour palette, and a school's own average crossing its own raw line
+   * every few months is the exact shape a reader mistakes for two schools
+   * changing places.
+   *
+   * -- Why the lines are RAW months and not each school's average --------------
+   * Checked against the extract before choosing (2026-08-31, the three St Marks
+   * schools): Meera Bagh averages ₹3.0Cr a month against Janakpuri's ₹1.7Cr and
+   * World School's ₹1.6Cr, and the bands barely touch — Meera Bagh is above the
+   * other two in essentially every month, and the lower pair run parallel rather
+   * than crossing. So the raw series separate cleanly and there is nothing for
+   * smoothing to rescue. It also keeps the amounts real: a reader hovering April
+   * 2026 gets what that school actually banked, not a windowed mean of it.
+   *
+   * The seasonality this leaves in each line is not noise being tolerated — it
+   * is the same shape the chart below draws deliberately, and seeing all three
+   * schools share it is itself the finding that they are one fee calendar.
+   */
+  const schoolSeriesIds = topCategories(bySchool, SERIES_CATEGORIES);
+  const foldedSchools = [...bySchool.keys()].filter((id) => !schoolSeriesIds.includes(id));
+  const perSchoolTimeline = bySchool.size > 1;
+
+  if (months.length > 0 && perSchoolTimeline) {
+    /**
+     * A trust can hold more schools than the palette has colours, so the
+     * smallest are summed into one labelled line rather than drawn in a repeated
+     * colour that would read as one of the named schools. Named by how much each
+     * collected, so the fold takes the schools a reader is least likely to be
+     * looking for — and says how many it stands for.
+     */
+    const folded = foldedSchools.length > 0 ? `Other schools (${count(foldedSchools.length)})` : null;
+    const timeline: Record<string, string | number>[] = [];
+    for (const ym of months) {
+      for (const schoolId of schoolSeriesIds) {
+        const value = bySchoolMonth.get(schoolId)?.get(ym);
+        /**
+         * A month a school has no row for is LEFT OUT, never written as zero.
+         * The renderer draws the gap (`pivotSeries` simply has no key for it),
+         * which is the honest mark for a school that was not yet on the platform
+         * — a zero would claim it banked nothing that month, and on a line chart
+         * that reads as a collapse rather than an absence.
+         */
+        if (value === undefined) continue;
+        timeline.push({ month: monthLabel(ym), school: named.get(schoolId) ?? schoolId, collected: value });
+      }
+      if (folded !== null) {
+        let sum = 0;
+        let seen = false;
+        for (const schoolId of foldedSchools) {
+          const value = bySchoolMonth.get(schoolId)?.get(ym);
+          if (value === undefined) continue;
+          seen = true;
+          sum += value;
+        }
+        if (seen) timeline.push({ month: monthLabel(ym), school: folded, collected: sum });
+      }
+    }
+
+    widgets.push({
+      id: 'line-collection',
+      type: 'line',
+      title: `Fee collected each month by school · ${monthLabel(months[0] ?? '')} to ${monthLabel(months[months.length - 1] ?? '')}`,
+      x: 'month',
+      y: 'collected',
+      series: 'school',
+      data: timeline,
+    });
+  }
+
+  if (months.length > 0 && !perSchoolTimeline) {
+    const timeline: Record<string, string | number>[] = [];
+    for (const [index, ym] of months.entries()) {
+      timeline.push({
+        month: monthLabel(ym),
+        measure: 'Collected in the month',
+        collected: byMonth.get(ym)?.collected ?? 0,
+      });
+      /**
+       * The rolling mean starts only once a full window exists. A twelve-month
+       * average computed over the first three months is an average of three
+       * months wearing the label of twelve, and it would open the chart with a
+       * dramatic climb that is nothing but the window filling up.
+       *
+       * Consecutive by POSITION rather than by date: `months` is the sorted list
+       * of months that carry receipts, so a school with a genuinely empty month
+       * has no entry and the window spans thirteen calendar months. That is the
+       * honest reading here — the average is of the last twelve months that
+       * happened, and a gap in a fee ledger is a school that collected nothing,
+       * which the timeline itself already shows.
+       */
+      if (index + 1 >= ROLLING_WINDOW) {
+        let sum = 0;
+        for (let back = 0; back < ROLLING_WINDOW; back += 1) {
+          sum += byMonth.get(months[index - back] ?? '')?.collected ?? 0;
+        }
+        timeline.push({
+          month: monthLabel(ym),
+          measure: `${String(ROLLING_WINDOW)}-month average`,
+          collected: Math.round(sum / ROLLING_WINDOW),
+        });
+      }
+    }
+
+    widgets.push({
+      id: 'line-collection',
+      type: 'line',
+      title: `Fee collected each month · ${monthLabel(months[0] ?? '')} to ${monthLabel(months[months.length - 1] ?? '')}`,
+      x: 'month',
+      y: 'collected',
+      series: 'measure',
+      data: timeline,
+    });
+  }
+
+  // -- The same money as a seasonal shape, one line per year -----------------
+  const seasonalityYears = feeYears.slice(-SEASONALITY_YEARS);
+  if (seasonalityYears.length > 0) {
+    const seasonality: Record<string, string | number>[] = [];
+    for (const ayStart of seasonalityYears) {
+      const yearMonths = byYearMonth.get(ayStart);
+      if (yearMonths === undefined) continue;
+      for (const [index, value] of [...yearMonths.entries()].sort((a, b) => a[0] - b[0])) {
+        /**
+         * `periodOrder` files a month it cannot place at 99,999. It has no
+         * position on an April-to-March axis, so it is left off this chart
+         * rather than drawn at the end where it would read as March.
+         */
+        if (index >= 12) continue;
+        seasonality.push({
+          month: MONTH_NAMES[((index + 3) % 12)] ?? '—',
+          ay: academicYearLabel(ayStart),
+          collected: value,
+        });
+      }
+    }
+
+    if (seasonality.length > 0) {
+      widgets.push({
+        id: 'line-seasonality',
+        type: 'line',
+        title: `The shape of a collection year · last ${count(seasonalityYears.length)} years, April to March`,
+        x: 'month',
+        y: 'collected',
+        series: 'ay',
+        data: seasonality,
+      });
+    }
+  }
+
+  // -- How the money arrives, as a share of each year ------------------------
+  const namedModes = topCategories(modeTotals, SERIES_CATEGORIES);
+  if (namedModes.length > 0 && feeYears.length > 0) {
+    const foldedModes = [...modeTotals.keys()].filter((mode) => !namedModes.includes(mode));
+    const modeSeries = [
+      ...namedModes.map((mode) => ({ field: `mode_${namedModes.indexOf(mode)}`, label: mode })),
+      ...(foldedModes.length > 0
+        ? [{ field: 'mode_other', label: `Other (${count(foldedModes.length)} modes)` }]
+        : []),
+    ];
+
+    /**
+     * Shares rather than amounts, and that is what makes this chart answer a
+     * different question from the timeline above it. In rupees every mode grows
+     * because the book grows, and the shift from cheque to online — the finding
+     * this chart exists for — is invisible under the growth. As a share of each
+     * year's own collection, the bars are all the same height and only the mix
+     * moves.
+     */
+    /**
+     * A MIX chart needs a mix. With one payment mode on file every bar is 100%
+     * tall and the chart says only what its own legend already says — so it is
+     * not drawn, and the note below says which mode that was. Skipping without
+     * a word would leave a reader looking for a panel the other schools have.
+     */
+    if (modeSeries.length < 2) {
+      notes.push(
+        `Every receipt on file was paid by ${namedModes[0] ?? 'one method'}, so there is no payment-mode mix to chart.`,
+      );
+    } else {
+      widgets.push({
+        id: 'bar-mode',
+        type: 'bar',
+        title: 'How fees were paid, as a share of each year’s collection',
+        x: 'ay',
+        y: modeSeries[0]?.field ?? 'mode_0',
+        series: modeSeries,
+        /** A partition of each year's money, not a comparison of measures. */
+        stacked: true,
+        data: feeYears.map((ayStart) => {
+          const modes = byYearMode.get(ayStart);
+          const total = byYear.get(ayStart)?.collected ?? 0;
+          const out: Record<string, string | number> = { ay: academicYearLabel(ayStart) };
+          let folded = 0;
+          for (const [mode, value] of modes ?? []) {
+            const index = namedModes.indexOf(mode);
+            if (index === -1) folded += value;
+            else out[`mode_${index}`] = pctValue(share(value, total));
+          }
+          for (const [index] of namedModes.entries()) {
+            out[`mode_${index}`] ??= 0;
+          }
+          if (foldedModes.length > 0) out['mode_other'] = pctValue(share(folded, total));
+          return out;
+        }),
+      });
+    }
+  }
+
+  // -- Enrollment, total and mix in one bar ----------------------------------
+  if (drawnYears.length > 0) {
+    /**
+     * Girls and boys STACKED rather than a single "students" line, because the
+     * two facts a reader wants are the total and the mix, and a stack carries
+     * both: the bar height is the roll, the split is the ratio. Across the
+     * delivered extract the total barely moves (9,560 to 9,838 in eleven years)
+     * while the mix shifts steadily, and two separate charts would have made
+     * that the reader's job to notice.
+     */
+    const anyUnrecorded = drawnYears.some((year) => {
+      const entry = byAy.get(year);
+      return entry !== undefined && entry.students - entry.girls - entry.boys > 0;
+    });
+    const enrollmentSeries = [
+      { field: 'girls', label: 'Girls' },
+      { field: 'boys', label: 'Boys' },
+      /** Drawn only where it exists, so the bar still sums to the roll. */
+      ...(anyUnrecorded ? [{ field: 'unrecorded', label: 'Gender not recorded' }] : []),
+    ];
+
+    widgets.push({
+      id: 'bar-enrollment',
+      type: 'bar',
+      title: `Students on roll · ${academicYearLabel(earliestAy ?? 0)} to ${academicYearLabel(latestAy ?? 0)}`,
+      x: 'ay',
+      y: 'girls',
+      series: enrollmentSeries,
+      stacked: true,
+      data: drawnYears.map((year) => {
+        const entry = byAy.get(year) ?? { students: 0, girls: 0, boys: 0 };
+        return {
+          ay: academicYearLabel(year),
+          girls: entry.girls,
+          boys: entry.boys,
+          ...(anyUnrecorded
+            ? { unrecorded: Math.max(0, entry.students - entry.girls - entry.boys) }
+            : {}),
+        };
+      }),
+    });
+  }
+
+  // -- Why students left, graduation excluded --------------------------------
+  const namedReasons = topCategories(reasonTotals, SERIES_CATEGORIES);
+  const exitYears = contiguousRun([...exitsByYear.keys()]);
+  if (namedReasons.length > 0 && exitYears.length > 0) {
+    const foldedReasons = [...reasonTotals.keys()].filter((reason) => !namedReasons.includes(reason));
+    const reasonSeries = [
+      ...namedReasons.map((reason) => ({
+        field: `reason_${namedReasons.indexOf(reason)}`,
+        label: reason,
+      })),
+      ...(foldedReasons.length > 0 ? [{ field: 'reason_other', label: 'Other reasons' }] : []),
+    ];
+
+    {
+      /**
+       * A stack needs at least two segments — the spec says so, and it says so
+       * because a one-segment "stack" is a bar with extra ceremony that costs
+       * the single-series gradient and tallest-bar highlight. A school whose
+       * departures all carry one reason still has a departure trend worth
+       * drawing, so the chart degrades to that plain bar rather than
+       * disappearing, which is what it did before this branch existed.
+       */
+      const stacked = reasonSeries.length >= 2;
+      widgets.push({
+        id: 'bar-exits',
+        type: 'bar',
+        title: stacked
+          ? 'Why students left, by year · Class XII completion excluded'
+          : `Students leaving by year · ${namedReasons[0] ?? 'one reason'}, Class XII completion excluded`,
+        x: 'year',
+        y: reasonSeries[0]?.field ?? 'reason_0',
+        ...(stacked ? { series: reasonSeries, stacked: true } : {}),
+        /** Students leaving early is the bad news this chart exists to show. */
+        tone: 'warning',
+        data: exitYears.map((year) => {
+          const reasons = exitsByYear.get(year);
+          const out: Record<string, string | number> = { year: String(year) };
+          let folded = 0;
+          for (const [reason, value] of reasons ?? []) {
+            const index = namedReasons.indexOf(reason);
+            if (index === -1) folded += value;
+            else out[`reason_${index}`] = value;
+          }
+          for (const [index] of namedReasons.entries()) {
+            out[`reason_${index}`] ??= 0;
+          }
+          if (foldedReasons.length > 0) out['reason_other'] = folded;
+          return out;
+        }),
+      });
+    }
+  }
+
+  // -- Staff joining against staff leaving -----------------------------------
+  if (staffYears.length > 0) {
+    widgets.push({
+      id: 'bar-staff',
+      type: 'bar',
+      title: 'Staff joining and leaving each year',
+      x: 'year',
+      y: 'joins',
+      /**
+       * Grouped and NOT stacked: joins and exits are two independent counts of
+       * different people, so stacking them would draw a total that means nothing
+       * — 60 arrivals on top of 55 departures is not 115 of anything.
+       */
+      series: [
+        { field: 'joins', label: 'Joined' },
+        { field: 'exits', label: 'Left' },
+      ],
+      data: staffYears.map((year) => {
+        const entry = staffByYear.get(year) ?? { joins: 0, exits: 0 };
+        return { year: String(year), joins: entry.joins, exits: entry.exits };
+      }),
+    });
+  }
+
+  // -- Drill level 1: one bar per school -------------------------------------
+  if (bySchool.size > 0) {
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'collected',
+      data: [...bySchool.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([schoolId, collected]) => ({
+          school_id: schoolId,
+          school_name: named.get(schoolId) ?? schoolId,
+          collected,
+        })),
+      /**
+       * Drillable with one school in scope as well as twenty: a single bar is a
+       * legitimate reading, and it is the entry point to the year and month
+       * levels that every school wants regardless of how many are selected.
+       */
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+  }
+
+  // -- The year-by-year table ------------------------------------------------
+  /**
+   * Keyed by ACADEMIC year, and carrying only the measures that are themselves
+   * academic — money and enrollment. Staff movements and departures are counted
+   * by CALENDAR year (they are dated events, see the catalog), and putting a
+   * 2025 exit count in a row headed 2025-26 would silently re-date a quarter of
+   * it. Those two series stay on their own charts, where their axis says what it
+   * is, and the notes say so rather than leaving a reader to wonder why the
+   * table is missing a column the page clearly has data for.
+   */
+  const tableYears = [...new Set([...feeYears, ...drawnYears])].sort((a, b) => b - a);
+  if (tableYears.length > 0) {
+    widgets.push({
+      id: 'table-year',
+      type: 'table',
+      title: 'Year by year',
+      columns: [
+        { field: 'ay', label: 'Academic year' },
+        { field: 'collected', label: 'Collected', align: 'right', sort_field: 'collected_n' },
+        { field: 'receipts', label: 'Receipts', align: 'right', sort_field: 'receipts_n' },
+        { field: 'average', label: 'Average receipt', align: 'right', sort_field: 'average_n' },
+        { field: 'online', label: 'Paid online', align: 'right', sort_field: 'online_n' },
+        { field: 'students', label: 'On roll', align: 'right', sort_field: 'students_n' },
+        { field: 'girls', label: 'Girls', align: 'right', sort_field: 'girls_n' },
+        { field: 'boys', label: 'Boys', align: 'right', sort_field: 'boys_n' },
+        { field: 'change', label: 'Roll change', align: 'right', sort_field: 'change_n' },
+      ],
+      rows: tableYears.map((year) => {
+        const money = byYear.get(year);
+        const roll = byAy.get(year);
+        const before = byAy.get(year - 1);
+        const online = share(
+          byYearMode.get(year)?.get('Online') ?? 0,
+          money?.collected ?? 0,
+        );
+        const rollChange =
+          roll === undefined || before === undefined
+            ? null
+            : amountDelta(roll.students, before.students);
+        return {
+          ay: academicYearLabel(year),
+          /**
+           * Pre-formatted strings with the raw number beside them under `*_n`,
+           * the same rule every table on this platform follows (ADR-015/021):
+           * the screen and the PDF must not each decide what a rupee looks
+           * like, and sorting "₹2.4 Cr" as text puts it under "₹9.8 L".
+           */
+          collected: money === undefined ? '—' : rupees(money.collected),
+          collected_n: money?.collected ?? 0,
+          receipts: money === undefined ? '—' : count(money.receipts),
+          receipts_n: money?.receipts ?? 0,
+          average:
+            money === undefined || money.receipts === 0
+              ? '—'
+              : rupees(money.collected / money.receipts),
+          average_n: money === undefined || money.receipts === 0 ? 0 : money.collected / money.receipts,
+          online: pct(online),
+          online_n: pctValue(online),
+          students: roll === undefined ? '—' : count(roll.students),
+          students_n: roll?.students ?? 0,
+          girls: roll === undefined ? '—' : count(roll.girls),
+          girls_n: roll?.girls ?? 0,
+          boys: roll === undefined ? '—' : count(roll.boys),
+          boys_n: roll?.boys ?? 0,
+          change: rollChange ?? '—',
+          change_n:
+            roll === undefined || before === undefined ? 0 : roll.students - before.students,
+        };
+      }),
+    });
+  }
+
+  // -- Where to look first ---------------------------------------------------
+  /**
+   * A strip of highlights as a TABLE, for the reason Comparative Analysis gives:
+   * the shared renderer gathers every `kpi` widget into the one strip at the top
+   * of the page, so a second strip at the bottom is a renderer change rather than
+   * a report's decision. Three columns say the same thing — what the highlight
+   * is, WHEN it happened, and the number behind it. "When" rather than
+   * Comparative's "School" because every finding on this page is about a moment
+   * in time rather than about one school.
+   */
+  const highlights: { highlight: string; when: string; value: string }[] = [];
+
+  if (feeYears.length > 1) {
+    const ranked = feeYears
+      .filter((year) => year !== latestFeeYear)
+      .map((year) => ({ year, collected: byYear.get(year)?.collected ?? 0 }));
+    const best = ranked.reduce<{ year: number; collected: number } | null>(
+      (a, b) => (a === null || b.collected > a.collected ? b : a),
+      null,
+    );
+    if (best !== null) {
+      highlights.push({
+        highlight: 'Best full year for collection',
+        when: academicYearLabel(best.year),
+        value: rupees(best.collected),
+      });
+    }
+  }
+
+  /**
+   * The seasonal peak and trough, averaged across the years drawn rather than
+   * taken from the best single year — one exceptional April is a fact about that
+   * April, and this row is meant to say when money reliably arrives.
+   */
+  const monthAverages = new Map<number, { total: number; years: number }>();
+  for (const ayStart of seasonalityYears) {
+    for (const [index, value] of byYearMonth.get(ayStart) ?? []) {
+      if (index >= 12) continue;
+      const entry = monthAverages.get(index) ?? { total: 0, years: 0 };
+      entry.total += value;
+      entry.years += 1;
+      monthAverages.set(index, entry);
+    }
+  }
+  const averaged = [...monthAverages.entries()].map(([index, entry]) => ({
+    index,
+    mean: entry.total / entry.years,
+  }));
+  if (averaged.length > 1) {
+    const peak = averaged.reduce((a, b) => (b.mean > a.mean ? b : a));
+    const trough = averaged.reduce((a, b) => (b.mean < a.mean ? b : a));
+    highlights.push({
+      highlight: 'Strongest month, most years',
+      when: MONTH_NAMES[(peak.index + 3) % 12] ?? '—',
+      value: `${rupees(peak.mean)} on average`,
+    });
+    highlights.push({
+      highlight: 'Weakest month, most years',
+      when: MONTH_NAMES[(trough.index + 3) % 12] ?? '—',
+      value: `${rupees(trough.mean)} on average`,
+    });
+  }
+
+  /** The mode that moved most, in percentage points, over the whole window. */
+  if (feeYears.length > 1 && latestFeeYear !== undefined) {
+    const firstYear = feeYears[0] ?? latestFeeYear;
+    const shifts = [...modeTotals.keys()]
+      .map((mode) => {
+        const now = share(byYearMode.get(latestFeeYear)?.get(mode) ?? 0, byYear.get(latestFeeYear)?.collected ?? 0);
+        const then = share(byYearMode.get(firstYear)?.get(mode) ?? 0, byYear.get(firstYear)?.collected ?? 0);
+        return now === null || then === null ? null : { mode, points: (now - then) * 100 };
+      })
+      .filter((entry): entry is { mode: string; points: number } => entry !== null);
+    if (shifts.length > 0) {
+      const moved = shifts.reduce((a, b) => (Math.abs(b.points) > Math.abs(a.points) ? b : a));
+      highlights.push({
+        highlight: 'Payment mode that moved most',
+        when: `${academicYearLabel(firstYear)} → ${academicYearLabel(latestFeeYear)}`,
+        value: `${moved.mode}, ${moved.points >= 0 ? '+' : '−'}${Math.abs(moved.points).toFixed(1)} pp`,
+      });
+    }
+  }
+
+  if (drawnYears.length > 1 && earliestAy !== undefined && latestAy !== undefined) {
+    const from = byAy.get(earliestAy)?.students ?? 0;
+    const to = byAy.get(latestAy)?.students ?? 0;
+    highlights.push({
+      highlight: 'Change in students on roll',
+      when: `${academicYearLabel(earliestAy)} → ${academicYearLabel(latestAy)}`,
+      value: `${count(to - from >= 0 ? to - from : -(to - from))} ${to - from >= 0 ? 'more' : 'fewer'} · ${amountDelta(to, from) ?? '—'}`,
+    });
+  }
+
+  if (exitYears.length > 0) {
+    const worst = exitYears
+      .map((year) => ({
+        year,
+        students: [...(exitsByYear.get(year)?.values() ?? [])].reduce((a, b) => a + b, 0),
+      }))
+      .reduce((a, b) => (b.students > a.students ? b : a));
+    highlights.push({
+      highlight: 'Most students leaving early',
+      when: String(worst.year),
+      value: count(worst.students),
+    });
+  }
+
+  if (highlights.length > 0) {
+    widgets.push({
+      id: 'table-highlights',
+      type: 'table',
+      title: 'Where to look first',
+      columns: [
+        { field: 'highlight', label: 'Highlight' },
+        { field: 'when', label: 'When' },
+        { field: 'value', label: 'Value', align: 'right' },
+      ],
+      rows: highlights,
+    });
+  }
+
+  // -- What the page has to say about itself ---------------------------------
+  if (months.length > 0 && latestFeeYear !== undefined) {
+    notes.push(
+      `${academicYearLabel(latestFeeYear)} is ${count(monthsElapsed)} months old at ${asOf}, so its bar and its row are a part-year. The headline comparison is against the same ${count(monthsElapsed)} months of the year before, never against a full one.`,
+    );
+  }
+  if (perSchoolTimeline && foldedSchools.length > 0) {
+    notes.push(
+      `The monthly timeline names the ${count(schoolSeriesIds.length)} schools that collected most and sums the remaining ${count(foldedSchools.length)} into one line, so no school is drawn in a colour already used by another.`,
+    );
+  }
+  if (perSchoolTimeline) {
+    notes.push(
+      'The monthly timeline is drawn per school. Select a single school to see the whole book with its 12-month average instead — an average across schools of different sizes would describe none of them.',
+    );
+  }
+  if (feeYears.length > SEASONALITY_YEARS) {
+    notes.push(
+      `The seasonal chart draws the most recent ${count(SEASONALITY_YEARS)} academic years of ${count(feeYears.length)}. The earlier years are on the monthly timeline and in the table.`,
+    );
+  }
+  if (rejectedYears.length > 0) {
+    notes.push(
+      `${count(rejectedYears.length)} enrollment rows carried an academic year this report could not read (${rejectedYears.slice(0, 3).join(', ')}${rejectedYears.length > 3 ? ', …' : ''}) and are not drawn. The column is free text in the ERP.`,
+    );
+  }
+  if (droppedYears.length > 0) {
+    notes.push(
+      `Enrollment is drawn from ${academicYearLabel(earliestAy ?? 0)} onwards. ${count(droppedYears.length)} earlier year(s) are on file but not contiguous with that run, and a line drawn across the gap would not be a trend.`,
+    );
+  }
+  if (droppedStaffYears.length > 0 && staffYears[0] !== undefined) {
+    notes.push(
+      `Staff movements are drawn from ${String(staffYears[0])} onwards. ${count(droppedStaffYears.length)} earlier year(s) carry records (${droppedStaffYears.slice(0, 4).join(', ')}${droppedStaffYears.length > 4 ? ', …' : ''}) but stand apart from that run.`,
+    );
+  }
+  notes.push(
+    'Students are counted once per school per year. Student ids repeat across schools in this ERP, so each school counts its own and the totals are added — a single query across schools would undercount.',
+  );
+  notes.push(
+    'Departures exclude Class XII completion, which is counted separately: it is the majority of all departures and it is the school working as intended, not attrition.',
+  );
+  notes.push(
+    'Leaving reasons are free text in the ERP and are grouped into a fixed set before counting. A reason naming two causes is filed under the one a school can act on.',
+  );
+  notes.push(
+    'Fee history runs from the receipt ledger and is dated by when money arrived, not by the year it was owed for. Enrollment is by academic year; staff movements and departures are by calendar year, so they are shown on their own charts rather than in the year-by-year table.',
+  );
+  notes.push(
+    'Attendance, transport and library are not on this page. Those tables hold too few rows in this dataset to draw a trend that would mean anything.',
+  );
+
+  return {
+    widgets,
+    groupBy: ['month', 'academic year', 'payment mode', 'calendar year', 'leaving reason'],
+    notes,
+  };
+}
+
 export class Merged {
   constructor(private readonly result: PredefinedResult) {}
 

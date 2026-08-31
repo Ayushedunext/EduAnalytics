@@ -477,6 +477,22 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     reason: 'Needs the rollup store (ADR-010, Phase 2)',
   },
   {
+    id: 'trend-analysis',
+    title: 'Trend Analysis',
+    blurb: 'Six years of collection, twelve of enrollment, and where each is heading',
+    icon: '📈',
+    /**
+     * `school`, for the reason Comparative Analysis gives one card below: the
+     * `director` half of the menu is reserved for the screens ADR-010 puts
+     * behind the rollup store, all of which are still `coming`. This report is
+     * served by the same per-school fan-out as every other one (ADR-011) and
+     * reads as well for a single school as for twenty — a school looking at its
+     * own six-year collection curve is the common case, not the exception.
+     */
+    group: 'school',
+    status: 'available',
+  },
+  {
     id: 'fee-comparative',
     title: 'Comparative Analysis',
     blurb: 'Recovery this year against last, school by school, instalment by instalment',

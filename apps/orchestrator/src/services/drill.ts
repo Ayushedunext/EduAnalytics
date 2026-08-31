@@ -120,7 +120,7 @@ export function resolveDrill(args: {
   /** The schools this level reads. Narrowed by a `scope` step, else unchanged. */
   schoolIds: readonly string[];
   /** Extra bound filter values this level's context contributes. */
-  params: Record<string, number>;
+  params: Record<string, string | number>;
 } {
   const path = drillPathFor(args.reportId);
   if (path === undefined || path.widget_id !== args.widgetId) {
@@ -168,7 +168,7 @@ export function resolveDrill(args: {
   }
 
   let schoolIds = args.schoolIds;
-  const params: Record<string, number> = {};
+  const params: Record<string, string | number> = {};
 
   for (const [index, step] of args.context.entries()) {
     const from = path.levels[index];
@@ -206,12 +206,21 @@ export function resolveDrill(args: {
     }
 
     /**
-     * A bound value, and a NUMBER before it is bound: the catalog declares
-     * `drill_quarter` numeric and `run_predefined` refuses a string, but the
-     * value arrived from a click in a browser and this is the layer that knows
-     * it. Parsed here so a malformed one is a validation error naming the
-     * parameter, not a type error four layers down.
+     * A bound value, typed as the catalog declares it. `run_predefined` refuses
+     * a string where a number was declared, but the value arrived from a click
+     * in a browser and this is the layer that knows which it should be — so a
+     * malformed one is a validation error naming the parameter, not a type
+     * error four layers down.
+     *
+     * A string value is bound as it stands. It reaches MySQL as a parameter
+     * like every other filter (CODING_GUIDELINES §9), so a class called
+     * `'; DROP` is a class that matches nothing, not a statement.
      */
+    if (narrow.type === 'string') {
+      params[narrow.param] = step.value;
+      continue;
+    }
+
     const parsed = Number(step.value);
     if (!Number.isFinite(parsed)) {
       throw new PlatformError({

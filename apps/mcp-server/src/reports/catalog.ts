@@ -203,6 +203,39 @@ const DRILL_QUARTER: ReportParam = {
 };
 
 /**
+ * The class a drill click narrowed to (ADR-020), as a bound value.
+ *
+ * A string, and that is the first drill dimension that is one. It reaches MySQL
+ * as a parameter like every other filter (CODING_GUIDELINES §9 [MANDATORY]), so
+ * a class named `'; DROP` is a class that matches no rows rather than a
+ * statement — the guard never sees the value at all, only the placeholder.
+ *
+ * Optional for the same reason `drill_quarter` is: the base dashboard runs the
+ * same report with no drill context every time someone opens it, and a required
+ * drill filter would refuse that request outright.
+ */
+const DRILL_CLASS: ReportParam = {
+  name: 'drill_class',
+  type: 'string',
+  required: false,
+  description:
+    'Drill context: restrict to one class, as `classname` records it. Omitted means every class.',
+};
+
+/**
+ * The month a drill click narrowed to, as `YYYY-MM` — the same shape
+ * `by_month` emits, so the value a reader clicked is the value that binds
+ * without a round trip through a date type that would have to guess a day.
+ */
+const DRILL_MONTH: ReportParam = {
+  name: 'drill_month',
+  type: 'string',
+  required: false,
+  description:
+    'Drill context: restrict to one month, as YYYY-MM. Omitted means the whole window.',
+};
+
+/**
  * Enrollment Overview — docs/06 §2, Phase 1.
  *
  * Every query filters on the academic year. That is not cosmetic: these tables
@@ -215,7 +248,7 @@ const ENROLLMENT_OVERVIEW: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'students_data_set',
   domain: 'students',
-  params: [ACADEMIC_YEAR],
+  params: [ACADEMIC_YEAR, DRILL_CLASS],
   queries: [
     {
       key: 'by_class',
@@ -250,6 +283,32 @@ const ENROLLMENT_OVERVIEW: PredefinedReport = {
         'FROM students_data_set ' +
         'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
         'GROUP BY classname, sectionname ORDER BY seq, sectionname',
+    },
+    /**
+     * Drill level 3 — sections within the clicked class.
+     *
+     * Levels 1 and 2 add no SQL at all: level 1 keeps `by_class` per school
+     * instead of summing it, and level 2 IS `by_class`, unchanged. Only the
+     * leaf needs a statement, because narrowing to one class has to happen in
+     * the database — filtering `by_section`'s full result in the orchestrator
+     * would read every section of every class to draw one class's, and ADR-020
+     * is explicit that a click narrows the QUERY.
+     *
+     * Not `drill_only`: `by_section` already feeds a table on the dashboard, so
+     * the base report reads sections anyway. This is the same question asked of
+     * one class, and it is cheap on `students_data_set` — unlike the fee
+     * tables, this one is small and the year filter is selective.
+     */
+    {
+      key: 'by_section_for_class',
+      description: 'Students on roll by section, within one class',
+      drill_only: true,
+      sql:
+        'SELECT sectionname, COUNT(*) AS students ' +
+        'FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        'AND (:drill_class IS NULL OR classname = :drill_class) ' +
+        'GROUP BY sectionname ORDER BY sectionname',
     },
   ],
 };
@@ -921,7 +980,7 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'student_attendance_data_set',
   domain: 'students',
-  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE],
+  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE, DRILL_MONTH],
   queries: [
     {
       key: 'summary',
@@ -1010,6 +1069,36 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
         "HAVING SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) < 0.75 * COUNT(*) " +
         "ORDER BY SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) / COUNT(*) ASC, " +
         'marked_days DESC LIMIT 200',
+    },
+    /**
+     * Drill level 3 — the same status counts by class, within the clicked
+     * month.
+     *
+     * Levels 1 and 2 add no SQL: level 1 keeps `summary` per school, level 2 IS
+     * `by_month`. Only the leaf needs a statement, and it is `by_class` with the
+     * month bound — `LEFT(a.attendancedate, 7)` compared against a `YYYY-MM`
+     * string, which is the same expression `by_month` groups by, so the value a
+     * reader clicked binds without passing through a date type that would have
+     * to invent a day.
+     *
+     * The drill measures are COUNTS (present and absent student-days), never
+     * the rate the dashboard's own tiles show. A rate is a quotient, and
+     * quotients do not survive the merge `sumBy` performs: adding two schools'
+     * rates, or two months', produces a number belonging to neither. Counts add
+     * correctly at every level, and the ratio a reader wants is legible in the
+     * two bars standing side by side.
+     */
+    {
+      key: 'by_class_for_month',
+      description: 'Present and absent student-days by class, within one month',
+      drill_only: true,
+      sql:
+        'SELECT a.classname, COUNT(*) AS marked_days, ' +
+        STATUS_SUMS +
+        ' FROM ' +
+        STUDENT_DAYS +
+        ' WHERE (:drill_month IS NULL OR LEFT(a.attendancedate, 7) = :drill_month) ' +
+        'GROUP BY a.classname ORDER BY marked_days DESC',
     },
   ],
 };

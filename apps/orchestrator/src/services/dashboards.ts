@@ -322,7 +322,17 @@ export interface DrillLevel {
   /** How the value pushed to REACH this level is applied. */
   readonly narrow?:
     | { readonly kind: 'scope' }
-    | { readonly kind: 'param'; readonly param: string; readonly type: 'number' };
+    | {
+        readonly kind: 'param';
+        readonly param: string;
+        /**
+         * Matches the `ReportParam` type the catalog declares, so a click's
+         * value is refused at the MCP boundary if it arrives as the wrong kind
+         * — a quarter is a number, a class name is a string, and neither is
+         * coerced into the other on the way down.
+         */
+        readonly type: 'number' | 'string';
+      };
   /** Title for the chart at this level, `{context}` replaced by the breadcrumb. */
   readonly title: string;
   /** For the Logic panel's group-by line at this level. */
@@ -529,6 +539,105 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
       },
     ],
   },
+  /**
+   * Enrollment: school → class → section — docs/06 §4.3's third curated path,
+   * and the cheapest of the three to add.
+   *
+   * Levels 1 and 2 introduce no SQL whatever. Level 1 keeps `by_class` per
+   * school rather than summing it across schools; level 2 IS `by_class`, the
+   * statement the dashboard's own bar chart already runs. Only the leaf needed
+   * writing, because narrowing to one class has to happen in the database.
+   *
+   * -- These bars add up, at every level, and that is worth stating -----------
+   * Fee Defaulters had to warn that its quarter bars overlap, because a student
+   * can be overdue in two quarters at once. Nothing of the kind applies here: a
+   * student is on one school's roll, in one class, in one section, so every
+   * level partitions the one above it exactly. No `note` and no `pending`
+   * marker — the absence is the point, not an oversight.
+   */
+  'enrollment-overview': {
+    widget_id: 'bar-school-roll',
+    measures: [{ field: 'students', label: 'Students on roll' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Students on roll by school',
+        group_by: 'school',
+      },
+      {
+        x: 'classname',
+        drill_dim: 'class',
+        /** The class name IS the bound value, so no separate value field. */
+        query: 'by_class',
+        narrow: { kind: 'scope' },
+        title: 'Students on roll by class · {context}',
+        group_by: 'class',
+      },
+      {
+        x: 'sectionname',
+        query: 'by_section_for_class',
+        narrow: { kind: 'param', param: 'drill_class', type: 'string' },
+        title: 'Students on roll by section · {context}',
+        group_by: 'section',
+      },
+    ],
+  },
+
+  /**
+   * Attendance: school → month → class — docs/06 §4.3's second curated path.
+   *
+   * -- Counts, not the rate ---------------------------------------------------
+   * Two measures, present and absent student-days, rather than the attendance
+   * percentage the dashboard's tiles lead with. A rate is a quotient and
+   * quotients do not survive `sumBy`: adding two schools' rates, or two months',
+   * yields a number belonging to neither, and this module's own header warns
+   * that summation "would NOT be honest for averages or percentages". Counts add
+   * correctly at every level and the ratio is legible in the two bars anyway.
+   *
+   * -- What these bars are a share OF -----------------------------------------
+   * MARKED student-days, not working days: nothing in the extract says which
+   * days a school was open (no calendar, no holiday table, no timetable), so a
+   * day nobody marked is absent from the chart rather than counted as an
+   * absence. That flatters a school with poor marking discipline, which is why
+   * the dashboard leads with a marking-coverage tile — the drill inherits the
+   * same caveat and says so at the month level, where a thin month is easiest to
+   * mistake for a good one.
+   */
+  'attendance-analytics': {
+    widget_id: 'bar-school-attendance',
+    measures: [
+      { field: 'present_days', label: 'Present student-days' },
+      { field: 'absent_days', label: 'Absent student-days' },
+    ],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Present and absent student-days by school',
+        group_by: 'school',
+      },
+      {
+        x: 'month',
+        drill_dim: 'month',
+        query: 'by_month',
+        narrow: { kind: 'scope' },
+        title: 'Present and absent student-days by month · {context}',
+        group_by: 'month',
+        note: 'These are MARKED student-days. A day nobody marked is missing from the bars rather than counted as an absence, so a thin month may mean poor marking rather than good attendance.',
+      },
+      {
+        x: 'classname',
+        query: 'by_class_for_month',
+        narrow: { kind: 'param', param: 'drill_month', type: 'string' },
+        title: 'Present and absent student-days by class · {context}',
+        group_by: 'class',
+      },
+    ],
+  },
+
 };
 
 export function drillPathFor(reportId: DashboardId): DrillPath | undefined {
@@ -766,8 +875,10 @@ export const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) =
   'library-textbooks': buildLibraryTextbooks,
 };
 
-function buildEnrollment(merged: Merged, { year }: BuildContext): DashboardBuild {
+function buildEnrollment(merged: Merged, { year, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
+  /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
+  const path = DRILL_PATHS['enrollment-overview'] as DrillPath;
 
   const byClass = merged.sumBy('by_class', 'classname', ['students'], 'seq');
   const byGender = merged.sumBy('by_gender', 'gender', ['students']);
@@ -782,6 +893,33 @@ function buildEnrollment(merged: Merged, { year }: BuildContext): DashboardBuild
       label: `Students on roll · ${year}`,
       value: count(total),
       tone: 'neutral',
+    });
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — one bar per school, drilling to
+   * class and then section. Built from the `by_class` rows the chart below
+   * already reads, kept per school instead of summed across them, so the entry
+   * point to the whole path costs no query of its own.
+   */
+  const perSchool = merged.sumPerSchool('by_class', ['students']);
+  if (perSchool.length > 0) {
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'students',
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        students: entry.totals['students'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
     });
   }
 
@@ -1615,8 +1753,10 @@ function buildAdmissionsFunnel(merged: Merged, { year }: BuildContext): Dashboar
  * a Director combining a 200-student school with a 4,000-student one would
  * otherwise see broken.
  */
-function buildAttendance(merged: Merged, { year }: BuildContext): DashboardBuild {
+function buildAttendance(merged: Merged, { year, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
+  /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
+  const path = DRILL_PATHS['attendance-analytics'] as DrillPath;
 
   const summary = merged.sumAll('summary', [
     'marked_days',
@@ -1638,6 +1778,43 @@ function buildAttendance(merged: Merged, { year }: BuildContext): DashboardBuild
   const low = merged.concatRows('low_attendance');
 
   const markedDays = num(summary?.['marked_days']);
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) — present against absent
+   * student-days, one pair of bars per school, drilling to month and then
+   * class. Built from the `summary` rows the tiles already read.
+   *
+   * Counts and not the rate: a rate is a quotient and quotients do not survive
+   * a merge (this module's header, and the level's own note). A school with no
+   * marked days at all is absent from the chart rather than sitting at 0% --
+   * which is the honest answer for the St Marks schools, none of which have any
+   * attendance data (docs/11).
+   */
+  const perSchool = merged.sumPerSchool('summary', ['present_days', 'absent_days']);
+  const attended = perSchool.filter(
+    (entry) => (entry.totals['present_days'] ?? 0) + (entry.totals['absent_days'] ?? 0) > 0,
+  );
+  if (attended.length > 0) {
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'present_days',
+      series: [...path.measures],
+      data: attended.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        present_days: entry.totals['present_days'] ?? 0,
+        absent_days: entry.totals['absent_days'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+  }
 
   /**
    * Order comes from `class_order`, and it is a MIN across schools rather than a

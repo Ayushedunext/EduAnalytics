@@ -324,6 +324,57 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+ * Air between two rotated labels, on top of the room the labels themselves take.
+ *
+ * 8px rather than Recharts' default 5, because these axes are read at a glance
+ * across a wide panel and touching labels read as one string. It is a gap, not a
+ * slot: the width of the label is measured and added by Recharts (see below).
+ */
+const TICK_GAP_PX = 8;
+
+/**
+ * How a rotated category axis thins its labels when they will not all fit.
+ *
+ * -- What went wrong without this ---------------------------------------------
+ * Every rotated axis here passed `interval={0}`, which is an instruction to draw
+ * EVERY label whatever the width — not a default, a demand. That was invisible
+ * while the longest axis on the platform was twelve classes or four quarters,
+ * and became unreadable the moment Trend Analysis drew 78 months across one
+ * panel: at ~16px of axis each, the dates overprint into a grey smear and a
+ * reader cannot recover a single one of them. Recharts had no licence to
+ * intervene; it was told to draw them all, and it did.
+ *
+ * -- Why the thinning is Recharts' job and not arithmetic here ----------------
+ * This module does not know how wide the panel is. A grid panel is ~340-450px, a
+ * `wide` line spans two thirds of the page and a `hero` the whole of it, and all
+ * three are `width="100%"` inside a `ResponsiveContainer` — so any constant
+ * chosen here would be right for one variant and wrong for the other two.
+ * Recharts knows the width at layout time, and `preserveStartEnd` is its own API
+ * for exactly this: keep the first and last, drop what will not fit between.
+ *
+ * -- The correction this deliberately does NOT make ---------------------------
+ * An earlier attempt subtracted the label's width from `minTickGap`, on the
+ * assumption that Recharts measures ticks unrotated and would therefore reserve
+ * far too much room for a −35° label. It does not: `getTicks` calls
+ * `getAngledTickWidth(size, unitSize, angle)` and already reserves the label's
+ * true horizontal extent (recharts/lib/cartesian/getTicks.js). The subtraction
+ * cancelled the thinning almost exactly — required gap fell to ~10px against
+ * ~16px available, so nothing was dropped and the axis stayed a smear. The
+ * geometry is already handled; what is left to say is only how much air to leave.
+ *
+ * Preserving the START and END is the half that matters for a time series: an
+ * axis that dropped "Apr 2020" and "Aug 2026" would lose the two labels a reader
+ * looks for first — where the history begins and where it stops.
+ *
+ * An axis whose labels already fit is untouched. Nothing is dropped when there is
+ * room, so twelve classes and four quarters render exactly as they did.
+ */
+const rotatedTicks = {
+  interval: 'preserveStartEnd',
+  minTickGap: TICK_GAP_PX,
+} as const;
+
+/**
  * A category tick that cannot wrap.
  *
  * Recharts' default tick is its `<Text>` component, which WRAPS to a second
@@ -874,7 +925,7 @@ export function BarPanel({
           <XAxis
             dataKey={widget.x}
             tick={tick}
-            interval={0}
+            {...rotatedTicks}
             angle={-35}
             textAnchor="end"
             tickMargin={4}
@@ -1034,7 +1085,7 @@ export function LinePanel({
               <XAxis
                 dataKey={widget.x}
                 tick={tick}
-                interval={0}
+                {...rotatedTicks}
                 angle={-35}
                 textAnchor="end"
                 tickMargin={4}
@@ -1118,7 +1169,7 @@ export function LinePanel({
           <XAxis
             dataKey={widget.x}
             tick={tick}
-            interval={0}
+            {...rotatedTicks}
             angle={-35}
             textAnchor="end"
             tickMargin={4}

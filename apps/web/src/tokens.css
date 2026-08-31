@@ -399,6 +399,34 @@ body {
 .kpiDelta.down { background: var(--color-danger-soft); color: #b3372c; }
 .kpiDelta.flat { background: var(--color-surface-sunken); color: var(--color-text-muted); }
 
+/* The parts of a KPI's figure, on one row under it (chart-spec `kpi.breakdown`).
+
+   A row and not a stack: the parts qualify the number above them and belong on
+   its baseline, and at most three of them (the schema's cap) fit a 210px tile
+   without wrapping. `flex-wrap` is still set, because "Not permanent" beside
+   "Unclassified" is wider than that at the narrowest tile and a clipped part is
+   worse than a wrapped one.
+
+   The hairline above separates the parts from the headline without spending a
+   full rule on it — these are one metric's own detail, not a second metric. */
+.kpiBreakdown {
+  display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 0; padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.kpiPart { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kpiPartLabel {
+  font-size: 10.5px; font-weight: 600; color: var(--color-text-muted);
+  letter-spacing: 0.01em; white-space: nowrap;
+}
+.kpiPartValue {
+  margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.2;
+}
+/* The hero tile leads the strip, so its parts scale with it rather than sitting
+   at body size under a 36px figure. */
+.kpi--hero .kpiPartValue { font-size: 16px; }
+.kpi--hero .kpiPartLabel { font-size: 11px; }
+
 /* The headline metric in a KPI row (§22) — the first tile in the server's own
    widget order, never chosen by guessing which number "looks important". */
 .kpi--hero { flex: 2 1 436px; grid-column: span 2; }
@@ -610,6 +638,31 @@ body {
   flex-basis: 100%; margin: 2px 0 0; font-size: 11.5px; line-height: 1.45;
   color: var(--color-text-secondary); border-left: 2px solid var(--color-amber);
   padding-left: 8px; font-weight: 400; text-align: left;
+}
+
+/* The trail on a Dashboard grid card, where the whole control gets about one
+   line instead of a panel's full actions row (components/Drill.tsx `compact`).
+
+   Only the SIZE changes. The level counter and Reset are dropped in the
+   component rather than hidden here, because a control that is present in the
+   DOM and invisible is still in the tab order -- a keyboard reader would land
+   on a Reset button nobody can see. The notes are never dropped at either size:
+   Fee Defaulters' quarter warning is the reason the trail carries them, and it
+   is needed most on the surface charts are read fastest. */
+.drillTrailCompact {
+  gap: 5px; font-size: 11px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+.drillTrailCompact .drillCrumb { font-size: 11px; }
+.drillTrailCompact .chipbtn { padding: 2px 8px; font-size: 10.5px; }
+.drillTrailCompact .drillNote { font-size: 11px; margin-top: 4px; }
+
+/* A drill that failed, said inside the card it failed in. Five other cards are
+   fine, so this is deliberately not a page-level banner (ADR-011's partial-
+   failure reasoning, one level down). */
+.pcardError {
+  margin: 8px 0 0; font-size: 11px; line-height: 1.45; color: var(--color-danger);
+  border-left: 2px solid var(--color-danger); padding-left: 8px;
 }
 
 /* ---------- per-widget clone (docs/06 §3) ---------- */

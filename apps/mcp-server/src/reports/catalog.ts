@@ -178,7 +178,23 @@ const BUCKET: ReportParam = {
  * defaulter report asks the other question — how late is it — and uses
  * `periodtodate` for exactly that reason.
  */
-const ACADEMIC_QUARTER = 'FLOOR(MOD(MONTH(periodfromdate) + 8, 12) / 3) + 1';
+function academicQuarter(column: string): string {
+  return `FLOOR(MOD(MONTH(${column}) + 8, 12) / 3) + 1`;
+}
+
+/** The demand ledger's quarter — the original, and still the common case. */
+const ACADEMIC_QUARTER = academicQuarter('periodfromdate');
+
+/**
+ * The same boundary against the attendance register's own date column.
+ *
+ * Derived from `academicQuarter` rather than written out again, which is the
+ * whole reason that function exists. Two hand-written copies of "shift April to
+ * 0, divide by 3" would be two places for the school year to start in January,
+ * and a fees quarter disagreeing with an attendance quarter is the kind of drift
+ * nobody notices until a principal compares two screens.
+ */
+const ATTENDANCE_QUARTER = academicQuarter('a.attendancedate');
 
 /**
  * The quarter a drill click narrowed to (ADR-020: clicked values enter as BOUND
@@ -223,16 +239,34 @@ const DRILL_CLASS: ReportParam = {
 };
 
 /**
- * The month a drill click narrowed to, as `YYYY-MM` — the same shape
- * `by_month` emits, so the value a reader clicked is the value that binds
- * without a round trip through a date type that would have to guess a day.
+ * The department a drill click narrowed to (ADR-020), as a bound value.
+ *
+ * A string, like `drill_class`, and for the same reason: `departmentname` is
+ * free text in `employees_data_set` and there is no id to bind instead. It
+ * reaches MySQL as a parameter, so a department named `'; DROP` is a department
+ * matching no rows rather than a statement — the guard never sees the value,
+ * only the placeholder.
  */
-const DRILL_MONTH: ReportParam = {
-  name: 'drill_month',
+const DRILL_DEPARTMENT: ReportParam = {
+  name: 'drill_department',
   type: 'string',
   required: false,
   description:
-    'Drill context: restrict to one month, as YYYY-MM. Omitted means the whole window.',
+    'Drill context: restrict to one department, as `departmentname` records it. Omitted means every department.',
+};
+
+/**
+ * The pickup route a drill click narrowed to (ADR-020), as a bound value.
+ *
+ * A string for the same reason again — `pickuproutename` is the only identifier
+ * this table carries for a route.
+ */
+const DRILL_ROUTE: ReportParam = {
+  name: 'drill_route',
+  type: 'string',
+  required: false,
+  description:
+    'Drill context: restrict to one pickup route, as `pickuproutename` records it. Omitted means every route.',
 };
 
 /**
@@ -722,7 +756,7 @@ const STAFF_OVERVIEW: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'employees_data_set',
   domain: 'staff',
-  params: [AS_OF_DATE],
+  params: [AS_OF_DATE, DRILL_DEPARTMENT],
   queries: [
     /**
      * One scan, three numbers. Headcount, joiners and leavers have different
@@ -790,6 +824,38 @@ const STAFF_OVERVIEW: PredefinedReport = {
         'SELECT reason_for_leaving, COUNT(*) AS leavers FROM employees_data_set ' +
         'WHERE DATEDIFF(:as_of_date, deactivation_date) BETWEEN 0 AND 365 ' +
         'GROUP BY reason_for_leaving ORDER BY leavers DESC',
+    },
+    /**
+     * Drill level 3 — designations within the clicked department.
+     *
+     * Levels 1 and 2 introduce no SQL: level 1 keeps `by_department` per school
+     * rather than summing it across schools, and level 2 IS `by_department`.
+     * Only the leaf has to narrow, and narrowing has to happen in the database.
+     *
+     * -- Why this path has no quarter, and stops at designation ----------------
+     * Headcount is a point-in-time question ("who is on the payroll on this
+     * date"), not a per-period one, so there is no honest quarter level to
+     * offer: staff are not enrolled in a term. Department → designation is the
+     * hierarchy the columns actually describe — TEACHING contains PRT, TGT and
+     * PGT — and the path stops there because nothing below designation exists
+     * short of naming individuals, which is a different report with a different
+     * PII posture.
+     *
+     * Deliberately NOT `LIMIT 15` as `by_designation` has. That cap makes sense
+     * for a whole school's designation chart, where the tail is noise; inside
+     * ONE department the tail is the small teams, and dropping them would make
+     * the bars fail to account for the department total directly above them.
+     */
+    {
+      key: 'by_designation_for_department',
+      description: 'Headcount by designation, within one department',
+      drill_only: true,
+      sql:
+        'SELECT designationname, COUNT(*) AS staff FROM employees_data_set ' +
+        'WHERE (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'AND (joining_date IS NULL OR joining_date <= :as_of_date) ' +
+        'AND (:drill_department IS NULL OR departmentname = :drill_department) ' +
+        'GROUP BY designationname ORDER BY staff DESC',
     },
   ],
 };
@@ -980,7 +1046,7 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'student_attendance_data_set',
   domain: 'students',
-  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE, DRILL_MONTH],
+  params: [ACADEMIC_YEAR, FROM_DATE, TO_DATE, DRILL_QUARTER],
   queries: [
     {
       key: 'summary',
@@ -1071,34 +1137,400 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
         'marked_days DESC LIMIT 200',
     },
     /**
-     * Drill level 3 — the same status counts by class, within the clicked
-     * month.
+     * Drill level 2 — the same status counts by academic quarter.
      *
-     * Levels 1 and 2 add no SQL: level 1 keeps `summary` per school, level 2 IS
-     * `by_month`. Only the leaf needs a statement, and it is `by_class` with the
-     * month bound — `LEFT(a.attendancedate, 7)` compared against a `YYYY-MM`
-     * string, which is the same expression `by_month` groups by, so the value a
-     * reader clicked binds without passing through a date type that would have
-     * to invent a day.
+     * -- Why quarter and not month ----------------------------------------------
+     * This level WAS `by_month`, and the swap is deliberate rather than a
+     * preference. Fees and Defaulters both descend school → quarter → class, and
+     * an attendance drill that descended school → month → class made the middle
+     * level mean something different on one card out of four — a reader
+     * comparing "Q2 fees" with "July attendance" is comparing two windows
+     * without being told. The quarter is the same Apr–Mar boundary the fee
+     * ledger uses (`academicQuarter`), so the two now line up by construction.
+     *
+     * Nothing is lost from the product: the dashboard's own `by_month` line
+     * chart still draws the monthly trend on the report page, which is where
+     * month-level detail was actually being read. The DRILL is about descending
+     * a hierarchy, and quarter is the level the rest of the platform descends
+     * through.
+     *
+     * `seq` is the quarter NUMBER, which is what a click binds (`drill_quarter`
+     * is typed `number`), while `quarter` is the "Q2" a reader sees. Same
+     * split as `demand_by_quarter`, for the same reason: the axis label and the
+     * bound value are different things and conflating them makes the drill
+     * depend on a display string.
+     */
+    {
+      key: 'by_quarter',
+      description: 'Present and absent student-days by academic quarter',
+      drill_only: true,
+      sql:
+        `SELECT CONCAT('Q', ${ATTENDANCE_QUARTER}) AS quarter, ${ATTENDANCE_QUARTER} AS seq, ` +
+        'COUNT(*) AS marked_days, COUNT(DISTINCT a.attendancedate) AS working_days, ' +
+        STATUS_SUMS +
+        ' FROM ' +
+        STUDENT_DAYS +
+        ' GROUP BY quarter, seq ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the same status counts by class, within the clicked
+     * quarter.
+     *
+     * Level 1 adds no SQL (it keeps `summary` per school); levels 2 and 3 are
+     * the two statements above and below this comment.
+     *
+     * `:drill_quarter IS NULL OR …` rather than two statements, exactly as
+     * `demand_by_class` does it: a `variants` pair differing only in a WHERE
+     * clause would, the day one of them gained a measure, quietly answer a
+     * different question under the same heading. Level 3 always arrives WITH a
+     * quarter by construction (its context is [school, quarter] — see
+     * DRILL_PATHS); the null branch keeps the statement honest if it is ever run
+     * on its own.
      *
      * The drill measures are COUNTS (present and absent student-days), never
      * the rate the dashboard's own tiles show. A rate is a quotient, and
      * quotients do not survive the merge `sumBy` performs: adding two schools'
-     * rates, or two months', produces a number belonging to neither. Counts add
-     * correctly at every level, and the ratio a reader wants is legible in the
-     * two bars standing side by side.
+     * rates, or two quarters', produces a number belonging to neither. Counts
+     * add correctly at every level, and the ratio a reader wants is legible in
+     * the two bars standing side by side.
      */
     {
-      key: 'by_class_for_month',
-      description: 'Present and absent student-days by class, within one month',
+      key: 'by_class_for_quarter',
+      description: 'Present and absent student-days by class, within one academic quarter',
       drill_only: true,
       sql:
         'SELECT a.classname, COUNT(*) AS marked_days, ' +
         STATUS_SUMS +
         ' FROM ' +
         STUDENT_DAYS +
-        ' WHERE (:drill_month IS NULL OR LEFT(a.attendancedate, 7) = :drill_month) ' +
+        ` WHERE (:drill_quarter IS NULL OR ${ATTENDANCE_QUARTER} = :drill_quarter) ` +
         'GROUP BY a.classname ORDER BY marked_days DESC',
+    },
+  ],
+};
+
+
+/**
+ * One row per employee-day, de-duplicated before anything counts it.
+ *
+ * `employee_attendance_data_set` is not unique on (employee, date) any more than
+ * the student table is, and `id` is the column the schema names as the unique
+ * one — so MAX(id) picks exactly one marking per employee-day. Which of several
+ * rows wins is arbitrary; that it is ONE row is not.
+ *
+ * The window predicate is repeated inside the subquery deliberately, for the
+ * same reason it is on the student side: without it the GROUP BY spans the whole
+ * table and the join then discards most of what it built.
+ */
+const STAFF_DAYS =
+  '(SELECT MAX(id) AS id FROM employee_attendance_data_set ' +
+  'WHERE attendancedate BETWEEN :from_date AND :to_date ' +
+  'GROUP BY employeeid, attendancedate) k ' +
+  'JOIN employee_attendance_data_set e ON e.id = k.id';
+
+/**
+ * The staff status buckets, and the half-day is the point of them.
+ *
+ * Keyed on `statusname`, never `statusid` — the ids disagree ACROSS the two
+ * attendance tables (5 is Absent here, Suspend on the student side), so
+ * branching on the id would be right on one table and quietly wrong on the
+ * other.
+ *
+ * `half_days` is its own bucket rather than being added to either neighbour.
+ * Folding a half-day into present says half a day of work counted as a whole
+ * one; folding it into absent says it counted as none. The ERP made neither
+ * claim, a payroll clerk would dispute them in opposite directions, and the
+ * schema note already warns that this is exactly why a staff rate "is not a
+ * plain present/total count".
+ *
+ * `other_days` catches anything outside the four observed statuses instead of
+ * assuming it means absent — the same defence the student table's sums apply,
+ * and for the same reason: no canonical status list came with the extract.
+ */
+const STAFF_STATUS_SUMS =
+  "SUM(CASE WHEN e.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days, " +
+  "SUM(CASE WHEN e.statusname = 'Absent' THEN 1 ELSE 0 END) AS absent_days, " +
+  "SUM(CASE WHEN e.statusname IN ('First Half Leave', 'Second Half Leave') " +
+  'THEN 1 ELSE 0 END) AS half_days, ' +
+  "SUM(CASE WHEN e.statusname IS NULL OR e.statusname NOT IN " +
+  "('Present', 'Absent', 'First Half Leave', 'Second Half Leave') " +
+  'THEN 1 ELSE 0 END) AS other_days';
+
+/** The academic quarter against the staff register's own date column. */
+const STAFF_QUARTER = academicQuarter('e.attendancedate');
+
+
+
+/**
+ * Fee by Student — what each individual child owes, from the demand ledger.
+ *
+ * -- How this differs from Fee Defaulters, which it would otherwise duplicate --
+ * Fee Defaulters answers "who is LATE": every one of its statements filters
+ * `periodtodate < :as_of_date`, so an instalment not yet due is invisible there
+ * by design. This report answers "what does each student OWE", over the whole
+ * year's book, due or not. The same child appears in both with different
+ * numbers, and that is correct rather than a discrepancy — a family owing
+ * ₹80,000 for the year of which ₹20,000 has fallen due is a ₹20,000 defaulter
+ * and an ₹80,000 payer. Both reports say on screen which question they answer,
+ * because a bursar comparing the two totals must not read the gap as an error.
+ *
+ * There is deliberately no `as_of_date` here for that reason: nothing in this
+ * report depends on what has fallen due, so a filter that appeared to move the
+ * numbers and did not would be worse than no filter at all.
+ *
+ * -- This report NAMES children, and what protects them ----------------------
+ * `students` selects `studentname` and `enrollmentno`, both `pii: 'students'`
+ * in the schema catalog. A session without `students.read` — an accountant, per
+ * docs/08 §4.5 — receives the amounts with the identities replaced by
+ * `[masked]`, applied at the MCP layer by rail 6 from MySQL's own column
+ * origins, without this statement needing to know it. `fees.read` alone is
+ * therefore NOT enough to see a child's name here, which is the platform's
+ * existing policy and not a rule this report invents.
+ *
+ * `LIMIT 200` is docs/06 §4.2's "student-level leaves are top-N capped".
+ * Larger than Fee Defaulters' 50 because this is the report's PRINCIPAL
+ * content rather than a supporting panel, and small enough that it stays a
+ * ranked list a person reads rather than an export of the school roll.
+ *
+ * -- Two scans, and why they are not one -------------------------------------
+ * `totals` reads the whole book; `dues` reads only rows carrying a balance.
+ * They could be folded into one statement with conditional aggregates, and the
+ * folded version needs `COUNT(DISTINCT CASE WHEN … END)` to count students with
+ * dues — an expression the SQL guard has no reason to have seen before. Two
+ * plain statements over an unindexed table cost more than one clever one; being
+ * certain what each returns is worth that on a report that names children.
+ */
+const FEE_BY_STUDENT: PredefinedReport = {
+  id: 'fee-by-student',
+  title: 'Fee by Student',
+  schema_version: 'erp-v1',
+  source: 'fee_compile_data_set',
+  domain: 'fees',
+  params: [ACADEMIC_YEAR, DRILL_QUARTER],
+  queries: [
+    {
+      key: 'totals',
+      description: "The year's whole demand, and how many students it was raised against",
+      sql:
+        'SELECT COUNT(DISTINCT enrollmentno) AS students_billed, ' +
+        'ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS paid ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      /**
+       * Students carrying a balance, and what they carry between them. Rows with
+       * a credit balance are excluded rather than netted off: a student who has
+       * overpaid does not reduce what another family owes, and arrears are the
+       * number someone acts on. Same rule as the Dashboard's fee tile.
+       */
+      key: 'dues',
+      description: 'Students carrying a balance, and the total outstanding',
+      sql:
+        'SELECT COUNT(DISTINCT enrollmentno) AS students, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0',
+    },
+    {
+      key: 'by_class',
+      description: 'Outstanding and students carrying it, by class',
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, ' +
+        'COUNT(DISTINCT enrollmentno) AS students, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'GROUP BY classname ORDER BY seq',
+    },
+    {
+      /**
+       * The report's principal content: one row per student, largest balance
+       * first. Grouped by `enrollmentno` as well as name because two children
+       * can share a name and must not be merged into one row — the enrolment
+       * number is the identifier, the name is how a person recognises it.
+       */
+      key: 'students',
+      description: 'What each student owes, largest balance first (top 200)',
+      sql:
+        'SELECT studentname, enrollmentno, classname, sectionname, ' +
+        'ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS paid, ' +
+        'ROUND(SUM(balance_amount)) AS balance ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'GROUP BY enrollmentno, studentname, classname, sectionname ' +
+        'ORDER BY balance DESC LIMIT 200',
+    },
+    /**
+     * Drill level 2 — outstanding by the quarter the money was demanded FOR.
+     *
+     * `periodfromdate` and not `periodtodate`, the same choice Fee Collection's
+     * quarter level makes: a quarter here means the period the fee was raised
+     * for, which is where a bursar looks for an instalment. `IS NOT NULL` keeps
+     * the axis to exactly Q1..Q4 — a row with no demand period has no quarter,
+     * and letting it through would draw a fifth unlabelled bar whose click binds
+     * a quarter matching nothing.
+     */
+    {
+      key: 'by_quarter',
+      description: 'Outstanding by academic quarter, from the demand ledger',
+      drill_only: true,
+      sql:
+        `SELECT CONCAT('Q', ${ACADEMIC_QUARTER}) AS quarter, ${ACADEMIC_QUARTER} AS seq, ` +
+        'COUNT(DISTINCT enrollmentno) AS students, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'AND periodfromdate IS NOT NULL ' +
+        'GROUP BY quarter, seq ORDER BY seq',
+    },
+    {
+      key: 'by_class_for_quarter',
+      description: 'Outstanding by class, within one academic quarter',
+      drill_only: true,
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, ' +
+        'COUNT(DISTINCT enrollmentno) AS students, ' +
+        'ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        `AND (:drill_quarter IS NULL OR ${ACADEMIC_QUARTER} = :drill_quarter) ` +
+        'GROUP BY classname ORDER BY seq',
+    },
+  ],
+};
+
+/**
+ * Staff Attendance — `employee_attendance_data_set`.
+ *
+ * -- Why this exists now, when docs/11 said it should not ---------------------
+ * docs/11 §2 recorded staff attendance as "deliberately not a dashboard": the
+ * table was catalogued so Ask AI could reach it, but the only staff-attendance
+ * entry in docs/06 §2's catalog was the Director's Cross-School Attendance,
+ * which is Phase 2 and needs the rollup store. Adding a school-level dashboard
+ * was therefore a NEW catalog entry rather than an implementation of an
+ * existing one — which is a decision, not an oversight, and it has now been
+ * taken. docs/11 records the amendment.
+ *
+ * -- Three traps, all of them the same shape as the student table ------------
+ * This is `student_attendance_data_set`'s sibling and it carries the same
+ * hazards, which is why the statements below look like Attendance Analytics'
+ * and not like something new:
+ *
+ *   1. De-duplicate to one row per employee-day FIRST. `attendanceid` is not
+ *      unique; `id` is (schema/erp-v1.ts says so in as many words), so the
+ *      subquery picks MAX(id) per (employeeid, attendancedate). Counting rows
+ *      instead would count a day as many times as it was written.
+ *   2. Read `statusname`, never `statusid`. The codes disagree ACROSS the two
+ *      attendance tables — 5 is Absent here and Suspend there — so a query that
+ *      branched on the id would be right on one table and silently wrong on the
+ *      other.
+ *   3. There is no academic year, and none is faked. Staff are not enrolled in
+ *      one. The window is `from_date`/`to_date`, exactly as the student report
+ *      does it for the same reason.
+ *
+ * -- The half-days are the one thing that is NOT like the student table ------
+ * The observed statuses are Present, Absent, First Half Leave and Second Half
+ * Leave, and the schema note is explicit that "the half-day statuses are why a
+ * staff attendance rate is not a plain present/total count".
+ *
+ * So a half-day is NOT folded into present, and NOT folded into absent. It gets
+ * its own bucket, is drawn as its own bar, and is named on screen. Either
+ * folding would be this layer deciding that half a day of work counts as a
+ * whole one or as none — a judgement the ERP did not make and that a payroll
+ * clerk would dispute in opposite directions. `other_days` catches anything
+ * outside the four observed values rather than assuming it means absent, the
+ * same defence `STATUS_SUMS` applies on the student side.
+ */
+const STAFF_ATTENDANCE: PredefinedReport = {
+  id: 'staff-attendance',
+  title: 'Staff Attendance',
+  schema_version: 'erp-v1',
+  source: 'employee_attendance_data_set',
+  domain: 'staff',
+  params: [FROM_DATE, TO_DATE, DRILL_QUARTER],
+  queries: [
+    {
+      key: 'summary',
+      description: 'Marked staff-days over the window, by what was recorded',
+      sql:
+        'SELECT COUNT(*) AS marked_days, ' +
+        'COUNT(DISTINCT e.attendancedate) AS days_marked, ' +
+        'COUNT(DISTINCT e.employeeid) AS staff_marked, ' +
+        STAFF_STATUS_SUMS +
+        ' FROM ' +
+        STAFF_DAYS,
+    },
+    {
+      key: 'by_month',
+      description: 'Staff attendance by month over the window',
+      sql:
+        'SELECT LEFT(e.attendancedate, 7) AS month, ' +
+        'MIN(LEFT(e.attendancedate, 4) * 100 + SUBSTRING(e.attendancedate, 6, 2)) AS seq, ' +
+        'COUNT(*) AS marked_days, ' +
+        STAFF_STATUS_SUMS +
+        ' FROM ' +
+        STAFF_DAYS +
+        ' GROUP BY LEFT(e.attendancedate, 7) ORDER BY seq',
+    },
+    {
+      key: 'by_department',
+      description: 'Staff attendance by department',
+      sql:
+        'SELECT e.departmentname, COUNT(*) AS marked_days, ' +
+        'COUNT(DISTINCT e.employeeid) AS staff_marked, ' +
+        STAFF_STATUS_SUMS +
+        ' FROM ' +
+        STAFF_DAYS +
+        ' GROUP BY e.departmentname ORDER BY marked_days DESC',
+    },
+    {
+      key: 'by_status',
+      description: 'What the ERP actually recorded, unbucketed',
+      sql:
+        'SELECT e.statusname, COUNT(*) AS days FROM ' +
+        STAFF_DAYS +
+        ' GROUP BY e.statusname ORDER BY days DESC',
+    },
+    /**
+     * Drill level 2 — the same status counts by academic quarter.
+     *
+     * A quarter is available here in a way it is not for Staff Overview: this
+     * table has a real per-row date, so bucketing is arithmetic rather than
+     * invention. Same Apr–Mar boundary as every other quarter in the platform
+     * (`academicQuarter`), so a reader comparing staff attendance against fees
+     * or student attendance is comparing the same window.
+     */
+    {
+      key: 'by_quarter',
+      description: 'Staff attendance by academic quarter',
+      drill_only: true,
+      sql:
+        `SELECT CONCAT('Q', ${STAFF_QUARTER}) AS quarter, ${STAFF_QUARTER} AS seq, ` +
+        'COUNT(*) AS marked_days, ' +
+        STAFF_STATUS_SUMS +
+        ' FROM ' +
+        STAFF_DAYS +
+        ' GROUP BY quarter, seq ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — the same counts by department, within the clicked
+     * quarter. Department is the leaf because the only level below it is
+     * naming individuals, which is a different report with a different PII
+     * posture — the same boundary Staff Overview's path stops at.
+     */
+    {
+      key: 'by_department_for_quarter',
+      description: 'Staff attendance by department, within one academic quarter',
+      drill_only: true,
+      sql:
+        'SELECT e.departmentname, COUNT(*) AS marked_days, ' +
+        STAFF_STATUS_SUMS +
+        ' FROM ' +
+        STAFF_DAYS +
+        ` WHERE (:drill_quarter IS NULL OR ${STAFF_QUARTER} = :drill_quarter) ` +
+        'GROUP BY e.departmentname ORDER BY marked_days DESC',
     },
   ],
 };
@@ -1215,7 +1647,7 @@ const TRANSPORT_ANALYTICS: PredefinedReport = {
   schema_version: 'erp-v1',
   source: 'student_transport_data_set',
   domain: 'students',
-  params: [],
+  params: [DRILL_ROUTE],
   queries: [
     {
       key: 'totals',
@@ -1249,6 +1681,37 @@ const TRANSPORT_ANALYTICS: PredefinedReport = {
       key: 'class_order',
       description: 'Class ordinals, read from enrolment because this table has none',
       sql: 'SELECT classname, MIN(classseq) AS seq FROM students_data_set GROUP BY classname ORDER BY seq',
+    },
+    /**
+     * Drill level 3 — riders by class, within the clicked pickup route.
+     *
+     * Levels 1 and 2 introduce no SQL: level 1 keeps `by_pickup_route` per
+     * school, level 2 IS `by_pickup_route`. Only the leaf narrows.
+     *
+     * -- Why route and not quarter --------------------------------------------
+     * Ridership is a standing arrangement, not a per-period one: this table
+     * records which route a student is ON, with no date column to bucket by, so
+     * a quarter level would have nothing to compute from. Route is the
+     * dimension the report is actually about ("Route ridership by route, stop
+     * and class"), and class beneath it is the question a transport manager
+     * asks — which years fill this bus.
+     *
+     * -- Ordered by size, not by class ordinal --------------------------------
+     * `student_transport_data_set` carries no `classseq`; the dashboard borrows
+     * one from `students_data_set` via `class_order` and applies it in the
+     * merge. A drill level fetches ONE statement, so that ordinal is not
+     * available here, and ordering by `classname` as TEXT would be worse than
+     * useless — it puts X before IX. Largest first is honest about what it is
+     * sorting by. Same reasoning as `by_class_for_quarter` on Attendance.
+     */
+    {
+      key: 'by_class_for_route',
+      description: 'Riders by class, within one pickup route',
+      drill_only: true,
+      sql:
+        'SELECT classname, COUNT(*) AS students FROM student_transport_data_set ' +
+        'WHERE (:drill_route IS NULL OR pickuproutename = :drill_route) ' +
+        'GROUP BY classname ORDER BY students DESC',
     },
   ],
 };
@@ -1341,6 +1804,8 @@ const REPORTS: readonly PredefinedReport[] = [
   FEE_COLLECTION,
   FEE_DEFAULTERS,
   STAFF_OVERVIEW,
+  STAFF_ATTENDANCE,
+  FEE_BY_STUDENT,
   ADMISSIONS_FUNNEL,
   ATTENDANCE_ANALYTICS,
   PRINCIPAL_SNAPSHOT,

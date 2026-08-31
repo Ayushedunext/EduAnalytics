@@ -72,12 +72,32 @@ export function Sidebar({
       </div>
 
       <ul className="nav">
+        {/**
+         * "Dashboard", not "Home" (renamed 2026-08-31). The screen is the
+         * overview a user lands on; the items directly BELOW it are the
+         * predefined reports, which docs/00's glossary and this codebase's own
+         * identifiers call "dashboards" (DASHBOARD_IDS, DashboardPage.tsx,
+         * buildDashboard). Both senses now sit in one menu, so the plural is
+         * deliberately never a nav label here: a "Dashboards" group listed under
+         * a "Dashboard" item reads as a typo rather than a hierarchy.
+         *
+         * Only the LABEL moved. The route key, `/api/home` and Home.tsx keep
+         * their names — `Dashboard*` is already taken across the orchestrator for
+         * the predefined reports, and renaming into that collision would make
+         * the code less clear, not more.
+         *
+         * 📈 and not 📊: the bar-chart glyph is the brand mark three rows
+         * above (`.mark`), and a nav item wearing the product’s own logo reads as
+         * a second brand rather than a destination. 🏠 went with the "Home"
+         * label — it named where the screen sat in the nav, and the screen is now
+         * named for what it shows.
+         */}
         <li
           className={`clickable ${active === 'home' ? 'active' : ''}`}
           onClick={() => { onNavigate('home'); }}
         >
-          <span className="w-4 text-center opacity-80">🏠</span>
-          <span className="flex-1">Home</span>
+          <span className="w-4 text-center opacity-80">📈</span>
+          <span className="flex-1">Dashboard</span>
         </li>
 
         {items.map((item) => {

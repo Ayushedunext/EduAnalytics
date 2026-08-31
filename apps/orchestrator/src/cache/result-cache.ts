@@ -155,6 +155,52 @@ async function connect(): Promise<void> {
  * their own. Four bumps in five days is not churn, it is the shape of this
  * phase: every dashboard that grows a drill grows a widget, and every widget is
  * a change a reader sees.
+ *
+ * v7 -> v8 (2026-08-31): the Dashboard revamp. The summary strip was renamed,
+ * reordered and given a breakdown under each figure, the fee card changed what
+ * its headline MEANS (the year's demand, not the arrears) along with its widget
+ * id, and `HomeSummary` grew a `grid` field naming which charts the overview
+ * draws and in what order. Every one of those is a reader-visible change and
+ * any one alone would have earned the bump.
+ *
+ * ONE digit for the whole revamp, not one per slice. The header above is
+ * explicit that this tracks what has SHIPPED rather than each step of getting
+ * there, and the revamp lands as a single PR — so the later slices extend this
+ * entry and local entries are deleted while iterating. The Dashboard's PREVIEW
+ * cards needed no help either way: their key already carries the query keys
+ * (`report:<id>:q=<keys>`, services/dashboards.ts), so pointing a card at its
+ * drill-entry statement instead of its lead one lands on a different key by
+ * construction.
+ *
+ * Extended again for the drill paths: Attendance's middle level moved from
+ * month to academic quarter. A drill key is
+ * `drill:<report>:<widget>:L<level>:<context>` and carries no query name, so a
+ * warm level-2 entry from the month version would have been served verbatim
+ * under the quarter version -- same report, same widget, same level, same
+ * `school=<id>` context. Exactly the case this digit exists for.
+ *
+ * And once more for Staff Overview and Transport, which each gained a
+ * drill-entry widget. Adding a widget to a dashboard is the change that first
+ * earned this digit at v2 -> v3, and it is the same change here: the report id,
+ * the filters and the school set are all unchanged, so nothing else in the key
+ * moves and a warm entry would answer with the pre-change dashboard.
+ *
+ * And for Staff Attendance joining the grid. The DASHBOARD itself needed no
+ * help -- a new report id is a new `kind` and therefore new keys by
+ * construction -- but `HomeSummary` carries the grid's membership and order, so
+ * the SUMMARY's own cached value changed shape again. The same held when Fee by
+ * Student joined it.
+ *
+ * -- This one was caught by the cache, not by a test -------------------------
+ * Worth recording, because the failure was invisible from inside the code. With
+ * the new build shipped and the orchestrator hot-reloaded, the screen still drew
+ * the OLD four tiles — right down to a "Fees outstanding" label that no longer
+ * existed anywhere in the source. `buildHomeSummary` returned a warm v7 entry
+ * before it ever reached a builder, so nothing ran and nothing failed. The
+ * header above already said this ("a warm cache kept answering with the
+ * pre-change dashboard, correctly by its own rules and wrongly by any other
+ * measure") and it happened anyway, which is the argument for the digit rather
+ * than for remembering to clear Redis: a deploy cannot be asked to remember.
  */
 export function cacheKey(parts: {
   kind: string;
@@ -169,7 +215,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v7:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v8:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

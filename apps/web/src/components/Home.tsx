@@ -38,12 +38,30 @@
  * The sidebar is the menu (every dashboard, Ask AI, Settings — Sidebar.tsx). It
  * used to be duplicated here as a second set of link-only tiles, which meant
  * this screen and the sidebar were two menus disagreeing about nothing, just
- * saying the same thing twice. Home's own job is to be the ONE screen that
- * shows something FROM each dashboard rather than a way to each dashboard —
- * `available` dashboards get a live preview card (their own lead widget,
- * services/home.ts `buildHomePreview`); `coming`/`blocked` ones, which have
- * nothing to preview, collapse into a slim strip, because the sidebar is
- * already the place to discover those.
+ * saying the same thing twice. This screen's own job is to be the ONE place
+ * that shows something FROM each dashboard rather than a way to each dashboard.
+ *
+ * -- A curated six, not everything available ---------------------------------
+ * The grid used to be every `available` dashboard, which is nine cards and
+ * growing — the sidebar again, drawn larger. It is now six, ranked and ordered
+ * by the SERVER (`/api/home` `grid`, services/home.ts `DASHBOARD_GRID`), and
+ * this component renders that order rather than re-deriving it: what the
+ * overview leads with is a product decision, and a second copy of the rule here
+ * would be free to disagree with the first.
+ *
+ * Everything else drops to the strip below — which now holds three kinds, not
+ * two. Dashboards that are BUILT but not on the grid are clickable there with
+ * no pill; `coming` and `blocked` keep their pill and stay inert. A working
+ * dashboard greyed out beside things that genuinely cannot be opened would be
+ * the same lie the three card states exist to avoid.
+ *
+ * -- Each card draws the chart a click DESCENDS from -------------------------
+ * A card shows the report's drill-entry chart (level 1, one bar per school)
+ * where the report has a curated path, and its lead chart where it does not.
+ * Fee Collection is why the distinction matters: its page opens with receipts
+ * by month, but the chart a reader drills into is demand by school, fed by a
+ * different statement. A card drawing the first would invite a click it cannot
+ * honour.
  *
  * -- Each card is its own request ---------------------------------------------
  * The cards used to arrive together, which meant the grid was only as fast as
@@ -54,8 +72,11 @@
  * simply appear as they are ready.
  */
 
-import { KpiTile, WidgetSpecView, type ChartAccent } from '@sap/chart-spec/react';
+import { useCallback, useState } from 'react';
+import { KpiTile, WidgetSpecView, type ChartAccent, type DrillTarget } from '@sap/chart-spec/react';
+import type { Widget } from '@sap/chart-spec';
 import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
+import { DrillTrail, useDrill, widgetIdOf } from './Drill';
 
 /**
  * Which of the four CVD-audited chart colours (widgets.tsx `ACCENT_COLOUR`)
@@ -89,6 +110,13 @@ interface Props {
    */
   previews: Record<string, HomePreview>;
   previewsLoading: boolean;
+  /**
+   * The scope the previews were fetched with. Passed rather than read off
+   * `home.spec.meta.scope` so a card's drill runs against exactly the selection
+   * its chart was built from — the two are the same today, and a drill that
+   * quietly re-derived its own scope is how they would stop being.
+   */
+  schoolIds: readonly string[];
   onOpen: (reportId: string) => void;
   onAskAI: () => void;
 }
@@ -99,13 +127,25 @@ export function Home({
   loading,
   previews,
   previewsLoading,
+  schoolIds,
   onOpen,
   onAskAI,
 }: Props): JSX.Element {
   const aiActive = session.ai_status === 'active';
   const scopeNames = home.spec.meta.scope.map((s) => s.school_name).join(' · ');
-  const previewable = home.dashboards.filter((c) => c.status === 'available');
-  const more = home.dashboards.filter((c) => c.status !== 'available');
+  /**
+   * The grid, in the server's order (`/api/home` `grid`). Looked up rather than
+   * filtered: the order is the server's ranking and re-deriving it here from
+   * `status` would put the cards back in catalog order, which ranks by the
+   * accident of what was built first.
+   */
+  const byId = new Map(home.dashboards.map((card) => [card.id, card]));
+  const previewable = home.grid.flatMap((id) => {
+    const card = byId.get(id);
+    return card === undefined ? [] : [card];
+  });
+  const onGrid = new Set(home.grid);
+  const more = home.dashboards.filter((card) => !onGrid.has(card.id));
 
   return (
     <main className="flex-1 overflow-y-auto">
@@ -225,12 +265,14 @@ export function Home({
               key={card.id}
               card={card}
               preview={previews[card.id]}
+              schoolIds={schoolIds}
+              academicYear={home.academic_year}
               onOpen={onOpen}
             />
           ))}
         </div>
 
-        <MoreDashboards cards={more} />
+        <MoreDashboards cards={more} onOpen={onOpen} />
 
         <p className="text-[11.5px] text-[var(--color-muted)] mt-7 leading-relaxed">
           Scope comes from the launch token the ERP signed. It cannot be widened from this browser,
@@ -252,12 +294,51 @@ export function Home({
 function PreviewCard({
   card,
   preview,
+  schoolIds,
+  academicYear,
   onOpen,
 }: {
   card: DashboardCard;
   preview: HomePreview | undefined;
+  schoolIds: readonly string[];
+  academicYear: string | null;
   onOpen: (reportId: string) => void;
 }): JSX.Element {
+  /**
+   * A drill failure is said INSIDE the card that failed. The page has no notice
+   * of its own for this and should not grow one: five other cards are fine, and
+   * a banner across the top would report a whole-screen problem where there is
+   * a one-card one (ADR-011's reasoning, one level down).
+   */
+  const [drillError, setDrillError] = useState<string | null>(null);
+  const { drills, busy, navigate } = useDrill({
+    reportId: card.id,
+    schoolIds,
+    academicYear,
+    onError: useCallback((message: string | null) => { setDrillError(message); }, []),
+  });
+
+  const base = preview?.status === 'ok' ? preview.widget : null;
+  const baseId = widgetIdOf(base);
+  const drilled = baseId === null ? undefined : drills[baseId];
+  /** The drilled level replaces the card's chart IN PLACE, as a panel's does. */
+  const shown = (drilled?.widget ?? base) as Widget | null;
+
+  /**
+   * Opening the full report is the CARD's click; drilling is the CHART's. They
+   * would otherwise fight: a bar click bubbles, so a drill would also navigate
+   * away from the card it just drilled, and the reader would never see the
+   * level they asked for.
+   *
+   * So the body stops propagation once there is anything to drill, and the head
+   * — title, icon, arrow — stays the way to the report. A click on empty chart
+   * space then does nothing, which is the right answer for a surface where the
+   * bars are the targets.
+   */
+  const interactive =
+    drilled !== undefined ||
+    (shown !== null && 'drillable' in shown && shown.drillable === true);
+
   return (
     <div className="card pcard" onClick={() => { onOpen(card.id); }} role="button" tabIndex={0}>
       <div className="pcardHead">
@@ -265,11 +346,50 @@ function PreviewCard({
         <b>{card.title}</b>
         <span className="pcardGo" aria-hidden="true">→</span>
       </div>
-      <div className="pcardBody">
+      <div
+        className="pcardBody"
+        onClick={
+          interactive
+            ? (event) => { event.stopPropagation(); }
+            : undefined
+        }
+      >
         {preview === undefined ? (
           <div className="skeleton skeletonPreview" />
-        ) : preview.status === 'ok' && preview.widget !== null ? (
-          <WidgetSpecView widget={preview.widget} compact accent={PREVIEW_ACCENT[card.id]} />
+        ) : shown !== null ? (
+          <>
+            <WidgetSpecView
+              widget={shown}
+              compact
+              accent={PREVIEW_ACCENT[card.id]}
+              /**
+               * The renderer reports WHICH value was clicked; deciding what to
+               * fetch is this screen's job, because the drill path is a
+               * server-side catalog (DRILL_PATHS) and the spec carries only the
+               * dimension, never a query.
+               *
+               * One widget per card, so the handler takes only the target --
+               * `WidgetSpecView`'s single-widget form, not `ChartSpecView`'s
+               * `(widget, target)`. The id is `baseId`: the level-1 widget's,
+               * which is what keyed the drill in the first place and stays the
+               * key at every level below it.
+               */
+              onDrill={(target: DrillTarget) => {
+                if (baseId === null) return;
+                navigate(baseId, [...(drilled?.context ?? []), target]);
+              }}
+            />
+            {drilled !== undefined && baseId !== null && (
+              <DrillTrail
+                title={card.title}
+                state={drilled}
+                busy={busy === baseId}
+                compact
+                onJump={(depth) => { navigate(baseId, drilled.context.slice(0, depth)); }}
+              />
+            )}
+            {drillError !== null && <p className="pcardError">{drillError}</p>}
+          </>
         ) : (
           <span className="pcardMuted">{preview.reason ?? card.blurb}</span>
         )}
@@ -279,27 +399,55 @@ function PreviewCard({
 }
 
 /**
- * Everything with nothing to preview -- `coming` (not built yet) and
- * `blocked` (no data in the ERP extract) alike. One slim row rather than full
- * tiles: the sidebar already lists each of these by name with the same
- * status and reason (Sidebar.tsx), so this strip is a reminder they exist,
- * not the place to learn about them for the first time.
+ * Everything the grid does not draw. One slim row rather than full tiles: the
+ * sidebar already lists each of these by name with the same status and reason
+ * (Sidebar.tsx), so this strip is a reminder they exist, not the place to learn
+ * about them for the first time.
+ *
+ * -- Three kinds here now, and one of them is clickable -----------------------
+ * This used to hold only `coming` and `blocked` dashboards, because the grid
+ * drew every `available` one. The grid is a curated six now (services/home.ts
+ * `DASHBOARD_GRID`), so BUILT dashboards land here too — and they must not sit
+ * greyed out beside things that genuinely cannot be opened. A card that works
+ * gets a real click and no pill; the other two keep their pill and stay inert,
+ * which is the same three-state distinction the cards above make and for the
+ * same reason: they need different people to fix them.
  */
-function MoreDashboards({ cards }: { cards: readonly DashboardCard[] }): JSX.Element | null {
+function MoreDashboards({
+  cards,
+  onOpen,
+}: {
+  cards: readonly DashboardCard[];
+  onOpen: (reportId: string) => void;
+}): JSX.Element | null {
   if (cards.length === 0) return null;
   return (
     <>
       <div className="sect">More dashboards</div>
       <div className="moreStrip">
-        {cards.map((card) => (
-          <span key={card.id} className="moreChip" title={card.reason ?? card.blurb}>
-            <span aria-hidden="true">{card.icon}</span>
-            {card.title}
-            <span className={`pill ${card.status === 'blocked' ? 'nodata' : 'soon'}`}>
-              {card.status === 'blocked' ? 'no data' : 'soon'}
+        {cards.map((card) => {
+          const open = card.status === 'available';
+          return (
+            <span
+              key={card.id}
+              className={`moreChip${open ? ' clickable' : ''}`}
+              title={open ? `Open ${card.title}` : (card.reason ?? card.blurb)}
+              role={open ? 'button' : undefined}
+              tabIndex={open ? 0 : undefined}
+              onClick={() => {
+                if (open) onOpen(card.id);
+              }}
+            >
+              <span aria-hidden="true">{card.icon}</span>
+              {card.title}
+              {!open && (
+                <span className={`pill ${card.status === 'blocked' ? 'nodata' : 'soon'}`}>
+                  {card.status === 'blocked' ? 'no data' : 'soon'}
+                </span>
+              )}
             </span>
-          </span>
-        ))}
+          );
+        })}
       </div>
     </>
   );

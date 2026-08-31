@@ -131,3 +131,102 @@ describe('server-side hydration (AUDIT_REPORT C15)', () => {
     ).toBe(true);
   });
 });
+
+/**
+ * `kpi.breakdown` — the parts of a KPI's own figure (Dashboard's four summary
+ * cards, orchestrator services/home.ts).
+ *
+ * The cardinality bounds are the whole contract here, so they are what is
+ * tested. Both exist to stop a tile rendering something that is not a
+ * breakdown: one part is the total wearing a second label, and four parts do
+ * not fit the card the strip draws.
+ */
+describe('kpi breakdown (Dashboard summary cards)', () => {
+  function withKpi(breakdown: unknown): unknown {
+    return {
+      spec_version: 1,
+      title: 'Dashboard',
+      widgets: [
+        { id: 'kpi-students', type: 'kpi', label: 'Students', value: '3,929', breakdown },
+      ],
+      meta,
+    };
+  }
+
+  it('accepts two and three parts', () => {
+    expect(
+      validateChartSpec(
+        withKpi([
+          { label: 'Male', value: '2,100' },
+          { label: 'Female', value: '1,829' },
+        ]),
+      ).ok,
+    ).toBe(true);
+
+    expect(
+      validateChartSpec(
+        withKpi([
+          { label: 'Permanent', value: '120' },
+          { label: 'Not permanent', value: '58' },
+          { label: 'Unclassified', value: '50' },
+        ]),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('refuses a single part, which is the total under another name', () => {
+    expect(validateChartSpec(withKpi([{ label: 'Male', value: '3,929' }])).ok).toBe(false);
+  });
+
+  it('refuses a fourth part rather than letting the card overflow', () => {
+    expect(
+      validateChartSpec(
+        withKpi([
+          { label: 'A', value: '1' },
+          { label: 'B', value: '2' },
+          { label: 'C', value: '3' },
+          { label: 'D', value: '4' },
+        ]),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it('is optional — a tile with no split is still a valid tile', () => {
+    const spec = {
+      spec_version: 1,
+      title: 'Dashboard',
+      widgets: [{ id: 'kpi-staff', type: 'kpi', label: 'Staff on roll', value: '228' }],
+      meta,
+    };
+    expect(validateChartSpec(spec).ok).toBe(true);
+  });
+
+  /**
+   * A part carries a pre-formatted STRING, never a number, for the same reason
+   * the KPI's own `value` does: formatting is a locale decision made once,
+   * server-side, so a tile and its PDF cannot format one figure two ways
+   * (ADR-015/021). A raw number here would be that drift starting.
+   */
+  it('refuses a raw number where a formatted string belongs', () => {
+    expect(
+      validateChartSpec(
+        withKpi([
+          { label: 'Male', value: 2100 },
+          { label: 'Female', value: 1829 },
+        ]),
+      ).ok,
+    ).toBe(false);
+  });
+
+  /** `.strict()`: an unknown key is a drifting producer, not a nice-to-have. */
+  it('refuses an unknown key on a part', () => {
+    expect(
+      validateChartSpec(
+        withKpi([
+          { label: 'Male', value: '2,100', colour: '#0f766e' },
+          { label: 'Female', value: '1,829' },
+        ]),
+      ).ok,
+    ).toBe(false);
+  });
+});

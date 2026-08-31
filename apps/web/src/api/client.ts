@@ -168,6 +168,17 @@ export interface HomeResponse {
    */
   blocked_metrics: { label: string; reason: string; kind: 'no_data' | 'not_permitted' }[];
   dashboards: DashboardCard[];
+  /**
+   * Which dashboards the grid draws, in the order it draws them (services/
+   * home.ts `DASHBOARD_GRID`). Ids, not cards -- the card itself is still read
+   * out of `dashboards`, so there is one description of a dashboard and this is
+   * only a ranking of it.
+   *
+   * The SPA does not decide this and must not re-derive it. What the overview
+   * leads with is a product decision the server makes; a filter in the browser
+   * would be a second copy of that rule, free to disagree with the first.
+   */
+  grid: string[];
   /** Schools that failed inside a fan-out. Annotated, never dropped (ADR-011). */
   degraded_schools: { school_id: string; message: string }[];
 }

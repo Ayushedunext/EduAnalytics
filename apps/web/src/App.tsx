@@ -139,12 +139,12 @@ export function App(): JSX.Element {
     if (home === null || home.academic_year === null || selected.length === 0) return;
     const academicYear = home.academic_year;
     /**
-     * The cards the SERVER says are previewable. Read off the `/api/home`
+     * The cards the SERVER puts on the grid, in ITS order. Read off `/api/home`
      * response rather than listed here, so the SPA never asks for a dashboard
      * the catalog considers `coming` or `blocked` -- that status is the
      * server's verdict (services/home.ts) and this screen only renders it.
      */
-    const ids = home.dashboards.filter((c) => c.status === 'available').map((c) => c.id);
+    const ids = home.grid;
     if (ids.length === 0) return;
 
     let cancelled = false;
@@ -258,7 +258,7 @@ export function App(): JSX.Element {
           academicYear={home?.academic_year ?? null}
           crumb={
             route.kind === 'home'
-              ? 'Home'
+              ? 'Dashboard'
               : route.kind === 'settings'
                 ? 'Settings'
                 : route.kind === 'ask'
@@ -338,6 +338,7 @@ export function App(): JSX.Element {
             loading={homeLoading}
             previews={previews}
             previewsLoading={previewsLoading}
+            schoolIds={selected}
             onOpen={(id) => { setRoute({ kind: 'report', id }); }}
             onAskAI={() => { setRoute({ kind: 'ask' }); }}
           />

@@ -33,6 +33,7 @@
 import {
   chartSpecSchema,
   type ChartSpec,
+  type KpiPart,
   type Widget,
 } from '@sap/chart-spec';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
@@ -42,8 +43,10 @@ import { schoolNames } from '../db/registry.js';
 import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
 import { config } from '../config.js';
 import {
+  DASHBOARD_DRILL_QUERY,
   DASHBOARD_LEAD_QUERY,
   buildDashboard,
+  drillPathFor,
   isDashboardId,
   type DashboardId,
 } from './dashboards.js';
@@ -53,14 +56,54 @@ import {
  * — the MCP server injects scope and the row cap itself (docs/04 §3).
  */
 const METRIC_SQL = {
+  /**
+   * Students per year, split by gender for the tile's breakdown.
+   *
+   * `gender` joins the GROUP BY rather than becoming a second statement: the
+   * scan is the same scan, and one extra grouping column is far cheaper than a
+   * second pass over the table. Every caller of these rows already sums `n`
+   * across whatever else is in them (`sumForYear`), so the total is unchanged
+   * by the finer grouping.
+   */
   studentsByYear:
-    'SELECT academicyearname AS ay, COUNT(*) AS n FROM students_data_set ' +
-    'WHERE deactivation_date IS NULL GROUP BY academicyearname',
+    'SELECT academicyearname AS ay, gender, COUNT(*) AS n FROM students_data_set ' +
+    'WHERE deactivation_date IS NULL GROUP BY academicyearname, gender',
+  /**
+   * Staff, split by the ERP's `stafftype` for the tile's breakdown.
+   *
+   * What that column actually holds is the whole difficulty, and it is handled
+   * in `staffParts` rather than here: the SQL reports the column faithfully and
+   * the classification is done where it can be explained and tested.
+   */
   activeStaff:
-    'SELECT COUNT(*) AS n FROM employees_data_set WHERE deactivation_date IS NULL',
-  outstandingByYear:
-    'SELECT academicyearname AS ay, ROUND(SUM(balance_amount)) AS n ' +
-    'FROM fee_compile_data_set WHERE balance_amount > 0 GROUP BY academicyearname',
+    'SELECT stafftype, COUNT(*) AS n FROM employees_data_set ' +
+    'WHERE deactivation_date IS NULL GROUP BY stafftype',
+  /**
+   * The fee book per year: demand raised, received, and still owed.
+   *
+   * -- Why `WHERE balance_amount > 0` had to go --------------------------------
+   * The statement used to filter to rows with a positive balance, which is
+   * correct when outstanding is the only figure wanted and WRONG the moment
+   * `paid` is: a fully-settled instalment has a zero balance, so the filter
+   * excluded precisely the payments that make up most of the collected total.
+   * Keeping it would have reported collections that only counted money received
+   * from students who still owe something.
+   *
+   * `n` is therefore computed with a CASE rather than by filtering rows, and it
+   * is the SAME number the filtered statement produced: positive balances only.
+   * Credits from overpaying students stay out of arrears instead of quietly
+   * cancelling another student's debt (the tile says so on screen).
+   *
+   * The wider scan costs no more in practice. `fee_compile_data_set` carries no
+   * usable index for this predicate (mcp-server/src/reports/catalog.ts), so the
+   * filtered form was already a full scan — the WHERE discarded rows after
+   * reading them rather than avoiding any read.
+   */
+  feesByYear:
+    'SELECT academicyearname AS ay, ROUND(SUM(total_payable_amount)) AS payable, ' +
+    'ROUND(SUM(paid_amount)) AS paid, ' +
+    'ROUND(SUM(CASE WHEN balance_amount > 0 THEN balance_amount ELSE 0 END)) AS n ' +
+    'FROM fee_compile_data_set GROUP BY academicyearname',
   /**
    * Attendance for the tile, by month.
    *
@@ -128,7 +171,21 @@ export interface HomeSummary {
   readonly spec: ChartSpec;
   readonly academic_year: string | null;
   readonly blocked_metrics: readonly BlockedMetric[];
+  /**
+   * Every card in the catalog. Still the whole list, because the SIDEBAR
+   * renders from it (Sidebar.tsx) and it is also the set a custom report can be
+   * cloned from (`listReportSources`).
+   */
   readonly dashboards: readonly DashboardCard[];
+  /**
+   * Which of them the Dashboard GRID draws, in the order it draws them.
+   *
+   * Sent as ids rather than left for the SPA to filter, for the same reason the
+   * card statuses are: what the overview leads with is a decision this service
+   * makes, and a second copy of the rule in the browser is a second copy that
+   * can disagree. The SPA renders the order it is given.
+   */
+  readonly grid: readonly string[];
   /** Schools that failed within a fan-out. Annotated, never swallowed (ADR-011). */
   readonly degraded_schools: readonly { school_id: string; message: string }[];
 }
@@ -154,12 +211,74 @@ export interface HomePreview {
   readonly reason?: string;
 }
 
-/** The dashboards Home offers a preview card for, in catalog order. */
+/**
+ * The charts the Dashboard grid draws, in the order it draws them.
+ *
+ * -- Why a curated list and not "everything available" -----------------------
+ * The grid used to be every `available` dashboard, which is nine cards and
+ * growing. Nine charts under four summary cards is not an overview; it is the
+ * sidebar again, drawn larger, and a screen that shows everything ranks nothing.
+ * This names the six a reader is meant to scan first, and the rest stay one
+ * click away in the sidebar and in the strip below the grid.
+ *
+ * -- The order is the ranking -------------------------------------------------
+ * Money first, because it is what a Director and an Accountant both open the
+ * page for; then the two headcount-and-presence charts; then staff and
+ * transport, which are read less often. Catalog order would have led with
+ * Enrollment for no better reason than that it was built first.
+ *
+ * -- The count is a product decision, and every card on it drills ------------
+ * Eight today: the six this list opened with, plus Staff Attendance and Fee by
+ * Student once they existed. There is no technical limit here — what there IS, and what
+ * test/home-previews.test.ts holds as [MANDATORY], is that every id on this
+ * list has a `DRILL_PATHS` entry AND a `DASHBOARD_DRILL_QUERY` entry. A card
+ * drawing a chart nobody can click lies about what happens when you click it,
+ * so a dashboard joins this list when it can be descended, not before.
+ */
+const DASHBOARD_GRID: readonly DashboardId[] = [
+  'fee-collection',
+  'fee-defaulters',
+  'fee-by-student',
+  'attendance-analytics',
+  'staff-attendance',
+  'enrollment-overview',
+  'staff-overview',
+  'transport-analytics',
+];
+
+/**
+ * The grid's cards, in grid order, filtered to what this build can actually
+ * serve.
+ *
+ * The `status === 'available'` check is not redundant with the list above. The
+ * list is a product decision about what the screen leads with; availability is
+ * a fact about the build and the ERP extract, decided in `DASHBOARDS`. A
+ * dashboard demoted to `coming` or `blocked` must drop out of the grid without
+ * anyone remembering to edit two places.
+ */
 export function previewableDashboards(): readonly (DashboardCard & { id: DashboardId })[] {
-  return DASHBOARDS.filter(
-    (card): card is DashboardCard & { id: DashboardId } =>
-      card.status === 'available' && isDashboardId(card.id),
-  );
+  const byId = new Map(DASHBOARDS.map((card) => [card.id, card]));
+  return DASHBOARD_GRID.flatMap((id) => {
+    const card = byId.get(id);
+    return card !== undefined && card.status === 'available' && isDashboardId(card.id)
+      ? [card as DashboardCard & { id: DashboardId }]
+      : [];
+  });
+}
+
+/**
+ * Everything the grid does NOT draw, for the strip beneath it.
+ *
+ * Three kinds land here and they are not alike: dashboards that are built and
+ * simply not on the grid, ones whose serving path is not written yet
+ * (`coming`), and ones the ERP extract has no data for (`blocked`). The first
+ * kind is reachable RIGHT NOW, so the strip has to let it be opened rather than
+ * showing it greyed beside things that cannot be — which is what the SPA does
+ * with the `status` each card already carries.
+ */
+export function otherDashboards(): readonly DashboardCard[] {
+  const onGrid = new Set<string>(DASHBOARD_GRID);
+  return DASHBOARDS.filter((card) => !onGrid.has(card.id));
 }
 
 /**
@@ -209,6 +328,46 @@ export async function buildHomePreview(args: {
   }
 
   try {
+    /**
+     * The DRILL-ENTRY chart where the report has one, and the lead chart where
+     * it does not.
+     *
+     * The grid's cards are meant to be descended into (ADR-020: school →
+     * quarter → class), so the card must draw the chart that HAS that path —
+     * level 1, one bar per school — rather than whatever the report's own page
+     * happens to open with. For Fee Collection those are different charts fed
+     * by different statements: the page leads with receipts by month, the drill
+     * starts from demand by school.
+     *
+     * A report with no `DRILL_PATHS` entry keeps its lead chart and renders
+     * inert. That is the honest state, not a placeholder: Staff Overview and
+     * Transport have no curated path yet, and a card that drew a clickable
+     * chart over a path that does not exist would refuse the click it invited.
+     */
+    const path = drillPathFor(card.id);
+    let queryKey: string;
+    if (path === undefined) {
+      queryKey = DASHBOARD_LEAD_QUERY[card.id];
+    } else {
+      const drillQuery = DASHBOARD_DRILL_QUERY[card.id];
+      /**
+       * [MANDATORY] CODING_GUIDELINES §10. A path with no drill query declared
+       * is a table that has drifted, and the failure it would otherwise produce
+       * is the success-shaped kind: the card falls back to the lead chart and
+       * renders a NON-drillable chart under a report advertising three levels.
+       * Refused here, where it names the missing table, rather than on screen.
+       */
+      if (drillQuery === undefined) {
+        throw new PlatformError({
+          code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+          message: 'That dashboard could not be previewed.',
+          diagnostics: { report_id: card.id, missing: 'DASHBOARD_DRILL_QUERY' },
+          correlationId: args.correlationId,
+        });
+      }
+      queryKey = drillQuery;
+    }
+
     const result = await buildDashboard({
       session: args.session,
       schoolIds: args.schoolIds,
@@ -216,24 +375,30 @@ export async function buildHomePreview(args: {
       academicYear: args.academicYear,
       asOfDate: args.asOfDate,
       correlationId: args.correlationId,
-      queryKeys: [DASHBOARD_LEAD_QUERY[card.id]],
+      queryKeys: [queryKey],
     });
 
     /**
-     * The lead query produces exactly one chart widget, because every builder
-     * guards its widgets on the rows they need. Finding it by type rather than
-     * by id keeps this honest if a builder ever pushes a KPI off the same
-     * result set: the card wants the shape, and falls back to whatever single
-     * widget did come back rather than showing nothing.
+     * Where a drill path exists the widget is chosen BY ID, not by type. That
+     * one statement can feed more than one widget — `by_component` builds both
+     * Fee Collection's school bars and its fee-head table — so "the first
+     * bar/line/donut" is no longer a reliable way to find the drill entry, and
+     * picking the wrong one would hand the card a chart with no `drill_dim`.
+     *
+     * Without a path, the old rule stands: prefer the chart over a KPI, because
+     * the summary strip above already carries the numbers and the card's job is
+     * to be the thing the strip cannot be — a shape.
      */
-    const chart = result.spec.widgets.find(
-      (w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut',
-    );
+    const widget =
+      path === undefined
+        ? result.spec.widgets.find((w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut')
+        : result.spec.widgets.find((w) => w.id === path.widget_id);
+
     return {
       id: card.id,
       title: card.title,
       icon: card.icon,
-      widget: chart ?? result.spec.widgets[0] ?? null,
+      widget: widget ?? result.spec.widgets[0] ?? null,
       status: 'ok',
     };
   } catch (err) {
@@ -333,11 +498,42 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     status: 'available',
   },
   {
+    id: 'fee-by-student',
+    title: 'Fee by Student',
+    blurb: 'What each student owes over the whole year, by school, quarter and class',
+    icon: '🧾',
+    group: 'school',
+    /**
+     * Names children, and says so. `students`'s identity columns are masked at
+     * the MCP layer for a session without `students.read` (rail 6, docs/08
+     * §4.5) -- `fees.read` alone sees the amounts against `[masked]`. That is
+     * the platform's existing policy applied, not a rule this card invents.
+     */
+    status: 'available',
+  },
+  {
     id: 'staff-overview',
     title: 'Staff Overview',
     blurb: 'Headcount by department and employment type, joiners and attrition',
     icon: '👥',
     group: 'school',
+    status: 'available',
+  },
+  {
+    id: 'staff-attendance',
+    title: 'Staff Attendance',
+    blurb: 'Present and absent staff-days by school, quarter and department',
+    icon: '🗂️',
+    group: 'school',
+    /**
+     * `available` since 2026-08-31. docs/11 §2 had recorded staff attendance as
+     * deliberately NOT a dashboard — the table was catalogued so Ask AI could
+     * reach it, but the only staff-attendance entry in docs/06 §2's catalog was
+     * the Director's Cross-School Attendance, which needs the rollup store.
+     * Building a school-level one was therefore a new catalog entry rather than
+     * an implementation of an existing one, which is a decision; it has been
+     * taken and docs/11 records the amendment.
+     */
     status: 'available',
   },
   {
@@ -466,7 +662,7 @@ export async function buildHomeSummary(args: {
     };
   }
 
-  const { students, staff, outstanding, attendance } = await withMcp(
+  const { students, staff, fees, attendance } = await withMcp(
     args.session,
     args.correlationId,
     args.schoolIds,
@@ -477,7 +673,7 @@ export async function buildHomeSummary(args: {
        * running them in parallel costs one round trip instead of three and does
        * not widen that cap.
        */
-      const [students, staff, outstanding, attendance] = await Promise.all([
+      const [students, staff, fees, attendance] = await Promise.all([
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.studentsByYear,
@@ -488,14 +684,14 @@ export async function buildHomeSummary(args: {
         }),
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
-          sql: METRIC_SQL.outstandingByYear,
+          sql: METRIC_SQL.feesByYear,
         }),
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.attendanceByMonth,
         }),
       ]);
-      return { students, staff, outstanding, attendance };
+      return { students, staff, fees, attendance };
     },
   );
 
@@ -521,7 +717,7 @@ export async function buildHomeSummary(args: {
    */
   const studentsOutcome = outcomeOf(students);
   const staffOutcome = outcomeOf(staff);
-  const outstandingOutcome = outcomeOf(outstanding);
+  const feesOutcome = outcomeOf(fees);
   const attendanceOutcome = outcomeOf(attendance);
 
   /**
@@ -532,7 +728,7 @@ export async function buildHomeSummary(args: {
    */
   const academicYear =
     (studentsOutcome.available ? latestYear(students.rows) : null) ??
-    (outstandingOutcome.available ? latestYear(outstanding.rows) : null);
+    (feesOutcome.available ? latestYear(fees.rows) : null);
 
   const widgets: Widget[] = [];
   const blocked: BlockedMetric[] = [];
@@ -544,6 +740,23 @@ export async function buildHomeSummary(args: {
       label: `Students · ${String(scope.length)} school${scope.length > 1 ? 's' : ''}`,
       value: formatCount(sumForYear(students.rows, academicYear)),
       tone: 'neutral',
+      /**
+       * The gender mix, in the ERP's OWN words.
+       *
+       * The part labels are whatever `students_data_set.gender` holds,
+       * title-cased — never a fixed Boys/Girls pair mapped onto them. A school
+       * recording "M"/"F", or a third value, or nothing at all, is reported as
+       * it is, so a category this platform did not anticipate cannot be quietly
+       * folded into one it did.
+       */
+      ...breakdownOf(
+        mixParts(
+          students.rows.filter((row) => row['ay'] === academicYear),
+          'gender',
+          'n',
+          formatCount,
+        ),
+      ),
     });
   } else {
     blocked.push({
@@ -568,29 +781,13 @@ export async function buildHomeSummary(args: {
       label: 'Staff on roll',
       value: formatCount(sumAll(staff.rows)),
       tone: 'neutral',
+      ...breakdownOf(staffParts(staff.rows)),
     });
   } else {
     blocked.push({
       label: 'Staff on roll',
       reason: staffOutcome.reason ?? 'Not available for this session',
       kind: staffOutcome.kind,
-    });
-  }
-
-  if (outstandingOutcome.available && academicYear !== null) {
-    const amount = sumForYear(outstanding.rows, academicYear);
-    widgets.push({
-      id: 'kpi-outstanding',
-      type: 'kpi',
-      label: 'Fees outstanding',
-      value: formatRupees(amount),
-      tone: amount > 0 ? 'warning' : 'neutral',
-    });
-  } else {
-    blocked.push({
-      label: 'Fees outstanding',
-      reason: outstandingOutcome.reason ?? 'Not available for this session',
-      kind: outstandingOutcome.kind,
     });
   }
 
@@ -621,6 +818,24 @@ export async function buildHomeSummary(args: {
         label: `Student attendance · ${monthLabel(attendanceMonth)}`,
         value: `${((present / marked) * 100).toFixed(1)}%`,
         tone: present / marked < 0.75 ? 'warning' : 'neutral',
+        /**
+         * "Present days", not "Present". These are student-DAYS over the month
+         * the tile names — the very denominator the rate above is built from —
+         * and a part labelled "Present" under a monthly figure reads as a
+         * headcount for today. The two differ by roughly the number of school
+         * days in the month.
+         *
+         * Absent is DERIVED as marked − present rather than counted separately,
+         * because that is exactly what the rate's denominator makes it: a day
+         * nobody marked is in neither part. That is the same caveat Attendance
+         * Analytics carries, and the reason both lead with a rate over marked
+         * days rather than over working days — the extract names no school
+         * calendar, so working days are not knowable here.
+         */
+        breakdown: [
+          { label: 'Present days', value: formatCount(present) },
+          { label: 'Absent days', value: formatCount(marked - present) },
+        ],
       });
     }
   } else if (!attendanceOutcome.available) {
@@ -644,6 +859,59 @@ export async function buildHomeSummary(args: {
   }
 
   /**
+   * Fees: the year's whole demand, split into collected and still owed.
+   *
+   * -- Why the headline moved from outstanding to total ------------------------
+   * This tile used to lead with the outstanding balance alone. A bare "₹19.4L
+   * outstanding" cannot be read without the size of the book it came from: it is
+   * alarming against a ₹25L demand and unremarkable against ₹19Cr. Leading with
+   * the demand and naming collected and pending underneath supplies the only
+   * context that makes the figure mean anything, and it costs no extra query —
+   * all three amounts come from columns the one scan was already reading.
+   *
+   * -- The parts need not add to the total, and that is deliberate -------------
+   * `payable` is the demand raised, `paid` what was received against it, and
+   * `pending` the POSITIVE balances only (`feesByYear`). Where a student has
+   * overpaid, that credit is left out of pending rather than netted off against
+   * another student's arrears, so collected + pending can exceed the demand
+   * slightly. Netting would understate what is actually owed, and arrears are
+   * the number a bursar acts on.
+   */
+  if (feesOutcome.available && academicYear !== null) {
+    const payable = sumForYear(fees.rows, academicYear, 'payable');
+    const paid = sumForYear(fees.rows, academicYear, 'paid');
+    const pending = sumForYear(fees.rows, academicYear);
+    widgets.push({
+      id: 'kpi-fees',
+      type: 'kpi',
+      label: `Total fees · ${academicYear}`,
+      value: formatRupees(payable),
+      /**
+       * The tile stays neutral and the PENDING part carries the warning. Every
+       * school has something pending at any moment, so an amber edge on the
+       * whole tile would be permanently lit — a signal that never varies is not
+       * a signal, and it would drown out the tiles where amber means something
+       * happened.
+       */
+      tone: 'neutral',
+      breakdown: [
+        { label: 'Collected', value: formatRupees(paid), tone: 'positive' },
+        {
+          label: 'Pending',
+          value: formatRupees(pending),
+          tone: pending > 0 ? 'warning' : 'positive',
+        },
+      ],
+    });
+  } else {
+    blocked.push({
+      label: 'Total fees',
+      reason: feesOutcome.reason ?? 'Not available for this session',
+      kind: feesOutcome.kind,
+    });
+  }
+
+  /**
    * The chart-spec schema requires at least one widget, and rightly so — a spec
    * with nothing in it is not a report. A session that can read none of these
    * metrics is a real state (a token with no analytics perms at all), and it
@@ -661,7 +929,7 @@ export async function buildHomeSummary(args: {
 
   const spec: ChartSpec = {
     spec_version: 1,
-    title: 'Home',
+    title: 'Dashboard',
     widgets,
     meta: {
       scope,
@@ -698,7 +966,8 @@ export async function buildHomeSummary(args: {
     academic_year: academicYear,
     blocked_metrics: blocked,
     dashboards: DASHBOARDS,
-    degraded_schools: degradedFrom([students, staff, outstanding, attendance]),
+    grid: previewableDashboards().map((card) => card.id),
+    degraded_schools: degradedFrom([students, staff, fees, attendance]),
   };
 
   /**
@@ -769,9 +1038,143 @@ function latestYear(rows: readonly Record<string, unknown>[]): string | null {
   return [...years].sort().reverse()[0] ?? null;
 }
 
-function sumForYear(rows: readonly Record<string, unknown>[], year: string | null): number {
+/**
+ * One field of one academic year, summed across the schools that answered.
+ *
+ * `field` defaults to `n`, the count/amount every one of these statements
+ * carries, so the fee statement's extra `payable` and `paid` columns are read
+ * through the same function rather than a parallel one that could drift from it.
+ */
+function sumForYear(
+  rows: readonly Record<string, unknown>[],
+  year: string | null,
+  field = 'n',
+): number {
   if (year === null) return 0;
-  return rows.reduce((total, row) => (row['ay'] === year ? total + toNumber(row['n']) : total), 0);
+  return rows.reduce((total, row) => (row['ay'] === year ? total + toNumber(row[field]) : total), 0);
+}
+
+/**
+ * `{ breakdown }` when there are parts to show, and nothing at all when there
+ * are not.
+ *
+ * Spread into the widget rather than assigned, because `breakdown` is optional
+ * in the schema and `exactOptionalPropertyTypes` means an explicit `undefined`
+ * is not the same as an absent key. The same shape `dashboards.ts` uses for a
+ * bar's optional `series`.
+ */
+function breakdownOf(parts: readonly KpiPart[]): { breakdown?: KpiPart[] } {
+  return parts.length >= 2 ? { breakdown: [...parts] } : {};
+}
+
+/**
+ * A total's parts, taken from the data's OWN category labels.
+ *
+ * Nothing here knows what a gender or a category is called. Rows are grouped by
+ * whatever string the column holds, ranked by size, and the top ones are
+ * reported under their own names — so a school recording "M"/"F", or "MALE"/
+ * "FEMALE", or a third value this platform has never seen, is described rather
+ * than translated. A blank is "Not recorded", which is a real answer and not
+ * the same as absent.
+ *
+ * Fewer than two parts returns none: a single-part "breakdown" is a second
+ * label for the total, and the schema refuses it for that reason.
+ *
+ * Beyond three, the tail collapses into "Other" rather than being truncated
+ * away. The parts stop being a complete account of the total the moment a
+ * category is silently dropped, and a reader cannot see that it happened.
+ */
+function mixParts(
+  rows: readonly Record<string, unknown>[],
+  labelField: string,
+  valueField: string,
+  format: (value: number) => string,
+): KpiPart[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const raw = String(row[labelField] ?? '').trim();
+    const label = raw === '' ? 'Not recorded' : titleCase(raw);
+    totals.set(label, (totals.get(label) ?? 0) + toNumber(row[valueField]));
+  }
+
+  const ranked = [...totals]
+    .filter(([, value]) => value > 0)
+    .sort(([, a], [, b]) => b - a);
+  if (ranked.length < 2) return [];
+  if (ranked.length <= 3) {
+    return ranked.map(([label, value]) => ({ label, value: format(value) }));
+  }
+
+  const rest = ranked.slice(2).reduce((total, [, value]) => total + value, 0);
+  return [
+    ...ranked.slice(0, 2).map(([label, value]) => ({ label, value: format(value) })),
+    { label: 'Other', value: format(rest) },
+  ];
+}
+
+/**
+ * Employment types this ERP spells out in words, and what they mean.
+ *
+ * Matched as substrings of the upper-cased value because the extract is not
+ * consistent about form — "CONFIRMATION", "CONTRACTUAL", "PROBATION" and
+ * "PART TIME" all appear, and a school is free to add another tomorrow.
+ */
+const PERMANENT_TYPE = /CONFIRM|PERMANENT|REGULAR/;
+const IMPERMANENT_TYPE = /CONTRACT|PROBATION|TEMPORARY|TEMP\b|ADHOC|AD[ -]HOC|GUEST|PART[ -]?TIME|TRAINEE|INTERN|PROVISION/;
+
+/**
+ * Staff split into permanent, not permanent, and the ones the ERP will not say.
+ *
+ * -- Why this is not a two-way split -----------------------------------------
+ * `employees_data_set.stafftype` holds CONFIRMATION / CONTRACTUAL / PROBATION
+ * alongside opaque codes — S0011, S004AD — 19 distinct values across three
+ * schools (mcp-server/src/reports/catalog.ts, `by_stafftype`). The words
+ * classify themselves. The codes do not, and no mapping for them has been
+ * confirmed by anyone.
+ *
+ * Forcing the codes into one bucket or the other would produce two numbers that
+ * look authoritative and are guesses, which is the exact failure this file keeps
+ * warning about: a wrong answer wearing the shape of a right one. Dropping them
+ * is no better — the parts would then quietly fail to account for the headcount
+ * printed directly above them.
+ *
+ * So they get named. "Unclassified" is a third part, visible on the tile, and a
+ * school whose codes dominate can SEE that its employment split is unknown
+ * rather than being told a confident fiction. If a mapping is ever confirmed,
+ * this is the one place that changes and the part disappears on its own.
+ */
+function staffParts(rows: readonly Record<string, unknown>[]): KpiPart[] {
+  let permanent = 0;
+  let impermanent = 0;
+  let unclassified = 0;
+
+  for (const row of rows) {
+    const type = String(row['stafftype'] ?? '').trim().toUpperCase();
+    const count = toNumber(row['n']);
+    if (PERMANENT_TYPE.test(type)) permanent += count;
+    else if (IMPERMANENT_TYPE.test(type)) impermanent += count;
+    else unclassified += count;
+  }
+
+  /**
+   * Nothing self-described: the column is entirely codes for these schools, so
+   * there is no split to report and the tile shows the headcount alone. Three
+   * parts reading 0 / 0 / everything is not information.
+   */
+  if (permanent === 0 && impermanent === 0) return [];
+
+  return [
+    { label: 'Permanent', value: formatCount(permanent) },
+    { label: 'Not permanent', value: formatCount(impermanent) },
+    ...(unclassified > 0
+      ? [{ label: 'Unclassified', value: formatCount(unclassified) }]
+      : []),
+  ];
+}
+
+/** `FEMALE` -> `Female`, `ad-hoc` -> `Ad-Hoc`. Labels are read, not sorted. */
+function titleCase(value: string): string {
+  return value.toLowerCase().replace(/(^|[^a-z])([a-z])/g, (_, lead: string, ch: string) => lead + ch.toUpperCase());
 }
 
 function sumAll(rows: readonly Record<string, unknown>[]): number {

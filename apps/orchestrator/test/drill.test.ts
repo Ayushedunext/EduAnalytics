@@ -984,7 +984,7 @@ describe('enrollment drills school to class to section', () => {
   });
 });
 
-describe('attendance drills school to month to class, in counts', () => {
+describe('attendance drills school to quarter to class, in counts', () => {
   it('draws present against absent, and omits a school with nothing marked', async () => {
     const built = await build('attendance-analytics', [
       {
@@ -1010,7 +1010,7 @@ describe('attendance drills school to month to class, in counts', () => {
     expect(widget?.series?.map((m) => m.field)).toEqual(['present_days', 'absent_days']);
   });
 
-  it('warns at the month level that these are marked days only', async () => {
+  it('warns at the quarter level that these are marked days only', async () => {
     response = {
       report_id: 'attendance-analytics',
       title: 'Attendance',
@@ -1022,21 +1022,33 @@ describe('attendance drills school to month to class, in counts', () => {
           school_id: 'stmarksmb',
           status: 'ok',
           queries: [
-            query('by_month', [
-              { month: '2026-07', seq: 202607, present_days: 90, absent_days: 10 },
-              { month: '2026-08', seq: 202608, present_days: 80, absent_days: 20 },
+            query('by_quarter', [
+              { quarter: 'Q1', seq: 1, present_days: 90, absent_days: 10 },
+              { quarter: 'Q2', seq: 2, present_days: 80, absent_days: 20 },
             ]),
           ],
         },
       ],
     };
     const out = await drillOn('attendance-analytics', 'bar-school-attendance', 2, [SCHOOL_STEP]);
-    expect(lastCall?.args['query_keys']).toEqual(['by_month']);
+    expect(lastCall?.args['query_keys']).toEqual(['by_quarter']);
     expect(out.notes[0]).toMatch(/marked/i);
-    expect((out.widget as BarWidget).data.map((r) => r['month'])).toEqual(['2026-07', '2026-08']);
+    expect((out.widget as BarWidget).data.map((r) => r['quarter'])).toEqual(['Q1', 'Q2']);
   });
 
-  it('binds the clicked month as a YYYY-MM string at level 3', async () => {
+  /**
+   * The middle level is the same Apr–Mar quarter the fee paths use, so a reader
+   * comparing "Q2 fees" with "Q2 attendance" is comparing the same window. It
+   * was a MONTH until 2026-08-31, which made that one card's middle level mean
+   * something different from the other three without saying so.
+   */
+  it('descends through the academic quarter, matching the fee paths', () => {
+    const path = DRILL_PATHS['attendance-analytics'];
+    expect(path?.levels[1]?.drill_dim).toBe('quarter');
+    expect(path?.levels[1]?.drill_dim).toBe(DRILL_PATHS['fee-collection']?.levels[1]?.drill_dim);
+  });
+
+  it('binds the clicked quarter as a NUMBER at level 3', async () => {
     response = {
       report_id: 'attendance-analytics',
       title: 'Attendance',
@@ -1047,16 +1059,24 @@ describe('attendance drills school to month to class, in counts', () => {
         {
           school_id: 'stmarksmb',
           status: 'ok',
-          queries: [query('by_class_for_month', [{ classname: 'IX', present_days: 40, absent_days: 5 }])],
+          queries: [
+            query('by_class_for_quarter', [{ classname: 'IX', present_days: 40, absent_days: 5 }]),
+          ],
         },
       ],
     };
     const out = await drillOn('attendance-analytics', 'bar-school-attendance', 3, [
       SCHOOL_STEP,
-      { dim: 'month', value: '2026-07', label: 'Jul 2026' },
+      { dim: 'quarter', value: '2', label: 'Q2' },
     ]);
     const params = lastCall?.args['params'] as Record<string, unknown>;
-    expect(params['drill_month']).toBe('2026-07');
+    /**
+     * A NUMBER, not the string the click carried. `drill_quarter` is declared
+     * `number` in the catalog so `run_predefined` refuses a string before the
+     * guard ever sees it -- the value came from a browser, which is to say from
+     * outside.
+     */
+    expect(params['drill_quarter']).toBe(2);
     /** The window the base report bound travels unchanged alongside it. */
     expect(params['from_date']).toBe('2026-04-01');
     expect(params['to_date']).toBe('2027-03-31');
@@ -1066,12 +1086,101 @@ describe('attendance drills school to month to class, in counts', () => {
   it('never drills on a rate — quotients do not survive the merge', () => {
     /**
      * The one thing that would quietly produce nonsense here: `sumBy` adds the
-     * fields it is given, and adding two months' percentages yields a number
+     * fields it is given, and adding two quarters' percentages yields a number
      * belonging to neither. Locked to counts at the catalog level.
      */
     const path = DRILL_PATHS['attendance-analytics'];
     for (const measure of path?.measures ?? []) {
       expect(measure.field).toMatch(/_days$/);
     }
+  });
+});
+
+describe('fee by student drills school to quarter to class, on the money', () => {
+  it('draws ONE measure — the amount, not the student count beside it', () => {
+    const path = DRILL_PATHS['fee-by-student'];
+    /**
+     * Every level's statement returns `students` alongside `outstanding`, and
+     * only the amount is drawn. A count of 500 and an amount of ₹5,000,000
+     * share an axis only in the sense that both are numbers: the count would be
+     * an invisible sliver and the axis would be labelled for neither.
+     */
+    expect(path?.measures.map((m) => m.field)).toEqual(['outstanding']);
+  });
+
+  it('descends through the same quarter as the other fee paths', () => {
+    const path = DRILL_PATHS['fee-by-student'];
+    expect(path?.levels[1]?.drill_dim).toBe('quarter');
+    expect(path?.levels[1]?.drill_dim).toBe(DRILL_PATHS['fee-collection']?.levels[1]?.drill_dim);
+    /** The leaf declares no `drill_dim`, so its chart renders inert. */
+    expect(path?.levels[2]?.drill_dim).toBeUndefined();
+  });
+
+  it('says at the quarter level that this is the whole book, not just what is late', async () => {
+    response = {
+      report_id: 'fee-by-student',
+      title: 'Fee by Student',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_quarter', [
+              { quarter: 'Q1', seq: 1, students: 40, outstanding: 120000 },
+              { quarter: 'Q2', seq: 2, students: 55, outstanding: 260000 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('fee-by-student', 'bar-school-fee-student', 2, [SCHOOL_STEP]);
+
+    expect(lastCall?.args['query_keys']).toEqual(['by_quarter']);
+    expect((out.widget as BarWidget).data.map((r) => r['quarter'])).toEqual(['Q1', 'Q2']);
+    /**
+     * The note is load-bearing rather than decorative. A bursar reading this
+     * beside Fee Defaulters sees two different totals for what looks like the
+     * same question, and the difference is due-yet versus not — if that is not
+     * said against the bars, the gap reads as an error in one of the reports.
+     */
+    expect(out.notes[0]).toMatch(/whole year|due or not|already fallen due/i);
+  });
+
+  it('binds the clicked quarter as a number at level 3', async () => {
+    response = {
+      report_id: 'fee-by-student',
+      title: 'Fee by Student',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_class_for_quarter', [
+              { classname: 'IX', seq: 9, students: 12, outstanding: 90000 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('fee-by-student', 'bar-school-fee-student', 3, [
+      SCHOOL_STEP,
+      QUARTER_STEP,
+    ]);
+
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_quarter']).toBe(2);
+    /**
+     * No `as_of_date`. Nothing in this report depends on what has fallen due,
+     * and a filter that appeared to move the numbers without moving them would
+     * be worse than an absent one.
+     */
+    expect(params['as_of_date']).toBeUndefined();
+    expect((out.widget as BarWidget).x).toBe('classname');
   });
 });

@@ -133,6 +133,31 @@ export type Tone = z.infer<typeof toneSchema>;
  * number formatting are locale decisions made once, server-side, so the screen
  * and the PDF cannot format the same number differently.
  */
+/**
+ * One named part of the figure a KPI leads with.
+ *
+ * `value` is a pre-formatted display string for exactly the reason the KPI's
+ * own `value` is: currency and number formatting is a locale decision made
+ * once, server-side, so a tile and its PDF cannot format the same number two
+ * ways. A part carries no `field` and no raw number — it is not a mini chart
+ * and nothing downstream recomputes it.
+ *
+ * The parts are DESCRIPTIVE, not arithmetic: nothing here requires them to sum
+ * to `value`, and the renderer never checks that they do. Two of the first four
+ * uses do not sum — a school's staff splits into permanent, not-permanent and a
+ * remainder whose employment type the ERP records as an opaque code, and an
+ * attendance rate is a quotient whose parts are counts. A schema that insisted
+ * on a sum would have forced those to lie.
+ */
+export const kpiPartSchema = z
+  .object({
+    label: z.string().min(1),
+    value: z.string(),
+    tone: toneSchema.optional(),
+  })
+  .strict();
+export type KpiPart = z.infer<typeof kpiPartSchema>;
+
 export const kpiWidgetSchema = z
   .object({
     ...widgetBase,
@@ -141,6 +166,15 @@ export const kpiWidgetSchema = z
     value: z.string(),
     delta: z.string().optional(),
     tone: toneSchema.optional(),
+    /**
+     * At least two parts, because one part is not a breakdown — it is a second
+     * label for the same number, and a tile that draws one is telling a reader
+     * there is a split where none exists. At most three, because the tile is a
+     * card in a four-across strip (tokens.css `.kpis`) and a fourth part turns
+     * the split into a table nobody can read at that width; a metric needing
+     * more parts than that wants a chart, which the spec already has.
+     */
+    breakdown: z.array(kpiPartSchema).min(2).max(3).optional(),
   })
   .strict();
 

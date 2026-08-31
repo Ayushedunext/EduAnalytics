@@ -477,6 +477,26 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     reason: 'Needs the rollup store (ADR-010, Phase 2)',
   },
   {
+    id: 'fee-comparative',
+    title: 'Comparative Analysis',
+    blurb: 'Recovery this year against last, school by school, instalment by instalment',
+    icon: '📊',
+    /**
+     * `school`, not `director`, even though the page a reader sees is a
+     * school-by-school comparison.
+     *
+     * The group decides which half of the menu a card sits in, and the
+     * `director` half is reserved for the screens ADR-010 puts behind the rollup
+     * store — Group Overview, School Comparison, Cross-School Attendance — all
+     * of which are still `coming`. This report is not one of those: it is served
+     * by the same per-school fan-out every other report uses (ADR-011), it works
+     * for a single school as readily as for twenty, and listing it beside four
+     * cards that cannot be opened would suggest it cannot be either.
+     */
+    group: 'school',
+    status: 'available',
+  },
+  {
     id: 'fee-collection',
     title: 'Fee Collection',
     /**

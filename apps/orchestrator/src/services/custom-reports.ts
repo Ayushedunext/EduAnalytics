@@ -51,6 +51,7 @@ import { auditSink } from '../db/audit.js';
 import {
   BUILDERS,
   Merged,
+  previousAcademicYear,
   REPORT_FILTERS,
   WIDGET_BUCKET_OPTIONS,
   WIDGET_QUERY_KEYS,
@@ -319,7 +320,22 @@ async function runTemplateMode(args: {
   const academicYear = typeof args.def.params['academic_year'] === 'string' ? args.def.params['academic_year'] : '';
   const asOfDate =
     typeof args.def.params['as_of_date'] === 'string' ? args.def.params['as_of_date'] : new Date().toISOString().slice(0, 10);
-  const built = BUILDERS[baseReportId](merged, { year: academicYear, asOf: asOfDate, scope });
+  /**
+   * Read back out of the clone's STORED params rather than re-derived, which is
+   * the whole point of storing them (ADR-018): a clone taken while comparing
+   * 2026-27 with 2023-24 must keep comparing with 2023-24 when it is reopened
+   * next year, not silently start comparing with 2025-26.
+   */
+  const compareYear =
+    typeof args.def.params['compare_year'] === 'string'
+      ? args.def.params['compare_year']
+      : previousAcademicYear(academicYear);
+  const built = BUILDERS[baseReportId](merged, {
+    year: academicYear,
+    asOf: asOfDate,
+    compareYear,
+    scope,
+  });
 
   const scopedWidgets =
     args.def.widget_scope === undefined ? built.widgets : built.widgets.filter((w) => w.id === args.def.widget_scope);
@@ -350,7 +366,7 @@ async function runTemplateMode(args: {
     },
   };
 
-  const { filterChips } = resolveReportParams(baseReportId, { academicYear, asOfDate });
+  const { filterChips } = resolveReportParams(baseReportId, { academicYear, asOfDate, compareYear });
   const definitions = merged.definitions();
 
   return {
@@ -611,6 +627,14 @@ export async function cloneReport(args: {
   academicYear: string;
   asOfDate: string;
   /** Per-widget clone (docs/06 §3): clone just this one widget id, not the whole dashboard. */
+  /**
+   * The comparison year to freeze into the clone's stored params, for a
+   * year-on-year report. Absent means the preceding year, which
+   * `resolveReportParams` derives — the same default the base report opens on.
+   * A reader who cloned "2026-27 against 2023-24" cloned that comparison, and a
+   * clone that re-derived it later would quietly compare against something else.
+   */
+  compareYear?: string | undefined;
   widgetScope?: string;
   /** Time-grouping override — only valid together with `widgetScope`, and only for a widget that declares options. */
   bucket?: 'week' | 'month' | 'quarter' | 'year';
@@ -643,6 +667,7 @@ export async function cloneReport(args: {
   const { params } = resolveReportParams(args.baseReportId, {
     academicYear: args.academicYear,
     asOfDate: args.asOfDate,
+    compareYear: args.compareYear,
   });
   const def: TemplateDef = {
     mode: 'template',
@@ -883,6 +908,15 @@ export async function updateReportVisual(args: {
   const { params } = resolveReportParams(existingBaseId, {
     academicYear: args.academicYear,
     asOfDate: args.asOfDate,
+    /**
+     * The comparison year the clone was SAVED with, carried through rather than
+     * re-derived. This endpoint changes the filter values a reader edited; a
+     * comparison they chose and did not touch is not one of them, and resetting
+     * it here would move a saved report's baseline without anyone asking.
+     */
+    ...(typeof existing.params['compare_year'] === 'string'
+      ? { compareYear: existing.params['compare_year'] }
+      : {}),
   });
   /**
    * A widget-scoped clone (docs/06 §3) stays widget-scoped across an academic

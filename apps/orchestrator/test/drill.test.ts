@@ -984,6 +984,175 @@ describe('enrollment drills school to class to section', () => {
   });
 });
 
+describe('comparative analysis drills school to instalment to class', () => {
+  it('builds level 1 per school from the demand rows both years share', async () => {
+    /**
+     * The level-1 chart is CURRENT-year only even though the rows carry two
+     * years. A bar that silently added last year's demand to this year's would
+     * make every school look twice its size, and the comparison the page is
+     * about would be inside a single bar rather than between two.
+     */
+    const built = await build('fee-comparative', [
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('demand_by_period', [
+            { ay: '2026-27', period_month: 4, payable: 100, collected: 90, outstanding: 10 },
+            { ay: '2025-26', period_month: 4, payable: 80, collected: 60, outstanding: 20 },
+          ]),
+        ],
+      },
+      {
+        school_id: 'stmarksj',
+        queries: [
+          query('demand_by_period', [
+            { ay: '2026-27', period_month: 4, payable: 200, collected: 120, outstanding: 80 },
+          ]),
+        ],
+      },
+    ]);
+
+    const widget = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school',
+    );
+    expect(widget?.series?.map((s) => s.field)).toEqual(['payable', 'collected', 'outstanding']);
+    expect(widget?.data).toEqual([
+      { school_id: 'stmarksmb', school_name: 'Meera Bagh', payable: 100, collected: 90, outstanding: 10 },
+      { school_id: 'stmarksj', school_name: 'Janakpuri', payable: 200, collected: 120, outstanding: 80 },
+    ]);
+  });
+
+  it('asks for no by-school query of its own', async () => {
+    await build('fee-comparative', [
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('demand_by_period', [
+            { ay: '2026-27', period_month: 4, payable: 100, collected: 90, outstanding: 10 },
+          ]),
+        ],
+      },
+    ]);
+    /** The dashboard run, unnarrowed: level 1 is a re-grouping, not a query. */
+    expect(lastCall?.args['query_keys']).toBeUndefined();
+  });
+
+  it('runs its own current-year statement at level 2, not the two-year one', async () => {
+    /**
+     * `demand_by_period` holds these rows already — and cannot be used,
+     * because the drill renderer sums a level's rows by its axis field, which
+     * would add last year's Instalment-1 to this year's under one bar.
+     */
+    response = {
+      report_id: 'fee-comparative',
+      title: 'Comparative Analysis',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('installments_current', [
+              { installmentname: 'Instalment-1', seq: '20260401', payable: 100, collected: 90, outstanding: 10 },
+              { installmentname: 'Instalment-2', seq: '20260701', payable: 100, collected: 40, outstanding: 60 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('fee-comparative', 'bar-school', 2, [SCHOOL_STEP]);
+    expect(lastCall?.args['query_keys']).toEqual(['installments_current']);
+    /** Narrowed to the clicked school, and the id never reached the SQL. */
+    expect(lastCall?.args['school_ids']).toEqual(['stmarksmb']);
+    expect(out.school_ids).toEqual(['stmarksmb']);
+    const widget = out.widget as BarWidget;
+    expect(widget.x).toBe('installmentname');
+    expect(widget.drill_dim).toBe('installment');
+    /** The instalment name is both label and value, so no separate field. */
+    expect(widget.drill_value_field).toBeUndefined();
+    /**
+     * The level says what stops being true at it: the page above compares two
+     * years, and a drilled level does not.
+     */
+    expect(out.notes.join(' ')).toContain('current year only');
+  });
+
+  it('binds the clicked instalment as a STRING at level 3', async () => {
+    response = {
+      report_id: 'fee-comparative',
+      title: 'Comparative Analysis',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('classes_current', [
+              { classname: 'IX', seq: 9, payable: 60, collected: 50, outstanding: 10 },
+              { classname: 'X', seq: 10, payable: 40, collected: 40, outstanding: 0 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('fee-comparative', 'bar-school', 3, [
+      SCHOOL_STEP,
+      { dim: 'installment', value: 'Instalment-2', label: 'Instalment-2' },
+    ]);
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_installment']).toBe('Instalment-2');
+    expect(typeof params['drill_installment']).toBe('string');
+    /** The base filters travel down with it, comparison year included. */
+    expect(params['academic_year']).toBe('2026-27');
+    expect(params['compare_year']).toBe('2025-26');
+    expect((out.widget as BarWidget).x).toBe('classname');
+    expect((out.widget as BarWidget).drillable).toBe(false);
+  });
+
+  it('carries the comparison year the reader chose, not the derived one', async () => {
+    response = {
+      report_id: 'fee-comparative',
+      title: 'Comparative Analysis',
+      source: 'fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('installments_current', [
+              { installmentname: 'Instalment-1', seq: '20260401', payable: 100, collected: 90, outstanding: 10 },
+            ]),
+          ],
+        },
+      ],
+    };
+    await buildDrill({
+      session: SESSION,
+      schoolIds: SCOPE,
+      reportId: 'fee-comparative',
+      widgetId: 'bar-school',
+      level: 2,
+      context: [SCHOOL_STEP],
+      academicYear: '2026-27',
+      asOfDate: '2026-08-31',
+      compareYear: '2023-24',
+      correlationId: 'corr-x',
+    });
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    /**
+     * A level fetched under a different comparison from the chart it was reached
+     * from would be two views of two different questions, one of them silently.
+     */
+    expect(params['compare_year']).toBe('2023-24');
+  });
+});
+
 describe('attendance drills school to quarter to class, in counts', () => {
   it('draws present against absent, and omits a school with nothing marked', async () => {
     const built = await build('attendance-analytics', [

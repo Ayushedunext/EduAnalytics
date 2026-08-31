@@ -99,7 +99,9 @@ describe('a cache entry can only be reached by an identical request', () => {
     // v6 since the quarter drill began keeping not-yet-due quarters as zero
     // bars. Drill levels carry their own cache keys, so a stale entry would
     // have gone on hiding them.
-    expect(cacheKey(BASE)).toMatch(/^sap:v6:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v7 since Enrollment and Attendance gained drill entry points too.
+    expect(cacheKey(BASE)).toMatch(/^sap:v7:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

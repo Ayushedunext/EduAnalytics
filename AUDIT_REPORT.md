@@ -132,11 +132,28 @@ Principal's Snapshot, Transport Analytics and Library & Textbooks were built (do
 - **Recommended action:** amend docs/06 §4.4 to state the rule explicitly — non-PII L3 dims (fee_type, section, gender, mark-band) may serve from rollups; student-level leaves are replica-only, top-N capped, role-gated, and audited. No ADR change needed; this sharpens ADR-010/020 rather than altering them.
 
 **A7 — Drill L2 replica fallback breaks the latency budget it claims to honour** *(new in Rev 2)*
-- **Status:** `OPEN` · **Severity:** Low-Medium
+- **Status:** `OPEN`, now **measured rather than estimated** (2026-08-29) · **Severity:** Low-Medium, and size-dependent
 - **Document:** docs/06 §6 assumption 2 vs docs/09 §3.
 - **Issue:** docs/06 assumes rollup dims (class, fee_type) land in the ETL before drill GA, and that "until then **L2 may fall back to replicas within the same latency budget**". docs/09 §3 budgets drill L1/L2 at 100–400 ms *from the Rollup Store*, and prices a replica cache-miss at 0.5–2 s. The fallback is 2–5× outside the budget it invokes.
 - **Classification:** CONTRADICTION (a doc's self-justification contradicted by the binding budget table).
-- **Recommended action:** either state the degraded budget honestly for the interim period, or make the ETL dim extension a hard precondition of drill GA (docs/11 Phase 4). Prefer the latter — docs/09 §3 targets are declared binding.
+- **Rev 3 (2026-08-29) — drill shipped on the interim path, so this is no longer hypothetical.** Both fee drills are live (docs/06 §4.5–4.6) and `npm run bench:drill-latency -w @sap/mcp-server` measures every shipped level against every school in the extract. Median of five, cold cache, database time only:
+
+| School | Demand rows | Collection L2 | Defaulters L2 | Collection L3 | Defaulters L3 |
+|---|---|---|---|---|---|
+| stmarksg | 36,074 | 122 ms | 272 ms | 89 ms | 97 ms |
+| stmarksj | 40,402 | 138 ms | 284 ms | 101 ms | 109 ms |
+| stmarksmb | 69,529 | 232 ms | 503 ms | 168 ms | 189 ms |
+| sacsgb | 129,834 | 442 ms | 1,025 ms | 324 ms | 337 ms |
+| sacskb | 333,598 | 1,174 ms | 2,907 ms | 830 ms | 882 ms |
+
+  Three findings, and the estimate above holds up only in the middle of the range:
+
+  1. **L3 is within budget at every school measured** — 89–882 ms against a 1,500 ms ceiling, with the largest school still at 59% of it. The interim path is not the constraint at level 3.
+  2. **L2 crosses the 400 ms ceiling at roughly 100,000 demand rows** and degrades linearly with table size: within budget for the three St Marks schools, 1.1–2.6× over at sacsgb, 2.9–7.3× over at sacskb. "2–5×" was a fair description of a mid-to-large school and understates the tail.
+  3. **Defaulters L2 costs 2.5× its Fee Collection counterpart at every size**, because `COUNT(DISTINCT enrollmentno)` over an unindexed scan is dearer than `SUM`. Any future headcount drill inherits that, so it is a property of the measure, not of this report.
+
+  Add ~130 ms of orchestrator, MCP and HTTP on top, invariant with school size. A repeat drill is served from tier ① in ~5 ms, so every number here is the first reader of a slice.
+- **Recommended action (revised).** The original recommendation — "prefer making the ETL dim extension a hard precondition of drill GA" — is now more expensive than the problem warrants, because it would block a feature that meets its budget for four of the five schools measured and at level 3 for all of them. Prefer instead, in order: **(a)** land C21's two `ADD INDEX (school_db, academicyearname)` statements, measured at 6.5× on the same tables, which would put sacskb's collection L2 near 180 ms and its defaulters L2 near 450 ms — the whole range inside or adjacent to budget without any ETL work; **(b)** state the interim budget honestly in docs/09 §3 as size-dependent rather than a single figure; **(c)** treat the rollup dims as the answer for schools above ~300,000 demand rows specifically, rather than as a precondition for everyone. This remains OPEN because (a) needs a name on the ERP side (question 28) and (b) is an unmade doc change, not because the numbers are unknown.
 
 **A8 — `report_definitions.school_scope` vs "scope comes only from the token"** *(new in Rev 2)*
 - **Status:** `RESOLVED` 2026-08-26 by **ADR-032** — effective scope at execution is the stored `school_scope` INTERSECTED with the viewer's own token scope, never the stored scope alone; the Logic panel shows the effective scope, never the author's. Implemented in `services/custom-reports.ts`'s `effectiveScope()`, proven by `test/custom-reports.test.ts`. docs/06 §1 updated. · **Severity:** Medium (tenant-isolation adjacent)
@@ -415,7 +432,7 @@ Principal's Snapshot, Transport Analytics and Library & Textbooks were built (do
 
 20. **`ai_status` enforcement for the agent runtime** — where a queue worker checks the gate, whether agent AI calls count against the org monthly cap, and what happens to scheduled/in-flight runs when a key fails. Recommend moving the gate into the AI provider interface rather than HTTP middleware. *(C13 — new)*
 21. **ERP notification API** — does it exist? If not, ADR-023's rejection of write-backs loses its stated sanctioned alternative, so the trade-off needs re-examining, not just the 🔔 node. Add to docs/11 owed inputs either way. *(B5 — Rev 1 Q10)*
-22. **Drill L3 serving** — confirm student-level leaves are replica-only (rollups cannot hold PII per ADR-010), and whether the ETL dim extension is a hard precondition of drill GA. *(A6, A7 — new)*
+22. **Drill L3 serving** — confirm student-level leaves are replica-only (rollups cannot hold PII per ADR-010), and whether the ETL dim extension is a hard precondition of drill GA. *(A6, A7 — new)* **Half-answered 2026-08-29 by measurement (A7):** the ETL dim extension is NOT a hard precondition. L3 runs 89–882 ms against a 1,500 ms budget at every school in the extract, including the largest, so replica-only leaves are viable on their own terms as well as required by ADR-010. L2 is the level that degrades, and it crosses budget at roughly 100,000 demand rows — which makes C21's index (question 28) the cheaper fix than the ETL work for every school measured. What is still owed from the TL is a decision on (b) and (c) in A7's revised recommendation, not more data. **Note also that neither shipped drill reaches student level at all** — both stop at class — so the PII half of this question is not yet exercised by anything in production.
 23. **Mail triggers** — is IMAP sufficient, or are Google/Microsoft APIs required? *(B4 — Rev 1 Q9)*
 24. **Product-visible defaults** — quiet hours (8 PM–7 AM), per-school daily message cap (2,000), agent tick cadence (5 min), 8-hour session with launch-time role snapshot. *(B3 — Rev 1 Q11)*
 25. **Attendance Analytics widgets** — is a heatmap required in v1? If yes, approve an additive ADR-015 amendment. Reclassified from a doc contradiction to a scoping question. **Still open, and no longer blocking:** the dashboard shipped 2026-08-21 with KPI · line · bar · donut · table, which answer the class-wise question within the existing vocabulary. A heatmap would be an addition to a working screen rather than a precondition for one. *(A2 revised — Rev 1 Q4)*

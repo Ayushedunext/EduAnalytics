@@ -71,6 +71,7 @@ const { buildDashboard, DRILL_PATHS, DASHBOARD_IDS } = await import(
   '../src/services/dashboards.js'
 );
 const { buildDrill, resolveDrill } = await import('../src/services/drill.js');
+type DrillStep = { dim: string; value: string; label: string };
 const { predefinedReports } = await import('../../mcp-server/src/reports/catalog.js');
 
 const SESSION = {
@@ -822,4 +823,255 @@ describe('measures decide whether a level is a grouped bar', () => {
       }
     },
   );
+});
+
+/**
+ * Enrollment and Attendance, added 2026-08-31. Between them they exercise the
+ * two things the fee paths never did: a level narrowed by a STRING parameter,
+ * and a level that reuses a query the base dashboard already runs rather than
+ * a `drill_only` one.
+ */
+function build(reportId: string, schools: { school_id: string; queries: QueryResult[] }[]) {
+  response = {
+    report_id: reportId,
+    title: reportId,
+    source: 'a_table',
+    params: {},
+    as_of: '2026-08-31T10:00:00.000Z',
+    schools: schools.map((s) => ({ school_id: s.school_id, status: 'ok', queries: s.queries })),
+  };
+  return buildDashboard({
+    session: SESSION,
+    schoolIds: schools.map((s) => s.school_id),
+    reportId: reportId as 'enrollment-overview',
+    academicYear: '2026-27',
+    asOfDate: '2026-08-31',
+    correlationId: 'corr-1',
+  });
+}
+
+function drillOn(reportId: string, widgetId: string, level: number, context: DrillStep[]) {
+  return buildDrill({
+    session: SESSION,
+    schoolIds: SCOPE,
+    reportId: reportId as 'enrollment-overview',
+    widgetId,
+    level,
+    context,
+    academicYear: '2026-27',
+    asOfDate: '2026-08-31',
+    correlationId: 'corr-x',
+  });
+}
+
+describe('enrollment drills school to class to section', () => {
+  it('builds level 1 per school from the by_class rows already on the page', async () => {
+    const built = await build('enrollment-overview', [
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('by_class', [
+            { classname: 'IX', seq: 9, students: 40 },
+            { classname: 'X', seq: 10, students: 35 },
+          ]),
+        ],
+      },
+      { school_id: 'stmarksj', queries: [query('by_class', [{ classname: 'IX', seq: 9, students: 22 }])] },
+    ]);
+
+    const widget = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-roll',
+    );
+    /** 40 + 35 within a school; never 75 + 22 across them. */
+    expect(widget?.data).toEqual([
+      { school_id: 'stmarksmb', school_name: 'Meera Bagh', students: 75 },
+      { school_id: 'stmarksj', school_name: 'Janakpuri', students: 22 },
+    ]);
+    expect(widget?.series).toBeUndefined();
+  });
+
+  it('runs the dashboard’s own by_class query at level 2 — no new statement', async () => {
+    response = {
+      report_id: 'enrollment-overview',
+      title: 'Enrollment',
+      source: 'students_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_class', [
+              { classname: 'IX', seq: 9, students: 40 },
+              { classname: 'X', seq: 10, students: 35 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('enrollment-overview', 'bar-school-roll', 2, [SCHOOL_STEP]);
+    expect(lastCall?.args['query_keys']).toEqual(['by_class']);
+    const widget = out.widget as BarWidget;
+    expect(widget.x).toBe('classname');
+    expect(widget.drill_dim).toBe('class');
+    /** The class name is both the label and the value, so no separate field. */
+    expect(widget.drill_value_field).toBeUndefined();
+  });
+
+  it('binds the clicked class as a STRING at level 3', async () => {
+    response = {
+      report_id: 'enrollment-overview',
+      title: 'Enrollment',
+      source: 'students_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_section_for_class', [
+              { sectionname: 'A', students: 20 },
+              { sectionname: 'B', students: 20 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('enrollment-overview', 'bar-school-roll', 3, [
+      SCHOOL_STEP,
+      { dim: 'class', value: 'IX', label: 'IX' },
+    ]);
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_class']).toBe('IX');
+    expect(typeof params['drill_class']).toBe('string');
+    expect((out.widget as BarWidget).x).toBe('sectionname');
+    expect((out.widget as BarWidget).drillable).toBe(false);
+  });
+
+  it('carries a class name that looks like SQL through as a value', async () => {
+    /**
+     * It reaches MySQL as a bound parameter (CODING_GUIDELINES §9), so the only
+     * correct behaviour is to pass it along and match nothing. Asserted because
+     * a future "sanitise the drill value" would be the wrong fix applied to the
+     * wrong layer, and this locks in which layer is responsible.
+     */
+    response = {
+      report_id: 'enrollment-overview',
+      title: 'Enrollment',
+      source: 'students_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        { school_id: 'stmarksmb', status: 'ok', queries: [query('by_section_for_class', [])] },
+      ],
+    };
+    await drillOn('enrollment-overview', 'bar-school-roll', 3, [
+      SCHOOL_STEP,
+      { dim: 'class', value: "'; DROP TABLE students; --", label: 'x' },
+    ]);
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_class']).toBe("'; DROP TABLE students; --");
+  });
+
+  it('has no note and no pending marker, because every level partitions cleanly', () => {
+    const path = DRILL_PATHS['enrollment-overview'];
+    for (const level of path?.levels ?? []) {
+      expect(level.note).toBeUndefined();
+      expect(level.pending).toBeUndefined();
+    }
+  });
+});
+
+describe('attendance drills school to month to class, in counts', () => {
+  it('draws present against absent, and omits a school with nothing marked', async () => {
+    const built = await build('attendance-analytics', [
+      {
+        school_id: 'stmarksmb',
+        queries: [query('summary', [{ present_days: 0, absent_days: 0, marked_days: 0 }])],
+      },
+      {
+        school_id: 'stmarksj',
+        queries: [query('summary', [{ present_days: 180, absent_days: 20, marked_days: 200 }])],
+      },
+    ]);
+    const widget = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-attendance',
+    );
+    /**
+     * A school with no marked days is absent, not a pair of zero bars: zero
+     * present and zero absent reads as "nobody came", and the true statement is
+     * "nobody marked the register".
+     */
+    expect(widget?.data).toEqual([
+      { school_id: 'stmarksj', school_name: 'Janakpuri', present_days: 180, absent_days: 20 },
+    ]);
+    expect(widget?.series?.map((m) => m.field)).toEqual(['present_days', 'absent_days']);
+  });
+
+  it('warns at the month level that these are marked days only', async () => {
+    response = {
+      report_id: 'attendance-analytics',
+      title: 'Attendance',
+      source: 'student_attendance_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('by_month', [
+              { month: '2026-07', seq: 202607, present_days: 90, absent_days: 10 },
+              { month: '2026-08', seq: 202608, present_days: 80, absent_days: 20 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('attendance-analytics', 'bar-school-attendance', 2, [SCHOOL_STEP]);
+    expect(lastCall?.args['query_keys']).toEqual(['by_month']);
+    expect(out.notes[0]).toMatch(/marked/i);
+    expect((out.widget as BarWidget).data.map((r) => r['month'])).toEqual(['2026-07', '2026-08']);
+  });
+
+  it('binds the clicked month as a YYYY-MM string at level 3', async () => {
+    response = {
+      report_id: 'attendance-analytics',
+      title: 'Attendance',
+      source: 'student_attendance_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [query('by_class_for_month', [{ classname: 'IX', present_days: 40, absent_days: 5 }])],
+        },
+      ],
+    };
+    const out = await drillOn('attendance-analytics', 'bar-school-attendance', 3, [
+      SCHOOL_STEP,
+      { dim: 'month', value: '2026-07', label: 'Jul 2026' },
+    ]);
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_month']).toBe('2026-07');
+    /** The window the base report bound travels unchanged alongside it. */
+    expect(params['from_date']).toBe('2026-04-01');
+    expect(params['to_date']).toBe('2027-03-31');
+    expect((out.widget as BarWidget).x).toBe('classname');
+  });
+
+  it('never drills on a rate — quotients do not survive the merge', () => {
+    /**
+     * The one thing that would quietly produce nonsense here: `sumBy` adds the
+     * fields it is given, and adding two months' percentages yields a number
+     * belonging to neither. Locked to counts at the catalog level.
+     */
+    const path = DRILL_PATHS['attendance-analytics'];
+    for (const measure of path?.measures ?? []) {
+      expect(measure.field).toMatch(/_days$/);
+    }
+  });
 });

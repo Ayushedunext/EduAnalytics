@@ -150,6 +150,11 @@ async function connect(): Promise<void> {
  * would burn a version on work nobody has seen. (Worth saying because this
  * change was written in two passes and the second one was served a stale drill
  * from the first — the cache is quicker to catch you out than it looks.)
+ *
+ * v6 -> v7 (2026-08-31): Enrollment and Attendance gained drill entry points of
+ * their own. Four bumps in five days is not churn, it is the shape of this
+ * phase: every dashboard that grows a drill grows a widget, and every widget is
+ * a change a reader sees.
  */
 export function cacheKey(parts: {
   kind: string;
@@ -164,7 +169,7 @@ export function cacheKey(parts: {
     perms: parts.permissionClass,
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
-  return `sap:v6:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v7:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

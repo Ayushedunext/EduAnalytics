@@ -131,7 +131,19 @@ Counting each student once — in their earliest overdue quarter, say — would 
 
 **Cache versioning is now a standing rule, not an incident.** `sap:v3` → `sap:v4`. Adding a widget changes the shape of a cached value even when no type changes and nothing fails to deserialise, and the key is otherwise identical — so a warm cache serves the pre-change dashboard for the whole TTL. That happened on Fee Collection (found by running it, not by reasoning) and would have happened again here. The rule: **if a reader would see something different, bump the digit.**
 
-**Still two reports.** The remaining dashboards get drill paths as catalog entries, not as new screens.
+### 4.7 Enrollment and Attendance (2026-08-31) — the rollout, and what it cost
+
+Two more paths, added as catalog entries. No endpoint, no service control flow and no UI route changed; the generic drill tests picked both up on their own, which is the property §4.6 predicted and this is the confirmation of it.
+
+**Enrollment: school → class → section.** Levels 1 and 2 introduce **no SQL at all** — level 1 keeps `by_class` per school instead of summing it across schools, and level 2 *is* `by_class`, the statement the dashboard's own bar chart already runs. Only the leaf needed writing, because narrowing to one class has to happen in the database rather than by filtering a full result in the orchestrator. Verified: Meera Bagh's 3,930 on roll split into 14 classes summing to 3,930, and class IX's 304 split into eight sections summing to 304. Every level partitions the one above exactly — a student is on one roll, in one class, in one section — so this path carries **no note and no `pending` marker**, and that absence is deliberate rather than an oversight.
+
+**Attendance: school → month → class**, drawn as **counts** (present and absent student-days), never the attendance rate the dashboard's tiles lead with. A rate is a quotient and quotients do not survive the merge: adding two schools' rates, or two months', produces a number belonging to neither, which `services/dashboards.ts` has warned about since the first dashboard. Counts add correctly at every level and the ratio is legible in the two bars anyway. The month level carries a note that these are *marked* student-days — a day nobody marked is missing from the bars rather than counted as an absence, so a thin month may mean poor marking rather than good attendance. A school with nothing marked is **omitted** rather than drawn as a pair of zero bars, because zero present and zero absent reads as "nobody came" when the true statement is "nobody marked the register".
+
+**A drill dimension can now be a string.** `drill_class` and `drill_month` are the first; `drill_quarter` was a number. The value is bound like every other filter (CODING_GUIDELINES §9), so a class named `'; DROP TABLE students; --` is a class that matches no rows rather than a statement — asserted in `test/drill.test.ts`, so that a future "sanitise the drill value" is recognisable as the wrong fix at the wrong layer.
+
+**Attendance is verifiable only against 49 rows.** The extract holds attendance for one training society and none of the St Marks schools (docs/11), so the path is proven end to end — school → 2026-07 → class 8 → 12 present, 3 absent — on data too small to be a demonstration of anything. The plumbing is right; the numbers are not evidence about a school.
+
+**Four dashboards drill; eleven do not.** The remaining ones are catalog entries, not new screens.
 
 ## 5. PDF export
 

@@ -349,9 +349,9 @@ body {
  * distributes whatever width a row actually has among the items actually IN
  * it, so a two-tile last row fills the row instead of leaving most of it
  * blank. (print.css re-declares `display: grid` for `.printPage .kpis`, where
- * a fixed page width makes the grid's own even columns the better fit --
- * this rule and `.kpi--hero` below carry both a flex and a grid value for
- * exactly that reason, each ignored by whichever layout mode is not active.)
+ * a fixed page width makes the grid's own even columns the better fit -- and
+ * paper and screen now agree on what a strip looks like, since neither has a
+ * double-width tile in it any more.)
  */
 .kpis { display: flex; flex-wrap: wrap; gap: 16px; }
 
@@ -362,7 +362,16 @@ body {
      the row wraps. At 210px six tiles overflowed a 1330px content column by
      about ten pixels and broke 4 + 2, leaving two tiles stretched to half the
      page each; at 190px they fit, and every narrower viewport still wraps
-     exactly as it did. */
+     exactly as it did.
+
+     EVERY tile takes this rule, with no per-tile override anywhere below
+     (2026-09-01). `1 1 190px` on all of them means one shared basis and one
+     shared growth factor, so a row of four divides its width in four and a row
+     of six in six: the tiles are equal because they are identical, not because
+     a second rule happens to agree. `.kpi--hero` used to break that with
+     `flex: 2 1 436px` and a 36px figure, which made Dashboard's first card read
+     as a layout accident beside its three neighbours. A strip ranks by ORDER
+     and colours by `tone`; neither needs a tile to change size. */
   flex: 1 1 190px;
   padding: 17px 19px 15px;
   position: relative;
@@ -390,9 +399,15 @@ body {
   font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.15;
 }
 /* The one-off legacy shape (`<b>` direct child, no wrapper spans) still used by
-   the unavailable-metric tile below keeps its own smaller rule so both read at
-   a consistent weight without every caller needing the new markup. */
-.kpi > b:first-child { display: block; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
+   the unavailable-metric tile below keeps its own rule so both read the same
+   without every caller needing the new markup. Its figure sits at 26px — the
+   same as `.kpiValue` since 2026-09-01, where it was 24px before: an
+   unavailable tile stands in a row of real ones (Dashboard's "Student
+   attendance · NO DATA" beside three live figures), and its em-dash sitting two
+   pixels short was the same unevenness at tile scale that the hero was at strip
+   scale. What marks it as unavailable is its muted colour and its pill, not a
+   size nobody can name. */
+.kpi > b:first-child { display: block; font-size: 26px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
 .kpi > span { font-size: 12px; color: var(--color-text-muted); }
 .kpi.unavailable { border-left-color: var(--color-border); }
 .kpi.unavailable b { color: var(--color-border-strong); }
@@ -429,18 +444,6 @@ body {
   margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.2;
 }
-/* The hero tile leads the strip, so its parts scale with it rather than sitting
-   at body size under a 36px figure. */
-.kpi--hero .kpiPartValue { font-size: 16px; }
-.kpi--hero .kpiPartLabel { font-size: 11px; }
-
-/* The headline metric in a KPI row (§22) — the first tile in the server's own
-   widget order, never chosen by guessing which number "looks important". */
-.kpi--hero { flex: 2 1 436px; grid-column: span 2; }
-.kpi--hero .kpiValue { font-size: 36px; }
-.kpi--hero .kpiLabel { font-size: 12.5px; }
-@media (max-width: 560px) { .kpi--hero { flex: 1 1 210px; grid-column: span 1; } }
-
 .pill {
   display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em;
   border-radius: var(--radius-pill); padding: 2.5px 8px; text-transform: uppercase;

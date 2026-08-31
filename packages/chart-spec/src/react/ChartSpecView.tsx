@@ -82,25 +82,22 @@ export function ChartSpecView({
           report in the product lay out the same way (ADR-016). */}
       {kpis.length > 0 && (
         <div className="kpis mb-4">
-          {kpis.map((widget, index) => (
-            /**
-             * The first KPI is the server's own headline metric (dashboards.ts
-             * and home.ts both emit the lead figure first) — never re-picked
-             * here by inspecting values, only by position (§22).
-             *
-             * Above five tiles there is no hero, and that is a layout fact
-             * rather than a preference. A hero is double-width (tokens.css
-             * `.kpi--hero`, `flex: 2 1 436px`), so at six tiles the strip no
-             * longer fits one row of a dashboard-width column and breaks 5 + 1,
-             * leaving a single tile stretched across the page under five normal
-             * ones. Six equal tiles read as the grid they are. A hero is a LEAD
-             * among a few; past that the strip is a set, and nothing leads it.
-             */
-            <WidgetView
-              key={widget.id}
-              widget={widget}
-              hero={index === 0 && kpis.length > 1 && kpis.length <= 5}
-            />
+          {/**
+            * Every tile the same size, in the server's own widget order
+            * (dashboards.ts and home.ts both emit the lead figure first) — a
+            * strip's ranking is its ORDER, never re-picked here by inspecting
+            * values (§22).
+            *
+            * The first tile used to render double-width, capped at five tiles
+            * because a 2× lead broke a six-tile strip into 5 + 1. That cap was
+            * the rule arguing against itself: a lead whose emphasis has to be
+            * switched off as the strip grows is a layout constraint wearing the
+            * costume of a reading order. One size at every count, and the row
+            * reads as the set of measures it is (docs/10 §3, amended
+            * 2026-09-01).
+            */}
+          {kpis.map((widget) => (
+            <WidgetView key={widget.id} widget={widget} />
           ))}
         </div>
       )}

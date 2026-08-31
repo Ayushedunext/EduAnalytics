@@ -255,8 +255,9 @@ describe('the summary reports what it actually served', () => {
     /**
      * The order IS the contract: docs/10 §2's four summary cards read students,
      * staff, attendance, fees, and Home renders `spec.widgets` in the order the
-     * server emits them (`Home.tsx` also gives the FIRST one the hero
-     * treatment). A reordering here would silently re-rank the screen.
+     * server emits them. A reordering here would silently re-rank the screen —
+     * and since 2026-09-01 order is the ONLY ranking the strip has, the first
+     * tile having dropped its double-width hero treatment (docs/10 §3).
      */
     expect(kpis(summary.spec).map((w) => w.value)).toEqual([
       '3,929',

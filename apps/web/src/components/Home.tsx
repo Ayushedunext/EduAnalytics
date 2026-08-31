@@ -224,11 +224,12 @@ export function Home({
         </div>
 
         <div className="kpis">
-          {home.spec.widgets.map((widget, index) => (
+          {home.spec.widgets.map((widget) => (
             // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
-            // reads identically everywhere in the product. The lead metric
-            // (first in the server's own order) gets the headline treatment.
-            <KpiTile key={widget.id} widget={widget} hero={index === 0 && home.spec.widgets.length > 1} />
+            // reads identically everywhere in the product, and since 2026-09-01
+            // that includes its SIZE: the lead metric leads by being first, not
+            // by being twice as wide (KpiTile's own comment has the reasoning).
+            <KpiTile key={widget.id} widget={widget} />
           ))}
 
           {/*

@@ -299,10 +299,49 @@ export function KpiTile({ widget, hero }: { widget: KpiWidget; hero?: boolean | 
  * The thresholds are about LABEL WIDTH, not category count: five bands read
  * horizontally too when one of them is "No due date recorded".
  *
- * The same budget now also sizes Home's compact preview cards (3-up,
- * tokens.css `.pgallery`, ~600px+ each) — wider than a full dashboard panel,
+ * The same budget now also sizes Home's compact preview cards (2-up,
+ * tokens.css `.pgallery`, ~900px each) — wider than a full dashboard panel,
  * never narrower, so nothing here needed a compact-specific number.
  */
+/**
+ * How thick a bar is drawn, in pixels. A CAP, not a width: Recharts sizes a bar
+ * from its category band and this only stops it growing past here, so a chart
+ * with many categories still thins out on its own.
+ *
+ * -- Why these numbers went up (2026-09-01) ----------------------------------
+ * Horizontal bars were 14px single / 11px grouped. In a Home preview card that
+ * drew three schools as three hairlines with far more air than ink, and a
+ * preview that does not read as a chart is a card that does not earn its click.
+ * The complaint the change came from was that the bars looked flat and cheap
+ * next to the prototype's; the prototype's bars are not shaded or bevelled, they
+ * are simply THICK, solid and rounded at the tip, and thickness is nearly all of
+ * that impression.
+ *
+ * 22px is the ceiling on purpose. A mark much past ~24px stops being a bar and
+ * becomes a block: it fills its band, the air between categories disappears, and
+ * a row of blocks reads louder than the numbers it carries. The band's leftover
+ * is meant to be air — so these grew to the top of that range and stopped there,
+ * and `perRow` below grew with them so the air came back rather than being eaten.
+ *
+ * A grouped bar is thinner than a single one because three of them share one
+ * band; `barGap={2}` keeps the 2px surface gap between them, which is what makes
+ * three fills read as three marks without a stroke drawn around each.
+ *
+ * Vertical columns were already in this range (38/26) and are unchanged — the
+ * complaint was never about them, and they have a whole column's height to give
+ * the mark presence that a horizontal bar has to get from thickness.
+ */
+const BAR_PX = {
+  /** One measure, bars running horizontally. */
+  single: 22,
+  /** One measure per band, columns running vertically. */
+  singleV: 38,
+  /** One of several measures sharing a horizontal band. */
+  grouped: 16,
+  /** One of several measures sharing a vertical band. */
+  groupedV: 26,
+} as const;
+
 function categoryAxis(rows: readonly Record<string, unknown>[], field: string) {
   let longest = 0;
   for (const row of rows) longest = Math.max(longest, String(row[field] ?? '').length);
@@ -1543,22 +1582,20 @@ function toneColour(tone: KpiWidget['tone']): string {
 
 /**
  * Dispatch on the discriminant. The union is closed, so this is exhaustive.
- * `hero` only ever reaches the `kpi` branch — it names the headline metric in
- * a KPI row (§22), which is meaningless for a chart or table widget. `compact`
- * only ever reaches a chart branch (bar/line/donut) — it means "card-sized,
- * chrome dropped" (Home preview cards), which a KPI tile or a table does not
- * have a smaller form of.
+ * `compact` only ever reaches a chart branch (bar/line/donut) — it means
+ * "card-sized, chrome dropped" (Home preview cards), which a KPI tile or a
+ * table does not have a smaller form of. (A `hero` flag sat beside it until
+ * 2026-09-01, naming the headline tile in a KPI row; every tile is one size
+ * now, so the strip needs no per-tile prop at all — see `KpiTile`.)
  */
 export function WidgetView({
   widget,
-  hero,
   compact,
   accent,
   actions,
   onDrill,
 }: {
   widget: Widget;
-  hero?: boolean | undefined;
   compact?: boolean | undefined;
   /** Single-series colour for a bar/line widget — see `ChartAccent`. Ignored by kpi/donut/table: a donut is already multi-colour by category, and tone-colouring a KPI already goes through its own `tone` field. */
   accent?: ChartAccent | undefined;
@@ -1574,7 +1611,7 @@ export function WidgetView({
 }): ReactElement {
   switch (widget.type) {
     case 'kpi':
-      return <KpiTile widget={widget} hero={hero} />;
+      return <KpiTile widget={widget} />;
     case 'bar':
       return (
         <BarPanel
@@ -1604,13 +1641,11 @@ export function WidgetView({
  */
 export function WidgetSpecView({
   widget,
-  hero,
   compact,
   accent,
   onDrill,
 }: {
   widget: unknown;
-  hero?: boolean | undefined;
   compact?: boolean | undefined;
   accent?: ChartAccent | undefined;
   /**
@@ -1633,7 +1668,6 @@ export function WidgetSpecView({
   return (
     <WidgetView
       widget={parsed.data}
-      hero={hero}
       compact={compact}
       accent={accent}
       onDrill={onDrill}

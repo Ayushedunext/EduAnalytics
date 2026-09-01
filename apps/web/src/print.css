@@ -228,3 +228,17 @@ body {
   word-break: break-word;
   color: var(--color-slate);
 }
+
+/* ---------- chart depth on paper (added 2026-09-01) ----------
+
+   The screen's marks carry a soft drop shadow in their own hue (widgets.tsx,
+   `feDropShadow`). On a screen that lifts the bar off the card; in CMYK at
+   300dpi it prints as a smudge along one edge, and on a mono office printer it
+   prints as grey fringing that reads like a registration error.
+
+   The gradient FILL stays -- it is the part that makes a bar look round, it
+   survives ink, and dropping it would make the PDF a different chart from the
+   one the reader approved on screen (ADR-021's whole point). Only the shadow
+   goes. Same reasoning as the drill hint and the pointer cursor: what does not
+   survive the medium is removed for that medium, not for both. */
+.printPage svg [filter] { filter: none !important; }

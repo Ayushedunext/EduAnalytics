@@ -54,7 +54,7 @@ Default layout, mapped 1:1 to the module boundaries in `docs/01` (layout changes
 - Function components + hooks; components stay presentational — data access goes through a thin API layer that only ever calls the orchestrator.
 - **[MANDATORY] Render specs, not AI output:** anything visual coming from the AI is a **chart-spec** rendered by the shared renderer in `/packages/chart-spec` (ADR-015). Never `dangerouslySetInnerHTML`, never eval, never render model-provided markup/JSX/HTML. If a new visual is needed, extend the chart-spec widget vocabulary (additive, ADR-gated) — do not special-case one screen.
 - One chart layer for everything (predefined, custom, AI, drill) — per ADR-015/016 the visual language must be identical; a second charting approach for a single feature is drift.
-- Styling: Tailwind with the design tokens from `docs/10` (Deep Teal `#028090`, Ink `#032E36`, etc.). No hard-coded hex values in components — tokens only; tenant theming (docs/10 §1.3) depends on it.
+- Styling: Tailwind with the design tokens from `docs/10` (Deep Teal `#008a9d`, Ink `#032E36`, etc.). No hard-coded hex values in components — tokens only; tenant theming (docs/10 §1.3) depends on it.
 - UX conventions from `docs/10` §3 are binding: locked ≠ hidden (gated features render with lock + unlock path); scope is always on screen; anything slow streams status (never a bare spinner); destructive actions confirm in plain language.
 - The agent builder canvas uses React Flow (fixed, `PROJECT_CONTEXT.md` §7).
 

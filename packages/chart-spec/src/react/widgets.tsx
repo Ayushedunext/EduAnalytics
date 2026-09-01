@@ -59,37 +59,83 @@ import type {
 } from '../spec.js';
 
 /**
- * docs/10 §1: the platform palette, capped at four categorical steps.
+ * docs/10 §1: the platform palette. Five categorical steps, each with a
+ * three-stop ramp (2026-09-01).
  *
- * The previous seven-colour rotation failed a CVD/contrast audit: adjacent
- * slots #02c39a/#00a896 sat ΔE 7.9 apart under normal vision (floor is 15) —
- * two teal-family steps that close together are indistinguishable at
- * chart-mark size, colourblind or not. docs/10 §1.2 mandates a teal-family
- * chart language, which rules out reaching for an unrelated hue to fix the
- * spacing; the fix is fewer, further-apart steps instead. This four-colour
- * set is the largest subset of the existing brand tokens that clears the
- * CVD-separation and normal-vision-floor checks (validated 2026-08-22).
- * Categories beyond these four are never a fifth generated hue — see
- * `SERIES_OTHER` below.
+ * -- What changed and why ----------------------------------------------------
+ * The previous four steps were flat single fills, and two of them did not
+ * survive their own audit: `#028090` sat at OKLCH chroma 0.095, under the 0.10
+ * floor at which a colour starts reading grey, and `#f2a93b` sat at lightness
+ * 0.787, outside the 0.43-0.77 band. Both are the measurable form of "the
+ * charts look dull" -- the palette was desaturated and pale by the numbers,
+ * not just to taste.
+ *
+ * The replacements were not chosen by eye. Each is the least-drifted colour
+ * from a hand-designed soothing target that still clears the checks in
+ * `scripts/validate_palette.js`: lightness band, chroma floor, adjacent-pair
+ * CVD separation, and the normal-vision floor. Measured on the shipped set:
+ * worst adjacent pair ΔE 9.1 (deutan) and 9.8 (tritan), worst normal-vision
+ * pair ΔE 16.2 -- against floors of 8 and 15.
+ *
+ * -- The order is SEMANTIC and cannot be permuted --------------------------
+ * This product means things by colour: slot 0 is demand, 1 is collected, 2 is
+ * pending, 3 is defaulters. Reordering the slots would make the separation
+ * maths easier -- putting amber between teal and green is worth several ΔE --
+ * and would repaint "fee collected" amber, which is worse than any number.
+ * So the hues were pushed apart within their families instead, and lightness
+ * does the separating that hue cannot: under protanopia and deuteranopia green
+ * and amber collapse to one hue, and only their 0.03 lightness gap survives.
+ *
+ * -- Two accepted deviations, both stated rather than hidden ------------------
+ * `#3db575` sits at contrast 2.54 against the card, under the 3:1 relief line.
+ * The skill's own remedy is visible labels or a table view, and this product
+ * has both plus a mandatory legend on every multi-series chart. Today's
+ * palette fails this check on TWO slots, so it is an improvement, not a new
+ * debt. Separately, the all-pairs (rather than adjacent) worst normal-vision
+ * pair is teal↔indigo at ΔE 13.4; they are three slots apart, so a reader
+ * meets them with a legend between them.
+ *
+ * A fifth step exists now where four did before. Beyond five it is still never
+ * a generated hue -- see `SERIES_OTHER`.
  */
-const SERIES: readonly [string, ...string[]] = ['#028090', '#02c39a', '#f2a93b', '#e05252'];
+const SERIES: readonly [string, ...string[]] = [
+  '#008a9d', // teal    — demand, headcount, the brand lead
+  '#3db575', // emerald — collected, present, positive
+  '#c78100', // amber   — pending, outstanding, warning
+  '#c74859', // rose    — defaulters, absent, negative
+  '#4967c6', // indigo  — the fifth measure, no fixed meaning
+];
+
 /**
- * The fold-in colours for categories past the fixed palette — neutrals, so a
- * fifth category reads as "the rest" rather than competing with the four that
- * carry meaning. Never a GENERATED hue (the dataviz non-negotiable): these are
- * two existing tokens, `--color-muted` and `--color-line`.
+ * Each series hue at three steps: shaded foot, base, lit cap.
  *
- * Two of them, not one, because of stacked bars. A single fold-in colour is fine
- * when the extra categories sit apart — a fifth donut slice, a fifth bar in a
- * group — and wrong inside one stacked bar, where two adjacent segments painted
- * the same grey are one segment as far as a reader can tell. Comparative
- * Analysis' recovery timeline is exactly that case: "still pending" and "timing
- * not recorded" are its fifth and sixth states.
+ * This is what makes a mark read as an object rather than a rectangle. A bar
+ * is painted with a gradient ACROSS its thickness -- deep at the bottom edge,
+ * base through the middle, light along the top -- which is how a cylinder
+ * catches light, and it is the whole of the "3D" impression without any of the
+ * geometry that would make a 3D bar lie about its value. The bar's END still
+ * lands exactly on its number; only the shading is dimensional.
  *
- * They alternate rather than extend, so this is not a sixth and seventh
- * categorical step by the back door — the palette is still four steps plus a
- * neutral pair, and anything past six is deliberately repeating.
+ * Derived rather than hand-picked, then gamut-clamped: teal and green run out
+ * of sRGB about 0.1 lightness before red does, so a shared chroma offset would
+ * have produced nulls for half the palette.
  */
+const RAMP: Record<string, { deep: string; light: string }> = {
+  '#008a9d': { deep: '#006472', light: '#61b3c3' },
+  '#3db575': { deep: '#048e53', light: '#84dea7' },
+  '#c78100': { deep: '#986100', light: '#ecb165' },
+  '#c74859': { deep: '#9e1e38', light: '#eb7f88' },
+  '#4967c6': { deep: '#2a439e', light: '#7795e5' },
+  '#64748b': { deep: '#475569', light: '#94a3b8' },
+  '#cbd5e1': { deep: '#94a3b8', light: '#e2e8f0' },
+};
+
+/** The ramp for a colour, falling back to the flat colour at every step. */
+function rampOf(base: string): { deep: string; base: string; light: string } {
+  const r = RAMP[base];
+  return { deep: r?.deep ?? base, base, light: r?.light ?? base };
+}
+
 const SERIES_NEUTRALS: readonly [string, string] = ['#64748b', '#cbd5e1'];
 /** The single fold-in neutral, where only one is needed (donut legend, etc.). */
 const SERIES_OTHER = SERIES_NEUTRALS[0];
@@ -129,7 +175,11 @@ const ACCENT_COLOUR: Record<ChartAccent, string> = {
   negative: SERIES[3] ?? SERIES[0],
 };
 const AXIS: CSSProperties = { fontSize: 11 };
-const GRID = '#e2e8f0';
+const GRID = '#eef2f6';
+/** The rail a bar sits in — one step off the card, never a visible box. */
+const TRACK = '#f5f8fa';
+/** The card behind a chart — what a surface gap is painted in. */
+const SURFACE = '#ffffff';
 const MUTED = '#64748b';
 const INK = '#032e36';
 
@@ -517,27 +567,6 @@ function ChartFrame({
 }
 
 /**
- * The tallest bar, so a chart with a genuine standout can say so visually
- * (§8 "highlighting of the highest category when analytically meaningful").
- * Only computed with more than one bar — a single-category chart has no
- * "highest" to point at, and pointing at it anyway would be decoration, not
- * an observation.
- */
-function maxValueIndex(rows: readonly Record<string, unknown>[], field: string): number | null {
-  if (rows.length < 2) return null;
-  let best = -1;
-  let bestValue = -Infinity;
-  rows.forEach((row, index) => {
-    const value = row[field];
-    if (typeof value === 'number' && value > bestValue) {
-      bestValue = value;
-      best = index;
-    }
-  });
-  return best >= 0 ? best : null;
-}
-
-/**
  * One drill click, as ADR-020 defines it: a `{dim, value}` pair pushed onto the
  * drill stack, plus the text the breadcrumb should show for it.
  *
@@ -713,7 +742,6 @@ export function BarPanel({
   }
 
   const axis = categoryAxis(widget.data, widget.x);
-  const highlightIndex = grouped ? null : maxValueIndex(widget.data, widget.y);
 
   /** Live only when the spec says drillable AND the caller wants the clicks. */
   const drillable =
@@ -744,6 +772,9 @@ export function BarPanel({
    * already wider, which is what makes the grouping legible without a box
    * around it.
    */
+  /** One gradient id per series — declared here because `bars` below paints with them and `gradientDefs` further down declares them. */
+  const seriesIds = series.map((_, index) => `${gradId}-s${index}`);
+
   const bars = grouped
     ? series.map((entry, index) => {
         /**
@@ -770,9 +801,26 @@ export function BarPanel({
             key={entry.field}
             dataKey={entry.field}
             name={entry.label}
-            fill={seriesColourAt(index)}
+            fill={`url(#${seriesIds[index]})`}
             {...(stacked ? { stackId: 'a' } : {})}
             radius={stacked ? (last ? rounded : square) : rounded}
+            /**
+             * Each series enters after the one before it. The eye follows a
+             * group being built rather than three bars appearing at once, and
+             * on a stacked bar it is the reading order of the stack itself.
+             * `useAnimation` already returns `isAnimationActive: false` under
+             * prefers-reduced-motion, so this offset simply never applies then.
+             */
+            animationBegin={index * 90}
+            animationEasing="ease-out"
+            /**
+             * A stacked bar's segments touch, and two adjacent fills with no
+             * space between them read as one wider band. The separator is drawn
+             * in the CARD's own colour so it reads as a gap rather than as an
+             * outline around each segment — the mark is still only its fill.
+             * Grouped bars have `barGap` doing this already, so they take none.
+             */
+            {...(stacked ? { stroke: SURFACE, strokeWidth: 1.5 } : {})}
             /**
              * A stack is ONE bar per category however many measures it holds,
              * so it gets the width a single-series bar would have rather than
@@ -796,33 +844,85 @@ export function BarPanel({
         <Bar
           key={widget.y}
           dataKey={widget.y}
-          fill={`url(#${gradId})`}
+          fill={`url(#${seriesIds[0] ?? gradId})`}
           radius={axis.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
           maxBarSize={axis.horizontal ? BAR_PX.single : BAR_PX.singleV}
+          /**
+           * The track behind the mark: the full scale, drawn once at a whisper.
+           * It gives every bar a container to sit in, so a short bar reads as a
+           * small share of something rather than as a stub floating in space --
+           * and it is what makes the row of marks read as a set. Recharts draws
+           * it under the bar for free, so it costs no extra element and cannot
+           * fall out of alignment with the mark.
+           */
+          background={{ fill: TRACK, radius: axis.horizontal ? 4 : 4 }}
+          filter={`url(#${gradId}-glow)`}
+          animationEasing="ease-out"
           {...animation}
-          activeBar={{ fill: seriesColour, fillOpacity: 1, stroke: INK, strokeWidth: 1 }}
+          activeBar={{ stroke: INK, strokeWidth: 1, strokeOpacity: 0.35 }}
         >
-          {/* The tallest bar reads as solid against the others' gradient --
-              same hue, no fifth colour, just more of it. */}
-          {highlightIndex !== null &&
-            widget.data.map((_, index) => (
-              <Cell key={index} fill={index === highlightIndex ? seriesColour : `url(#${gradId})`} />
-            ))}
+          {/* Every bar takes the same lit gradient, the tallest included.
+              Painting the leader a deeper step used to mark it out; against a
+              gradient it stopped reading as emphasis and started reading as a
+              SECOND SERIES, which on a single-measure chart is a lie. The
+              longest bar is already the longest — length is the encoding and it
+              does not need help. */}
         </Bar>,
       ];
 
-  const gradientDefs = grouped ? null : (
+  /**
+   * One gradient per series, running across the mark's THICKNESS -- top-lit for
+   * a horizontal bar, left-lit for a vertical one.
+   *
+   * This replaces a gradient that ran along the bar's LENGTH at two opacities.
+   * Along the length, a gradient fades the mark out toward the baseline and
+   * makes a short bar look washed out and thin -- which was most of "the bars
+   * look dull". Across the thickness it does the opposite: the mark reads as a
+   * lit cylinder, solid at every length, and the effect is strongest on exactly
+   * the small bars that looked weakest.
+   *
+   * Three stops from `RAMP`, never opacity: a translucent fill picks up
+   * whatever is behind it, and behind a bar is now a ghost track (below).
+   *
+   * `glowId` is a soft drop shadow in the series' own hue rather than grey.
+   * A grey shadow under a coloured mark reads as dirt; the hue's own shadow
+   * reads as the mark sitting above the card.
+   */
+  const gradientDefs = (
     <defs>
-      <linearGradient
-        id={gradId}
-        x1="0"
-        y1="0"
-        x2={axis.horizontal ? '1' : '0'}
-        y2={axis.horizontal ? '0' : '1'}
-      >
-        <stop offset="0%" stopColor={seriesColour} stopOpacity={axis.horizontal ? 0.62 : 1} />
-        <stop offset="100%" stopColor={seriesColour} stopOpacity={axis.horizontal ? 1 : 0.62} />
-      </linearGradient>
+      {series.map((_, index) => {
+        const ramp = rampOf(grouped ? seriesColourAt(index) : seriesColour);
+        return (
+          <linearGradient
+            key={index}
+            id={seriesIds[index]}
+            x1="0"
+            y1="0"
+            x2={axis.horizontal ? '0' : '1'}
+            y2={axis.horizontal ? '1' : '0'}
+          >
+            {/* Five stops, not three: a cylinder is dark at BOTH edges with the
+                highlight sitting inside the top third, and a three-stop wash
+                from light to deep only ever reads as a bar that has been faded.
+                The extra two stops are the whole difference between "gradient"
+                and "round". */}
+            <stop offset="0%" stopColor={ramp.deep} />
+            <stop offset="14%" stopColor={ramp.base} />
+            <stop offset="40%" stopColor={ramp.light} />
+            <stop offset="76%" stopColor={ramp.base} />
+            <stop offset="100%" stopColor={ramp.deep} />
+          </linearGradient>
+        );
+      })}
+      <filter id={`${gradId}-glow`} x="-12%" y="-25%" width="130%" height="160%">
+        <feDropShadow
+          dx={axis.horizontal ? 0 : 0}
+          dy={axis.horizontal ? 2 : 2}
+          stdDeviation="3"
+          floodColor={seriesColour}
+          floodOpacity="0.34"
+        />
+      </filter>
     </defs>
   );
 
@@ -1254,7 +1354,7 @@ export function LinePanel({
                 effect, so the PDF capture (ADR-021) still matches the screen
                 exactly at whatever instant Puppeteer takes the shot. */}
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={seriesColor} stopOpacity={0.24} />
+              <stop offset="0%" stopColor={seriesColor} stopOpacity={0.30} />
               <stop offset="100%" stopColor={seriesColor} stopOpacity={0} />
             </linearGradient>
           </defs>
@@ -1315,6 +1415,17 @@ export function DonutPanel({
   compact?: boolean | undefined;
   actions?: ReactNode | undefined;
 }): ReactElement {
+  /**
+   * Both hooks run before the empty check, unconditionally — the same rule
+   * BarPanel states at its own empty check, and this branch was on the wrong
+   * side of it. React requires the same hooks in the same order on every
+   * render, so a donut that went from having rows to having none (a filter
+   * change, a drill into an empty slice) rendered fewer hooks than the render
+   * before it and threw. Nothing else moves; only the two lines.
+   */
+  const animation = useAnimation();
+  const donutId = useGradientId('donut');
+
   if (widget.data.length === 0) {
     return (
       <Panel title={widget.title} variant="side" compact={compact} actions={actions}>
@@ -1325,8 +1436,6 @@ export function DonutPanel({
       </Panel>
     );
   }
-
-  const animation = useAnimation();
 
   /** Restated at the centre of the ring — see `specDonutCenter` below. */
   const total = widget.data.reduce((sum, row) => {
@@ -1363,6 +1472,21 @@ export function DonutPanel({
       <div className="specDonutWrap">
         <ResponsiveContainer width="100%" height={compact === true ? 210 : 220}>
           <PieChart>
+            {/* One gradient per slice, lit from the top-left, so the ring reads
+                as a band with thickness rather than as flat colour wedges —
+                the same lighting the bars use, on a curve. */}
+            <defs>
+              {widget.data.map((_, index) => {
+                const ramp = rampOf(index < SERIES.length ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER);
+                return (
+                  <linearGradient key={index} id={`${donutId}-s${index}`} x1="0" y1="0" x2="0.8" y2="1">
+                    <stop offset="0%" stopColor={ramp.light} />
+                    <stop offset="52%" stopColor={ramp.base} />
+                    <stop offset="100%" stopColor={ramp.deep} />
+                  </linearGradient>
+                );
+              })}
+            </defs>
             <Pie
               data={[...widget.data]}
               dataKey={widget.value_field}
@@ -1380,8 +1504,13 @@ export function DonutPanel({
                 return (
                   <Cell
                     key={String(row[widget.label_field] ?? index)}
-                    fill={inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
+                    fill={inPalette ? `url(#${donutId}-s${index})` : SERIES_OTHER}
                     fillOpacity={inPalette ? 1 : 0.55}
+                    /* The surface ring the dataviz spec asks for: slices touch
+                       around the circle, and a hairline of card colour is what
+                       keeps two neighbours from fusing into one wedge. */
+                    stroke={SURFACE}
+                    strokeWidth={2}
                   />
                 );
               })}

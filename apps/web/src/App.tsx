@@ -33,6 +33,7 @@ import { DashboardPage } from './components/DashboardPage';
 import { Settings } from './components/Settings';
 import { AskAI } from './components/AskAI';
 import { MyReports } from './components/MyReports';
+import { ModulePage, ModulesIndex } from './components/Modules';
 import { ReportEditor } from './components/ReportEditor';
 
 type State =
@@ -48,16 +49,22 @@ export function App(): JSX.Element {
   const [homeLoading, setHomeLoading] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
   /**
-   * Home's dashboard-preview cards, keyed by dashboard id and filled in one at
-   * a time as each card's own request resolves (api/client.ts,
-   * `getHomePreview`).
+   * The dashboard-preview cards, keyed by dashboard id and filled in one at a
+   * time as each card's own request resolves (api/client.ts, `getHomePreview`).
    *
-   * A MAP rather than an array because the cards no longer arrive together: an
-   * id is absent while its request is in flight, which is exactly what
-   * Home.tsx's `PreviewCard` already renders as a skeleton, and present the
-   * moment that one dashboard is ready. The previous single-array-or-null shape
-   * could only say "none of them yet" or "all of them", which is what made the
-   * fastest card wait for the slowest.
+   * ONE map for both screens that draw them — Dashboard's grid and an opened
+   * module (components/Modules.tsx). Shared rather than per-screen because they
+   * are the same cards of the same reports at the same scope, so a module that
+   * kept its own copy would re-query dashboards the grid had already fetched and
+   * could go stale against it. What invalidates them is the school selection,
+   * and that empties the whole map at once (`loadHome`).
+   *
+   * A MAP rather than an array because the cards do not arrive together: an id
+   * is absent while its request is in flight, which is exactly what
+   * `PreviewCard` renders as a skeleton, and present the moment that one
+   * dashboard is ready. The previous single-array-or-null shape could only say
+   * "none of them yet" or "all of them", which is what made the fastest card
+   * wait for the slowest.
    */
   const [previews, setPreviews] = useState<Record<string, HomePreview>>({});
   const [previewsLoading, setPreviewsLoading] = useState(false);
@@ -77,9 +84,22 @@ export function App(): JSX.Element {
     | { kind: 'settings' }
     | { kind: 'ask'; seedQuestion?: string }
     | { kind: 'my-reports' }
+    /** The Module Wise Analysis tiles, and one module opened. */
+    | { kind: 'modules' }
+    | { kind: 'module'; id: string }
     /** `edit` opens the editor already expanded — My Reports' ✎ Edit action, versus its View. */
     | { kind: 'report-edit'; id: string; edit?: boolean }
   >({ kind: 'home' });
+  /**
+   * Which module a report was opened FROM, so ← Back returns there instead of
+   * to Dashboard. `null` when the report was reached any other way.
+   *
+   * Kept beside the route rather than inside it because it is not part of WHERE
+   * the user is — it is where they came from, and a report opened from Fees and
+   * the same report opened from the sidebar are the same screen showing the same
+   * data. Folding it into `{ kind: 'report' }` would have made them two.
+   */
+  const [cameFromModule, setCameFromModule] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,51 +150,84 @@ export function App(): JSX.Element {
   }, [state.kind, selected, loadHome]);
 
   /**
-   * Fires once the KPI strip's fetch has told us the academic year -- the
-   * previews endpoint needs it (services/home.ts) and this way it is never
-   * re-derived a second time client-side. A session that can read neither
-   * students nor fees gets `academic_year: null` (home.ts); there is nothing
-   * to preview then, so this is skipped rather than sent with a made-up year.
+   * Fetch the preview cards for a set of dashboards, committing each as IT
+   * resolves.
+   *
+   * Two screens draw these now — Dashboard's grid and a module's report list
+   * (components/Modules.tsx) — so the fetching lives here once rather than
+   * twice. Ids ALREADY in `previews` are skipped: walking Fees ▸ back ▸ Fees
+   * should not re-query five dashboards a reader is looking at, and the map is
+   * already emptied wholesale whenever the school selection changes
+   * (`loadHome`), which is the only thing that invalidates them.
+   *
+   * `allSettled` is only here to know when the last one landed, for the
+   * "still loading…" labels; every card is on screen before that. A rejected
+   * card is deliberately left ABSENT rather than written in as a failure: the
+   * server answers 200 with `status: 'blocked'` and a reason for a dashboard it
+   * cannot preview (routes/home.ts), so a rejection here means the REQUEST
+   * failed — a dropped connection, an expired session — which the card cannot
+   * explain and must not invent a reason for. It stays a skeleton.
+   */
+  const fetchPreviews = useCallback(
+    (ids: readonly string[], schoolIds: readonly string[], academicYear: string) => {
+      let cancelled = false;
+      setPreviewsLoading(true);
+      void Promise.allSettled(
+        ids.map(async (id) => {
+          const preview = await getHomePreview([...schoolIds], academicYear, id);
+          if (cancelled) return;
+          setPreviews((prev) => ({ ...prev, [id]: preview }));
+        }),
+      ).finally(() => { if (!cancelled) setPreviewsLoading(false); });
+      return () => { cancelled = true; };
+    },
+    [],
+  );
+
+  /**
+   * Dashboard's grid. Fires once the KPI strip's fetch has told us the academic
+   * year -- the previews endpoint needs it (services/home.ts) and this way it is
+   * never re-derived a second time client-side. A session that can read neither
+   * students nor fees gets `academic_year: null` (home.ts); there is nothing to
+   * preview then, so this is skipped rather than sent with a made-up year.
+   *
+   * The ids are the ones the SERVER puts on the grid, in ITS order, read off the
+   * `/api/home` response rather than listed here -- so the SPA never asks for a
+   * dashboard the catalog considers `coming` or `blocked`.
    */
   useEffect(() => {
     if (home === null || home.academic_year === null || selected.length === 0) return;
-    const academicYear = home.academic_year;
+    if (home.grid.length === 0) return;
+    return fetchPreviews(home.grid, selected, home.academic_year);
+  }, [home, selected, fetchPreviews]);
+
+  /**
+   * A module's own cards, fetched when the module is OPENED rather than with
+   * Home.
+   *
+   * Deliberately lazy. Every served dashboard is in some module, so warming all
+   * of them up front would mean fetching the whole catalog on launch to render a
+   * screen of seven tiles -- the cost the Dashboard grid was curated down to
+   * eight cards precisely to avoid (services/home.ts). Opening Fees fetches
+   * Fees, and the four its grid card already warmed are skipped.
+   */
+  useEffect(() => {
+    if (route.kind !== 'module') return;
+    if (home === null || home.academic_year === null || selected.length === 0) return;
+    const module = home.modules.find((m) => m.id === route.id);
+    if (module === undefined) return;
+    const missing = module.report_ids.filter((id) => previews[id] === undefined);
+    if (missing.length === 0) return;
+    return fetchPreviews(missing, selected, home.academic_year);
     /**
-     * The cards the SERVER puts on the grid, in ITS order. Read off `/api/home`
-     * response rather than listed here, so the SPA never asks for a dashboard
-     * the catalog considers `coming` or `blocked` -- that status is the
-     * server's verdict (services/home.ts) and this screen only renders it.
+     * `previews` is read but NOT a dependency, and that is the point: adding it
+     * would re-run this effect on every card that lands, and each run would see
+     * a shorter `missing` list while the requests already in flight are still
+     * outstanding -- refetching the tail of the module once per arriving card.
+     * The effect only needs the map as it stood when the module was opened.
      */
-    const ids = home.grid;
-    if (ids.length === 0) return;
-
-    let cancelled = false;
-    setPreviewsLoading(true);
-
-    /**
-     * All of them at once, each committed as IT resolves rather than when the
-     * batch does -- that is the whole change. `allSettled` is only here to know
-     * when the last one finished, for the "loading previews…" label; every card
-     * is already on screen by that point.
-     *
-     * A rejected card is deliberately left ABSENT from the map rather than
-     * written in as a failure: the server answers 200 with `status: 'blocked'`
-     * and a reason for a dashboard that cannot be previewed (routes/home.ts),
-     * so a rejection here means the REQUEST failed -- a dropped connection, an
-     * expired session -- which the card cannot explain and must not invent a
-     * reason for. It stays a skeleton, and `homeError` is where a real page
-     * failure is said. Previews are a bonus on top of the KPI strip.
-     */
-    void Promise.allSettled(
-      ids.map(async (id) => {
-        const preview = await getHomePreview(selected, academicYear, id);
-        if (cancelled) return;
-        setPreviews((prev) => ({ ...prev, [id]: preview }));
-      }),
-    ).finally(() => { if (!cancelled) setPreviewsLoading(false); });
-
-    return () => { cancelled = true; };
-  }, [home, selected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, home, selected, fetchPreviews]);
 
   if (state.kind === 'loading') {
     /** docs/10 §1.4: skeletons and status, never a bare spinner. */
@@ -230,14 +283,24 @@ export function App(): JSX.Element {
         role={titleCase(state.session.user.role)}
         dashboards={home?.dashboards ?? []}
         aiStatus={state.session.ai_status}
+        /**
+         * A report opened FROM a module keeps the module row lit, not a row of
+         * its own — the report has no row any more, and the reader's place in
+         * the menu is the module they walked in through. A report reached any
+         * other way still lights its own row where it has one (the two pinned
+         * ones), and lights nothing where it does not.
+         */
         active={
-          route.kind === 'report'
-            ? route.id
-            : route.kind === 'report-edit'
-              ? 'my-reports'
-              : route.kind
+          route.kind === 'module'
+            ? 'modules'
+            : route.kind === 'report'
+              ? (cameFromModule === null ? route.id : 'modules')
+              : route.kind === 'report-edit'
+                ? 'my-reports'
+                : route.kind
         }
         onNavigate={(id) => {
+          setCameFromModule(null);
           setRoute(
             id === 'home'
               ? { kind: 'home' }
@@ -247,7 +310,9 @@ export function App(): JSX.Element {
                   ? { kind: 'ask' }
                   : id === 'my-reports'
                     ? { kind: 'my-reports' }
-                    : { kind: 'report', id },
+                    : id === 'modules'
+                      ? { kind: 'modules' }
+                      : { kind: 'report', id },
           );
         }}
       />
@@ -266,7 +331,11 @@ export function App(): JSX.Element {
                   ? 'Ask AI'
                   : route.kind === 'my-reports' || route.kind === 'report-edit'
                     ? 'My Reports'
-                    : titleOf(route.id, home?.dashboards ?? [])
+                    : route.kind === 'modules'
+                      ? 'Module Wise Analysis'
+                      : route.kind === 'module'
+                        ? moduleCrumb(route.id, home?.modules ?? [])
+                        : titleOf(route.id, home?.dashboards ?? [])
           }
         />
 
@@ -306,10 +375,63 @@ export function App(): JSX.Element {
             reportId={route.id}
             schoolIds={selected}
             academicYear={home?.academic_year ?? null}
-            onBack={() => { setRoute({ kind: 'home' }); }}
+            /**
+             * Back to where the reader came from. A report reached from the
+             * Fees module returns to Fees; one reached from Dashboard or a
+             * pinned row returns to Dashboard. Sending both to Dashboard would
+             * make ← Back a teleport out of the module a reader is working
+             * through.
+             */
+            onBack={() => {
+              setRoute(
+                cameFromModule === null
+                  ? { kind: 'home' }
+                  : { kind: 'module', id: cameFromModule },
+              );
+            }}
             onAskAI={(seedQuestion) => { setRoute({ kind: 'ask', seedQuestion }); }}
             onCloned={(id) => { setRoute({ kind: 'report-edit', id }); }}
           />
+        ) : route.kind === 'modules' ? (
+          <ModulesIndex
+            modules={home?.modules ?? []}
+            dashboards={home?.dashboards ?? []}
+            onOpenModule={(id) => { setRoute({ kind: 'module', id }); }}
+          />
+        ) : route.kind === 'module' ? (
+          (() => {
+            const module = home?.modules.find((m) => m.id === route.id);
+            /**
+             * No such module in the served catalog — a stale route after a
+             * catalog change, or a build where that module lost its last
+             * report. Back to the tiles rather than a blank page: the tiles are
+             * the honest answer to "which modules are there", and this screen
+             * has nothing true to say about one that is not among them.
+             */
+            if (module === undefined) {
+              return (
+                <ModulesIndex
+                  modules={home?.modules ?? []}
+                  dashboards={home?.dashboards ?? []}
+                  onOpenModule={(id) => { setRoute({ kind: 'module', id }); }}
+                />
+              );
+            }
+            return (
+              <ModulePage
+                module={module}
+                dashboards={home?.dashboards ?? []}
+                previews={previews}
+                schoolIds={selected}
+                academicYear={home?.academic_year ?? null}
+                onBack={() => { setRoute({ kind: 'modules' }); }}
+                onOpen={(id) => {
+                  setCameFromModule(module.id);
+                  setRoute({ kind: 'report', id });
+                }}
+              />
+            );
+          })()
         ) : route.kind === 'my-reports' ? (
           <MyReports
             schoolIds={selected}
@@ -376,6 +498,16 @@ function titleOf(id: string, dashboards: readonly DashboardCard[]): string {
     .split('-')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+/**
+ * The crumb for an open module. Read out of the served catalog for the same
+ * reason `titleOf` reads a report's: the tile the reader just clicked said
+ * "Fees", and a breadcrumb that title-cased the id into something else would
+ * rename the page they arrived on.
+ */
+function moduleCrumb(id: string, modules: readonly { id: string; title: string }[]): string {
+  return modules.find((m) => m.id === id)?.title ?? 'Module Wise Analysis';
 }
 
 function titleCase(value: string): string {

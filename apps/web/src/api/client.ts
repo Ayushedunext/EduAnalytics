@@ -155,6 +155,31 @@ export interface DashboardCard {
    */
   status: 'available' | 'coming' | 'blocked';
   reason?: string;
+  /** Which module tiles this report appears under (services/modules.ts). */
+  modules: string[];
+}
+
+/**
+ * One Module Wise Analysis tile, as the SERVER assembles it (services/home.ts,
+ * `servedModules`). `report_ids` names the reports inside it, in the order the
+ * module screen draws them; the card for each is still read out of
+ * `HomeResponse.dashboards`, so there is one description of a report and this is
+ * only a grouping of it.
+ *
+ * `status: 'empty'` means nothing in the module opens and `reason` says why —
+ * Exam today, because the ERP extract carries no exam data. The tile renders
+ * inert with that reason on it rather than disappearing: seven tiles describe
+ * the school's world, and a missing one reads as an oversight where a stated
+ * reason reads as a fact.
+ */
+export interface ModuleCard {
+  id: string;
+  title: string;
+  blurb: string;
+  icon: string;
+  report_ids: string[];
+  status: 'available' | 'empty';
+  reason?: string;
 }
 
 export interface HomeResponse {
@@ -179,6 +204,13 @@ export interface HomeResponse {
    * would be a second copy of that rule, free to disagree with the first.
    */
   grid: string[];
+  /**
+   * The Module Wise Analysis tiles, in the server's order. Travels with Home
+   * because it is static catalog metadata — no query, no scope — and because
+   * the sidebar, the tiles and the report cards must read one answer about what
+   * this build can open.
+   */
+  modules: ModuleCard[];
   /** Schools that failed inside a fan-out. Annotated, never dropped (ADR-011). */
   degraded_schools: { school_id: string; message: string }[];
 }

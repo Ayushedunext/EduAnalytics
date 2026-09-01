@@ -31,7 +31,7 @@ const schema = z.object({
   ORCHESTRATOR_PORT: z.coerce.number().int().positive().default(3000),
 
   /** Where the SPA runs. Used for CORS and the post-launch redirect. */
-  SPA_ORIGIN: z.string().url().default('http://localhost:5173'),
+  SPA_ORIGIN: z.string().url().default('http://localhost:8080'),
 
   /**
    * Signs our own session cookie. Distinct from the ERP's signing key: the ERP
@@ -125,7 +125,7 @@ const schema = z.object({
    * a caller who could choose the URL could make the platform's browser fetch
    * an arbitrary page and hand back a PDF of it.
    */
-  PRINT_URL: z.string().url().default('http://localhost:5174/print.html'),
+  PRINT_URL: z.string().url().default('http://localhost:8080/print.html'),
 
   /**
    * The whole render budget — navigation, layout and PDF generation each get

@@ -22,13 +22,20 @@
  * scale so elevation and spacing stop being ad hoc per-component numbers.
  */
 @theme {
-  --color-teal: #028090;      /* primary actions, primary chart series */
-  --color-teal-dark: #046e7c;
+  /* Chart series and UI accents are ONE palette, revalidated 2026-09-01
+     (widgets.tsx `SERIES` carries the reasoning and the measured margins).
+     They have to move together: a KPI tile's left edge and the bar it
+     summarises are the same measure, and a tile painted in last season's teal
+     beside a chart in this season's reads as two products. */
+  --color-teal: #008a9d;      /* primary actions, primary chart series */
+  --color-teal-dark: #006472; /* the ramp's deep step — gradients, pressed states */
+  --color-teal-light: #61b3c3;/* the ramp's lit step */
   --color-ink: #032e36;       /* headings, sidebar, dark bands */
-  --color-seafoam: #00a896;   /* secondary series and accents */
-  --color-mint: #02c39a;      /* success, active/ON states */
-  --color-amber: #f2a93b;     /* warnings, fees outstanding */
-  --color-red: #e05252;       /* errors, defaulter counts */
+  --color-seafoam: #048e53;   /* secondary accents (emerald's deep step) */
+  --color-mint: #3db575;      /* success, active/ON states, "collected" */
+  --color-amber: #c78100;     /* warnings, fees outstanding */
+  --color-red: #c74859;       /* errors, defaulter counts */
+  --color-indigo: #4967c6;    /* the fifth series; no fixed meaning */
   --color-slate: #334155;     /* body text */
   --color-muted: #64748b;     /* captions */
   --color-line: #cbd5e1;      /* borders */
@@ -403,11 +410,21 @@ body {
 .kpi:hover { box-shadow: var(--shadow-card-hover); transform: translateY(-1px); }
 
 /* Semantic left-edge accent, set by the tone the server assigned the metric —
-   never invented client-side (§11: colour communicates meaning, not decoration). */
-.kpi--positive { border-left-color: var(--color-success); }
-.kpi--warning  { border-left-color: var(--color-warning); }
-.kpi--negative { border-left-color: var(--color-danger); }
-.kpi--neutral  { border-left-color: var(--color-primary); }
+   never invented client-side (§11: colour communicates meaning, not decoration).
+
+   The edge is a 3px GRADIENT rather than a flat rule (2026-09-01), running the
+   hue's deep step into its lit one — the same ramp the bars are painted with,
+   so a tile and the chart it summarises are visibly the same measure. It stays
+   a border-box edge, not a pseudo-element, so nothing new can catch a click. */
+.kpi { border-left-color: transparent; background-clip: padding-box; }
+.kpi--positive { border-image: linear-gradient(180deg, var(--color-mint), #84dea7) 1; }
+.kpi--warning  { border-image: linear-gradient(180deg, var(--color-amber), #ecb165) 1; }
+.kpi--negative { border-image: linear-gradient(180deg, var(--color-red), #eb7f88) 1; }
+.kpi--neutral  { border-image: linear-gradient(180deg, var(--color-teal), var(--color-teal-light)) 1; }
+/* `border-image` paints all four edges, so the other three are widthless. */
+.kpi--positive, .kpi--warning, .kpi--negative, .kpi--neutral {
+  border-style: solid; border-width: 0 0 0 3px;
+}
 
 .kpiLabel {
   font-size: 11.5px; font-weight: 600; color: var(--color-text-muted);
@@ -1066,13 +1083,20 @@ body {
 
 /* ---------- chart tooltip (packages/chart-spec ChartTooltip) ---------- */
 
+/* A tooltip is a FLOATING object, so it is the one surface that earns real
+   elevation: no hairline border (a border and a shadow together read as two
+   competing edges), a larger radius than a static card, and enough padding
+   that the numbers inside are the widest thing in it. */
 .specTooltip {
-  background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm);
-  padding: 9px 12px; min-width: 96px;
-  box-shadow: var(--shadow-float);
+  background: var(--color-surface); border: none; border-radius: 12px;
+  padding: 11px 14px; min-width: 116px;
+  box-shadow: 0 12px 32px -8px rgba(3, 46, 54, 0.26), 0 3px 10px rgba(3, 46, 54, 0.10);
   font-size: 12px; font-family: var(--font-sans);
 }
-.specTooltipLabel { font-size: 11px; font-weight: 700; color: var(--color-text-primary); margin-bottom: 5px; }
+.specTooltipLabel {
+  font-size: 11px; font-weight: 700; color: var(--color-text-primary); margin-bottom: 7px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--color-border);
+}
 .specTooltipRow {
   display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
@@ -1080,6 +1104,10 @@ body {
 .specTooltipRow + .specTooltipRow { margin-top: 3px; }
 .specTooltipDot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .specTooltipName { color: var(--color-text-muted); margin-right: 10px; }
+/* The number is what the reader opened the tooltip for, so it is the only
+   thing in it set at value weight — the series name beside it is a label. */
+.specTooltipRow b, .specTooltipRow strong { font-weight: 650; color: var(--color-text-primary); font-size: 12.5px; }
+.specTooltipDot { box-shadow: 0 0 0 2px var(--color-surface); }
 
 /* ---------- report affordances & logic panel (docs/06 §3) ---------- */
 

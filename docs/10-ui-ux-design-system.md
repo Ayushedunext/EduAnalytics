@@ -8,12 +8,13 @@ Clean, whitespace-heavy, card-based; the AI is the hero feature but nothing depe
 
 | Token | Value | Use |
 |---|---|---|
-| Deep Teal | `#028090` | Primary actions, primary chart series |
+| Deep Teal | `#008a9d` | Primary actions, primary chart series (was `#028090` until 2026-09-01 — it measured OKLCH chroma 0.095, under the 0.10 floor at which a colour starts reading grey) |
 | Ink | `#032E36` | Headings, sidebar/nav, dark bands |
-| Seafoam | `#00A896` | Secondary series, secondary accents |
-| Mint | `#02C39A` | Success, active/ON states |
-| Amber | `#F2A93B` | Warnings, fees-outstanding, secondary chart series |
-| Red | `#E05252` | Errors, defaulter counts, FALSE branches |
+| Seafoam | `#048E53` | Secondary accents (emerald's deep ramp step) |
+| Mint | `#3DB575` | Success, active/ON states, "collected" |
+| Amber | `#C78100` | Warnings, fees-outstanding, third chart series (was `#F2A93B` — lightness 0.787, outside the 0.43–0.77 band) |
+| Red | `#C74859` | Errors, defaulter counts, FALSE branches |
+| Indigo | `#4967C6` | The fifth chart series. No fixed meaning — added 2026-09-01 |
 | Slate `#334155` / Muted `#64748B` | Body text / captions |
 | Canvas `#F1F5F9` / Card `#FFFFFF` | Page background / cards |
 
@@ -22,7 +23,7 @@ Type: **Inter**, one scale — Page title 28 semibold · Card heading 18 semibol
 ### Principles
 
 1. **Calm surfaces** — data is the color, chrome is quiet.
-2. **One chart language** — teal-family series, amber for warnings, no gridline clutter, values labelled on bars; identical across predefined, custom, AI reports and PDFs (a direct consequence of spec-driven rendering, doc 05). Categorical series are capped at **four** steps (`#028090`, `#02c39a`, `#f2a93b`, `#e05252`) — a CVD/contrast audit (2026-08-22) failed the prior seven-color rotation, since two teal-family steps that close together are indistinguishable at chart-mark size regardless of color vision. A category past the fourth is never a fifth generated hue; it folds into a recessive "Other" fill (`#64748b` at reduced opacity).
+2. **One chart language** — every report, custom report, AI artifact and PDF draws through one renderer, so they cannot drift (a direct consequence of spec-driven rendering, doc 05). **Amended 2026-09-01.** Categorical series are **five** steps (`#008a9d`, `#3db575`, `#c78100`, `#c74859`, `#4967c6`), each with a three-step ramp (deep / base / lit) used to shade marks. The prior four-step set was capped at four because a 2026-08-22 audit found two teal-family steps indistinguishable at mark size, and §1.2's "teal-family series" rule ruled out reaching outside the family to fix the spacing. That rule is what is amended: **hue variety is now allowed beyond the teal family**, because leaving the family is exactly what buys the separation the old audit could not find inside it — indigo is nowhere near teal, where a second teal step never could be. The slot ORDER remains semantic and is not permutable (demand, collected, pending, defaulters), so hues are pushed apart within their families and lightness carries the separation that hue cannot: under protanopia and deuteranopia green and amber collapse to one hue, and only their lightness gap survives. Measured on the shipped set (`scripts/validate_palette.js`): worst adjacent pair ΔE 9.1 deutan / 9.8 tritan, worst normal-vision pair ΔE 16.2, against floors of 8 and 15; all five inside the lightness band and above the chroma floor, which the old set failed on two slots and one slot respectively. One accepted deviation, stated rather than hidden: `#3db575` sits at 2.54:1 against the card, under the 3:1 relief line — the remedy is visible labels or a table view, and every multi-series chart here carries a mandatory legend, axis values and a tooltip. The old palette failed that check on **two** slots. A category past the fifth is still never a generated hue; it folds into a recessive "Other" fill (`#64748b` at reduced opacity), alternating with `#cbd5e1` inside a stack.
 3. **Tenant theming** — each school/trust gets accent color + logo (topbar, buttons, PDF header) from the same token system; no per-client CSS forks.
 4. **Feels instant** — skeleton loaders, streamed AI widgets, optimistic filter changes; UI responds within 100 ms even while data loads.
 

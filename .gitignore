@@ -6,6 +6,10 @@
 .env
 .env.*
 !.env.example
+# The staging template documents the SHAPE of deploy/staging/.env and holds no
+# real values -- same role as .env.example, so the same exemption. The filled-in
+# copy beside it (deploy/staging/.env) stays ignored by the `.env` rule above.
+!.env.staging.example
 *.pem
 *.key
 *.p12

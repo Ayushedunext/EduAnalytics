@@ -942,14 +942,29 @@ export function BarPanel({
    * defect, because the legend is the only key to which band of one bar is
    * which, and a reader matching top-to-bottom gets the wrong answer.
    */
+  /**
+   * No `height` on the Legend, deliberately.
+   *
+   * Recharts reserves plot space for a legend by MEASURING its wrapper div and
+   * offsetting the plot area by that box (`appendOffsetOfLegend`). A `height`
+   * prop is written straight onto the wrapper's style, which pins the measured
+   * box no matter what is inside it -- and the row below wraps. Four exit
+   * reasons plus "Other reasons" do not fit one line of a 6-column panel, so
+   * the second row rendered OUTSIDE the 26px the plot had been shifted by, and
+   * printed over the value axis and the tops of the bars ("Why students left").
+   *
+   * Left to size itself the wrapper is `height: auto`, the ResizeObserver
+   * behind that measurement reports the real two- or three-row height, and the
+   * plot starts below the last row -- at any panel width, for any number of
+   * series, and in the PDF, which renders these same specs through Chromium.
+   */
   const legend = grouped ? (
     <Legend
       verticalAlign="top"
       align="left"
-      height={26}
       iconType="circle"
       iconSize={8}
-      wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 4 }}
+      wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 6 }}
       /**
        * `content` rather than `payload`: this Recharts version derives the
        * payload itself and does not accept one, so the only way to fix the
@@ -967,6 +982,7 @@ export function BarPanel({
             margin: 0,
             padding: 0,
             fontSize: 11,
+            lineHeight: 1.35,
             color: MUTED,
           }}
         >
@@ -1291,14 +1307,17 @@ export function LinePanel({
               <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
               <Tooltip content={<ChartTooltip />} cursor={{ stroke: MUTED, strokeWidth: 1, strokeDasharray: '3 3' }} />
               {/* [MANDATORY for two or more series] identity is never colour
-                  alone -- the same rule the grouped bar follows. */}
+                  alone -- the same rule the grouped bar follows, including its
+                  reason for carrying no `height`: this legend names SCHOOLS, a
+                  list neither this file nor the catalog bounds, so it wraps
+                  sooner than any of them. Sized by measurement it pushes the
+                  plot down instead of printing on it. */}
               <Legend
                 verticalAlign="top"
                 align="left"
-                height={26}
                 iconType="plainline"
                 iconSize={14}
-                wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 4 }}
+                wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 6 }}
               />
               {pivoted.names.map((name, index) => (
                 <Line

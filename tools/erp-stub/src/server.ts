@@ -1,9 +1,10 @@
 /**
- * Stub EduNext ERP -- DEVELOPMENT ONLY.
+ * Stub EduNext ERP -- NOT PRODUCT CODE.
  *
  * Plays the ERP's side of the launch handshake (docs/02 §2) so the rest of the
- * platform can be built and tested before the ERP team ships their endpoints
- * (docs/11 §2 item 3). It implements exactly the three things the real ERP owes:
+ * platform can be built, demonstrated and staged before the ERP team ships
+ * their endpoints (docs/11 §2 item 3). It implements exactly the three things
+ * the real ERP owes:
  *
  *   1. a menu item that starts the handoff
  *   2. a token-signing endpoint (RS256, 60s, one-time nonce -- ADR-003)
@@ -12,9 +13,25 @@
  * Everything downstream is real. Swapping in the real ERP means changing
  * ERP_JWKS_URL and deleting this directory.
  *
- * Deliberately styled to look like a different product, so that in a demo the
- * handoff into Analytics is visually obvious rather than a subtle change of
- * header colour.
+ * TWO FRONT DOORS, ONE HANDSHAKE (`MODE`, below)
+ *
+ * docs/11 §2 always intended this stub to double as "the staging harness", and
+ * staging is the case the original picker cannot serve: there is no ERP to
+ * launch from, and a list of personas anyone can click is not a front door.
+ * So `ERP_STUB_MODE=login` swaps the picker for a password form (logins.ts,
+ * login-page.ts) and switches the picker and its fault injectors off.
+ *
+ * What does NOT change between the two modes is everything after the password
+ * is accepted: the same claims, the same RS256 signature, the same 60-second
+ * token, the same auto-POST handoff. Authentication is a gate placed IN FRONT
+ * of the handshake, never a variation of it -- which is what keeps the platform
+ * unable to tell staging from the real ERP, and keeps CODING_GUIDELINES §11
+ * ("never add platform-local login") true of every line in apps/.
+ *
+ * The picker is deliberately styled to look like a different product, so that
+ * in a local demo the handoff into Analytics is visually obvious rather than a
+ * subtle change of header colour. The login page is styled the opposite way and
+ * says why in its own header.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -22,10 +39,59 @@ import { randomUUID } from 'node:crypto';
 import { SignJWT } from 'jose';
 import { getKeys, jwks } from './keys.js';
 import { FAULTS, IDENTITIES, findIdentity, type Fault } from './identities.js';
+import {
+  authenticate,
+  enabledLogins,
+  passwordVar,
+  throttleCheck,
+  throttleClear,
+  throttleRecordFailure,
+} from './logins.js';
+import { esc, loginPage } from './login-page.js';
 
 const PORT = Number(process.env.ERP_STUB_PORT ?? 4000);
 const ISSUER = process.env.ERP_ISSUER ?? `http://localhost:${PORT}`;
 const LAUNCH_URL = process.env.ANALYTICS_LAUNCH_URL ?? 'http://localhost:3000/launch';
+
+/**
+ * Which front door this process presents.
+ *
+ *   picker (default) -- the local development identity list: click a persona,
+ *                       inject a fault, no password. Fast, and correct for a
+ *                       machine only its owner can reach.
+ *   login            -- STAGING: a password form (logins.ts). The picker and
+ *                       the fault switches are switched OFF, not merely hidden.
+ *
+ * Defaulting to `picker` means a developer who pulls this branch sees no
+ * change. Staging opts in explicitly, and the mode is printed at boot so a
+ * misconfigured deployment is visible in the first ten lines of its log rather
+ * than the moment someone notices the front door is open.
+ */
+const MODE = process.env.ERP_STUB_MODE === 'login' ? 'login' : 'picker';
+
+/** Whether the login page names the configured accounts. See login-page.ts. */
+const SHOW_ACCOUNTS = process.env.ERP_STUB_SHOW_ACCOUNTS === 'true';
+
+/**
+ * The public path prefix this process is reachable at, if it is not a root.
+ *
+ * Staging puts the sign-in on the same origin as the SPA, under `/signin`, and
+ * the reverse proxy strips the prefix before forwarding -- so the routes below
+ * stay `/` and `/login` while the form has to name the un-stripped path. Only
+ * the page needs this; the server never sees it. Normalised so that `/signin`,
+ * `signin` and `/signin/` all mean the same thing, because a deployment will
+ * eventually be configured with each of them.
+ */
+const BASE_PATH = (() => {
+  const raw = (process.env.ERP_STUB_BASE_PATH ?? '').trim().replace(/\/+$/, '');
+  if (raw === '') return '';
+  return raw.startsWith('/') ? raw : '/' + raw;
+})();
+
+/** The three fields every render of the sign-in page needs. */
+function loginPageDefaults(): { accounts: ReturnType<typeof enabledLogins>; showHints: boolean; basePath: string } {
+  return { accounts: enabledLogins(), showHints: SHOW_ACCOUNTS, basePath: BASE_PATH };
+}
 
 /** Token lifetime: 60 seconds, per ADR-003. */
 const TOKEN_TTL_SECONDS = 60;
@@ -34,13 +100,6 @@ const keys = await getKeys();
 
 /** Remembered so the replay fault can re-send a previously used token. */
 let lastToken: string | null = null;
-
-const esc = (s: string): string =>
-  s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 
 const STYLE = [
   ':root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }',
@@ -196,12 +255,152 @@ function sendHtml(res: ServerResponse, status: number, body: string): void {
   res.end(body);
 }
 
+/**
+ * Read a form POST body, with a hard cap.
+ *
+ * 8 KB is orders of magnitude more than a username and a password, and the cap
+ * exists so an unauthenticated caller cannot make this process buffer an
+ * unbounded request -- the one denial-of-service a login endpoint hands out for
+ * free. `node:http` gives no body parsing, and adding a framework to this
+ * process to read two fields would be the wrong trade (CODING_GUIDELINES §19).
+ */
+const MAX_BODY_BYTES = 8 * 1024;
+
+function readFormBody(req: IncomingMessage): Promise<URLSearchParams> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(new URLSearchParams(Buffer.concat(chunks).toString('utf8'))));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Who is asking, for the login throttle.
+ *
+ * Behind the staging reverse proxy every request arrives from the proxy's own
+ * address, so `socket.remoteAddress` alone would throttle the entire internet
+ * as one client -- the first person to fumble their password would lock out
+ * everybody. `x-forwarded-for`'s leftmost entry is the original client.
+ *
+ * That header is trivially forged by a direct caller, which would let someone
+ * hand themselves a fresh attempt budget per request. Accepted, deliberately:
+ * this process is only reachable through the proxy in staging, the throttle is
+ * a brake on opportunistic guessing rather than an access control, and the
+ * failure it prevents (one address locking out all others) is the one that
+ * actually happens.
+ */
+function clientAddress(req: IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const header = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const first = header?.split(',')[0]?.trim();
+  if (first !== undefined && first !== '') return first;
+  return req.socket.remoteAddress ?? 'unknown';
+}
+
+/**
+ * POST /login -- the staging front door.
+ *
+ * On success this does exactly what clicking a persona does in picker mode:
+ * sign a normal token and hand off. There is deliberately NO session here. The
+ * platform issues the only session that matters (ADR-004, 8 hours), and a
+ * second one in front of it would be a second thing to expire, a second cookie
+ * to get wrong, and a login that could appear to succeed while Analytics
+ * insisted the user was a stranger.
+ */
+async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const address = clientAddress(req);
+  const now = Date.now();
+
+  const gate = throttleCheck(address, now);
+  if (!gate.allowed) {
+    console.warn('[erp-stub] login throttled for ' + address);
+    sendHtml(
+      res,
+      429,
+      loginPage({
+        error: 'Too many sign-in attempts. Try again in ' + String(gate.retryInSeconds) + ' seconds.',
+        ...loginPageDefaults(),
+      }),
+    );
+    return;
+  }
+
+  const form = await readFormBody(req);
+  const username = form.get('username') ?? '';
+  const password = form.get('password') ?? '';
+
+  const identity = authenticate(username, password);
+  if (identity === undefined) {
+    throttleRecordFailure(address, now);
+    // One message for both a wrong name and a wrong password. Two would tell an
+    // unauthenticated caller which usernames exist, and enumeration is most of
+    // the work of guessing at a password.
+    console.warn('[erp-stub] login failed for ' + JSON.stringify(username) + ' from ' + address);
+    sendHtml(
+      res,
+      401,
+      loginPage({
+        error: 'That username and password did not match.',
+        username,
+        ...loginPageDefaults(),
+      }),
+    );
+    return;
+  }
+
+  throttleClear(address);
+  // The password itself is never logged, at any level -- CODING_GUIDELINES §13
+  // treats credentials as a log-forbidden value and a staging log is still a log.
+  console.log('[erp-stub] login ok: ' + identity.key + ' (' + identity.claims.role + ')');
+  sendHtml(res, 200, handoffPage(await signFor(identity.key, 'none')));
+}
+
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? '/', 'http://localhost:' + String(PORT));
 
   if (url.pathname === '/.well-known/jwks.json') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(jwks(keys.publicJwk), null, 2));
+    return;
+  }
+
+  if (MODE === 'login') {
+    if (url.pathname === '/login' && req.method === 'POST') {
+      handleLogin(req, res).catch((err: unknown) => {
+        console.error('[erp-stub] login error: ' + (err instanceof Error ? err.message : String(err)));
+        sendHtml(
+          res,
+          400,
+          loginPage({
+            error: 'Something went wrong. Please try again.',
+            ...loginPageDefaults(),
+          }),
+        );
+      });
+      return;
+    }
+
+    if (url.pathname === '/' || url.pathname === '/login') {
+      sendHtml(res, 200, loginPage(loginPageDefaults()));
+      return;
+    }
+
+    // Everything else -- crucially /launch-analytics -- does not exist in this
+    // mode. Leaving that route reachable would have made the password form
+    // decorative: `?who=director` signs a Director token with no credential at
+    // all. A front door with an unlocked side entrance is not a front door.
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not found');
     return;
   }
 
@@ -231,8 +430,42 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   res.end('not found');
 });
 
-server.listen(PORT, () => {
-  console.log('[erp-stub] listening on http://localhost:' + String(PORT));
-  console.log('[erp-stub] JWKS at  http://localhost:' + String(PORT) + '/.well-known/jwks.json');
+/**
+ * Refuse to start a login-mode process that nobody can log in to.
+ *
+ * The passwords come from the environment (logins.ts), so the way this is
+ * misconfigured is a forgotten variable — and the symptom would be a sign-in
+ * page that rejects every correct password with no clue why. Failing at boot
+ * turns a puzzling staging outage into a deployment that never went out, which
+ * is PROJECT_CONTEXT §9.7's "fail loud" applied to configuration.
+ */
+if (MODE === 'login' && enabledLogins().length === 0) {
+  console.error('[erp-stub] ERP_STUB_MODE=login but no account has a password set.');
+  console.error('[erp-stub] Set at least one ERP_STUB_PASSWORD_<IDENTITY> variable:');
+  for (const identity of IDENTITIES) {
+    console.error('[erp-stub]   ' + passwordVar(identity.key) + '  (signs in as ' + identity.key + ')');
+  }
+  process.exit(1);
+}
+
+/**
+ * The bind address.
+ *
+ * 127.0.0.1 by default, which is what a developer wants and what a container
+ * cannot use: inside Docker, loopback means the container's own loopback and
+ * the reverse proxy on the other side of the bridge network gets connection
+ * refused. So the staging compose file sets 0.0.0.0 — safe there precisely
+ * because the port is never published to the host, only to the proxy.
+ */
+const BIND_HOST = process.env.ERP_STUB_BIND_HOST ?? '127.0.0.1';
+
+server.listen(PORT, BIND_HOST, () => {
+  console.log('[erp-stub] listening on http://' + BIND_HOST + ':' + String(PORT));
+  console.log('[erp-stub] mode     ' + MODE + (MODE === 'login' ? ' (password required)' : ' (no password — local dev)'));
+  if (MODE === 'login') {
+    console.log('[erp-stub] accounts ' + enabledLogins().map((i) => i.key).join(', '));
+  }
+  console.log('[erp-stub] JWKS at  http://' + BIND_HOST + ':' + String(PORT) + '/.well-known/jwks.json');
   console.log('[erp-stub] key id   ' + keys.kid);
+  console.log('[erp-stub] launch   ' + LAUNCH_URL);
 });

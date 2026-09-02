@@ -1,0 +1,42 @@
+# What must not be sent to the Docker daemon as build context.
+#
+# Two reasons, and the second is the important one.
+#
+# SPEED: node_modules and .git together are the bulk of this tree, and both are
+# rebuilt or irrelevant inside the image. Sending them makes every build wait on
+# a multi-gigabyte upload before the first instruction runs.
+#
+# SAFETY: a build context is copied wholesale into the daemon, and anything a
+# COPY instruction can reach can end up in a published layer -- where deleting
+# it later does not remove it. `.env` holds real database passwords, a live
+# Anthropic key and the session signing secret; `dumps/` and `.keys/` hold
+# school data and private key material. None of them has any business in an
+# image, and CODING_GUIDELINES §12 forbids it besides. The services read their
+# configuration from the environment at runtime (see docker-compose.yml).
+
+.git
+.github
+node_modules
+**/node_modules
+
+# Secrets and key material.
+.env
+.env.*
+!.env.example
+**/.keys
+deploy/staging/.env
+
+# School data. 14 MB of restored ERP dump that reaches staging through
+# deploy/staging/scripts/load-data.sh, never through an image layer.
+dumps
+
+# Build output. Regenerated inside the image; a stale local copy shadowing a
+# fresh build is a confusing way to deploy yesterday's bundle.
+**/dist
+**/*.tsbuildinfo
+
+# Local noise.
+.vscode
+.idea
+**/.DS_Store
+*.log

@@ -1,0 +1,321 @@
+# The staging environment: the whole platform on one Linux host.
+#
+#   docker compose -f deploy/staging/docker-compose.yml up -d
+#
+# Configuration comes from deploy/staging/.env, which compose loads
+# automatically because it sits beside this file. Start from .env.staging.example
+# and run scripts/make-secrets.sh. See README.md in this directory.
+#
+# WHAT THIS IS AND IS NOT
+#
+# It is a faithful staging copy: every service is the real service, the launch
+# handshake is the real handshake, and the data plane is a real MySQL holding a
+# restored ERP extract. The ONE substitution is the ERP itself, which does not
+# exist to point at yet -- tools/erp-stub stands in for it, exactly as docs/11
+# §2 anticipated ("a stub ERP ... doubling as the staging harness").
+#
+# It is not a production topology. Production splits these across managed
+# services with replicas, Secrets Manager and per-school databases (docs/03,
+# docs/09). Nothing here should be copied there.
+#
+# PORTS
+#
+# Only the proxy publishes anything. MySQL, Redis, the MCP server, the
+# orchestrator and the identity provider are reachable on the compose network
+# and nowhere else. That is deliberate and load-bearing for two of them:
+# docs/04 §6 puts the MCP server on a private network only, and the result cache
+# holds school rows (docs/09 §4) that 0.0.0.0 would publish to the internet.
+
+name: sap-staging
+
+# ── Shared configuration ──────────────────────────────────────────────────────
+#
+# The Node services need overlapping slices of the same settings, and three
+# hand-maintained copies of a database password is how one of them ends up
+# pointing somewhere else after a rotation.
+x-platform-db: &platform-db
+  PLATFORM_DB_HOST: mysql
+  PLATFORM_DB_PORT: "3306"
+  PLATFORM_DB_NAME: ${PLATFORM_DB_NAME:-analytics_platform}
+  PLATFORM_DB_USER: ${PLATFORM_DB_USER:-analytics_app}
+  PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD:?set PLATFORM_DB_PASSWORD in deploy/staging/.env}
+
+x-node-image: &node-image
+  # One tag for the three services that run the identical image, so `docker
+  # images` shows what is actually on disk -- one build -- instead of three
+  # differently-named tags of the same layers.
+  image: sap-staging/service:latest
+  build:
+    # The repository root: npm workspaces resolve across the whole tree, so a
+    # context of this directory would install nothing.
+    context: ../..
+    dockerfile: deploy/staging/Dockerfile
+    target: service
+  restart: unless-stopped
+
+services:
+  # ── Data plane ─────────────────────────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command:
+      # The extract is ~1 GB and the fee tables are the ones every dashboard
+      # scans. A buffer pool smaller than the working set turns each dashboard
+      # into disk reads; this is the single tuning that decides whether staging
+      # feels like the product or like a slideshow. Raise it if the host has the
+      # RAM to spare -- 70% of total is the usual rule for a dedicated box.
+      - --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-1G}
+      # The ERP dumps carry utf8mb4 text; anything narrower mangles names.
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # mysqldump output from the source machine can contain long single-row
+      # INSERTs. The 4 MB default rejects them mid-restore, leaving a partially
+      # loaded table that looks like a successful import until a report is short.
+      - --max-allowed-packet=256M
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in deploy/staging/.env}
+      PLATFORM_DB_NAME: ${PLATFORM_DB_NAME:-analytics_platform}
+      PLATFORM_DB_USER: ${PLATFORM_DB_USER:-analytics_app}
+      PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD}
+      SCHOOL_DB_NAME: ${SCHOOL_DB_NAME:-ai_analysis}
+      SCHOOL_DB_USER: ${SCHOOL_DB_USER:-analytics_ro}
+      SCHOOL_DB_PASSWORD: ${SCHOOL_DB_PASSWORD:?set SCHOOL_DB_PASSWORD in deploy/staging/.env}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # Runs only on the first boot of an empty volume. See the script's header.
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # `mysqladmin ping` answers before the server can actually serve queries
+      # during a cold start with a large buffer pool, so the dependent services
+      # start, fail to connect, and restart-loop through the window. A real
+      # query is the honest readiness signal.
+      test: ["CMD", "mysql", "-uroot", "-p${MYSQL_ROOT_PASSWORD}", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The same reasoning as the repository's development docker-compose.yml: no
+    # persistence, because every entry is a report the replica can produce
+    # again, and a cache that survives a restart is one nobody can clear by
+    # restarting it. Eviction policy set so it stays bounded.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory ${REDIS_MAXMEMORY:-512mb}
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── One-shot: bring the platform database up to date, then exit ────────────
+  #
+  # A separate service rather than an entrypoint hook on the orchestrator,
+  # because the orchestrator will eventually run more than one replica and
+  # concurrent migrations are how a schema gets corrupted. One runner, ordered
+  # before the services that read what it writes.
+  migrate:
+    <<: *node-image
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      <<: *platform-db
+      SCHOOL_DB_HOST: mysql
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        npm run db:migrate -- --seed
+        node deploy/staging/scripts/set-replica-host.mjs
+
+  # ── The only path to school data (ADR-006) ─────────────────────────────────
+  mcp-server:
+    <<: *node-image
+    command: ["npm", "run", "start", "-w", "@sap/mcp-server"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-db
+      NODE_ENV: production
+      # 0.0.0.0 INSIDE the container, which is not the same statement as
+      # exposing it. This service publishes no port, so the only things that can
+      # reach it are the other containers on this network -- which is exactly
+      # the "private network only" of docs/04 §6. Left at the 127.0.0.1 default
+      # it would refuse the orchestrator's connections from across the bridge.
+      MCP_BIND_HOST: 0.0.0.0
+      MCP_PORT: "3100"
+      MCP_CONTEXT_SECRET: ${MCP_CONTEXT_SECRET:?run deploy/staging/scripts/make-secrets.sh}
+      # Resolves the registry's `env://SCHOOL_DB_CREDENTIALS` reference. In
+      # production this is a Secrets Manager ARN; ADR-013 keeps the resolution
+      # behind one function so the interface is identical either way.
+      SCHOOL_DB_USER: ${SCHOOL_DB_USER:-analytics_ro}
+      SCHOOL_DB_PASSWORD: ${SCHOOL_DB_PASSWORD}
+      ROW_CAP: ${ROW_CAP:-5000}
+      QUERY_TIMEOUT_MS: ${QUERY_TIMEOUT_MS:-10000}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3100/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── The only service the SPA talks to ──────────────────────────────────────
+  orchestrator:
+    <<: *node-image
+    # Its own tag: this is the one image with a browser in it, roughly half a
+    # gigabyte larger than the others, and it must not overwrite the shared one.
+    image: sap-staging/orchestrator:latest
+    build:
+      context: ../..
+      dockerfile: deploy/staging/Dockerfile
+      target: orchestrator
+    command: ["npm", "run", "start", "-w", "@sap/orchestrator"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-db
+      # Turns on Secure cookies (auth/session.ts) and switches off the /docs
+      # Swagger mount (routes/docs.ts). Both are wanted here.
+      NODE_ENV: production
+      ORCHESTRATOR_PORT: "3000"
+
+      # The single public origin, and the target of the post-launch redirect.
+      # Also the sole entry in the CORS allowlist -- which in this topology
+      # matches nothing, because the SPA is served from this same origin and its
+      # requests are not cross-origin at all. That is the intended end state:
+      # CORS configured correctly and never exercised.
+      SPA_ORIGIN: https://${STAGING_HOSTNAME:?set STAGING_HOSTNAME in deploy/staging/.env}
+      SESSION_SECRET: ${SESSION_SECRET:?run deploy/staging/scripts/make-secrets.sh}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-8}
+
+      # Verified against the identity provider's published JWKS over the compose
+      # network. The ISSUER must be the string the tokens actually carry, which
+      # is what the idp service is told to use -- not the public URL. A mismatch
+      # here is rejected at verification and reads as "this launch link is not
+      # valid" with no further explanation.
+      ERP_JWKS_URL: http://idp:4000/.well-known/jwks.json
+      ERP_ISSUER: ${ERP_ISSUER:-http://idp:4000}
+
+      MCP_URL: http://mcp-server:3100/mcp
+      MCP_CONTEXT_SECRET: ${MCP_CONTEXT_SECRET}
+
+      AI_KEY_ENCRYPTION_KEY: ${AI_KEY_ENCRYPTION_KEY:?run deploy/staging/scripts/make-secrets.sh}
+
+      REDIS_URL: redis://redis:6379
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-600}
+
+      # Puppeteer loads this. The INTERNAL static server, not the public
+      # hostname: routing the platform's own browser back out through the proxy
+      # would make PDF export depend on DNS, TLS and whatever access control the
+      # edge is enforcing -- and it would break the moment someone sets
+      # STAGING_ALLOW_CIDRS, because the container is not in those ranges.
+      PRINT_URL: http://web:8080/print.html
+      PDF_TIMEOUT_MS: ${PDF_TIMEOUT_MS:-30000}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/HealthCheckAWS"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Stands in for the ERP: authenticates, then signs a launch token ────────
+  idp:
+    <<: *node-image
+    command: ["npm", "run", "start", "-w", "@sap/erp-stub"]
+    environment:
+      NODE_ENV: production
+      ERP_STUB_PORT: "4000"
+      # Reachable from the proxy across the bridge; still publishes no port.
+      ERP_STUB_BIND_HOST: 0.0.0.0
+
+      # The password form instead of the click-a-persona picker, which is also
+      # what switches the unauthenticated /launch-analytics route off.
+      ERP_STUB_MODE: login
+      # Mounted behind `handle_path /signin*`, which strips the prefix -- so the
+      # form's action must name the un-stripped path. See the Caddyfile.
+      ERP_STUB_BASE_PATH: /signin
+      # Lists the valid usernames on the page. Convenient for a demo, and a gift
+      # to anyone guessing at passwords. Off unless deliberately set.
+      ERP_STUB_SHOW_ACCOUNTS: ${ERP_STUB_SHOW_ACCOUNTS:-false}
+
+      # Must match the orchestrator's ERP_ISSUER exactly.
+      ERP_ISSUER: ${ERP_ISSUER:-http://idp:4000}
+      # Where the browser POSTs the signed token. A PUBLIC url, unlike every
+      # other address in this file: the form is submitted by the user's browser,
+      # which cannot resolve a compose service name.
+      ANALYTICS_LAUNCH_URL: https://${STAGING_HOSTNAME}/launch
+
+      # One password per role, from deploy/staging/.env. An account with no
+      # password set does not exist; see tools/erp-stub/src/logins.ts.
+      ERP_STUB_PASSWORD_DIRECTOR: ${ERP_STUB_PASSWORD_DIRECTOR:-}
+      ERP_STUB_PASSWORD_PRINCIPAL_MB: ${ERP_STUB_PASSWORD_PRINCIPAL_MB:-}
+      ERP_STUB_PASSWORD_PRINCIPAL_J: ${ERP_STUB_PASSWORD_PRINCIPAL_J:-}
+      ERP_STUB_PASSWORD_PRINCIPAL_TRAINING: ${ERP_STUB_PASSWORD_PRINCIPAL_TRAINING:-}
+      ERP_STUB_PASSWORD_ACCOUNTANT_MB: ${ERP_STUB_PASSWORD_ACCOUNTANT_MB:-}
+      ERP_STUB_PASSWORD_ADMIN: ${ERP_STUB_PASSWORD_ADMIN:-}
+    volumes:
+      # The RS256 signing keypair, generated on first run (keys.ts).
+      #
+      # Persisted because the alternative is a new `kid` on every restart, and
+      # the orchestrator caches JWKS with a rotation grace window -- so for a
+      # short period after each restart it would be verifying tokens against a
+      # key that no longer signs them, and sign-in would fail intermittently for
+      # reasons nothing in the logs would connect to a container restart.
+      - idp-keys:/app/tools/erp-stub/.keys
+
+  # ── The built SPA, on the internal network ─────────────────────────────────
+  web:
+    image: sap-staging/web:latest
+    build:
+      context: ../..
+      dockerfile: deploy/staging/Dockerfile
+      target: web
+    restart: unless-stopped
+
+  # ── The public edge: TLS, routing, and the only published ports ────────────
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+      - orchestrator
+      - idp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      STAGING_HOSTNAME: ${STAGING_HOSTNAME}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in deploy/staging/.env}
+      # Space-separated CIDRs. Default is open; see the Caddyfile.
+      STAGING_ALLOW_CIDRS: ${STAGING_ALLOW_CIDRS:-0.0.0.0/0 ::/0}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates. Without this volume every restart re-requests them
+      # and Let's Encrypt's rate limit (5 per name per week) turns a few
+      # ordinary redeploys into a staging environment with no TLS for days.
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  mysql-data:
+  caddy-data:
+  caddy-config:
+  idp-keys:

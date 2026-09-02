@@ -50,6 +50,7 @@ import {
   isDashboardId,
   type DashboardId,
 } from './dashboards.js';
+import { MODULES, type ModuleCard, type ModuleId } from './modules.js';
 
 /**
  * Vetted SQL. Read-only, catalog tables only, no placeholders, no tenant filter
@@ -165,6 +166,26 @@ export interface DashboardCard {
    */
   readonly status: 'available' | 'coming' | 'blocked';
   readonly reason?: string;
+  /**
+   * Which subject areas this report belongs to (services/modules.ts) — the
+   * Module Wise Analysis screen's grouping, held on the CARD rather than in a
+   * second table keyed by report id.
+   *
+   * On the card because a module membership is a fact ABOUT the report, and the
+   * card is already where every other such fact lives. A parallel
+   * `MODULE_REPORTS` map would be a second list to remember: a report added
+   * there and not here, or here and not there, produces a module tile whose
+   * count disagrees with what opens inside it, and nothing would fail until a
+   * school noticed. Being a field makes it total by TYPE — a new card does not
+   * compile without one — and test/modules.test.ts holds the rest.
+   *
+   * More than one is allowed, and used: Trend Analysis charts six years of fee
+   * collection AND twelve of enrollment, so it is genuinely a Fees report and a
+   * Student report, and Staff Attendance is read both by whoever runs the staff
+   * roll and by whoever watches presence. A report appearing in two modules is
+   * the same report, opened from two doors — never a copy.
+   */
+  readonly modules: readonly ModuleId[];
 }
 
 export interface HomeSummary {
@@ -186,6 +207,17 @@ export interface HomeSummary {
    * can disagree. The SPA renders the order it is given.
    */
   readonly grid: readonly string[];
+  /**
+   * The Module Wise Analysis tiles, in the order the screen draws them, each
+   * carrying the ids of the reports inside it (`servedModules`).
+   *
+   * Sent with Home rather than fetched by the module screen on its own. It is
+   * static metadata derived from the catalog two fields above — no query, no
+   * scope, nothing a second round trip would learn — and travelling together is
+   * what keeps the sidebar, the tiles and the report cards reading one answer
+   * about what this build can open.
+   */
+  readonly modules: readonly ModuleCard[];
   /** Schools that failed within a fan-out. Annotated, never swallowed (ADR-011). */
   readonly degraded_schools: readonly { school_id: string; message: string }[];
 }
@@ -303,6 +335,54 @@ export function servedDashboards(): readonly DashboardCard[] {
 }
 
 /**
+ * The Module Wise Analysis tiles, assembled from the two halves that describe
+ * them: `MODULES` (services/modules.ts) names the seven subject areas, and each
+ * card above says which it belongs to.
+ *
+ * -- Why a tile can be served with nothing behind it -------------------------
+ * `servedDashboards` withholds a report nobody can open, because a menu row is
+ * a promise of a screen (docs/10 §3). A module tile is not that promise: the
+ * seven are a description of the school's world, fixed, and dropping one leaves
+ * a reader to conclude that exams were forgotten. So a module whose every report
+ * is withheld is served as `empty`, carrying the withheld reports' OWN reasons —
+ * "No exam data exists in the ERP extract" is a fact the school needs and cannot
+ * read anywhere else once the report card stopped being served. It does not
+ * click, so it promises nothing.
+ *
+ * The reasons are quoted, never written here. They live on the cards, which is
+ * where the extract and rollup-store owners maintain them, and the day an extract
+ * lands the tile fills in on its own — the same "flip one status" property that
+ * `servedDashboards` has.
+ *
+ * -- Why a module with neither is dropped -------------------------------------
+ * A module id that no card claims at all has nothing to show AND nothing to say.
+ * It cannot happen today (test/modules.test.ts holds every module to at least one
+ * card) and if it ever does, an empty tile with no reason is worse than no tile.
+ */
+export function servedModules(): readonly ModuleCard[] {
+  return MODULES.flatMap((module): ModuleCard[] => {
+    const claimed = DASHBOARDS.filter((card) => card.modules.includes(module.id));
+    const open = claimed.filter((card) => card.status === 'available');
+
+    if (open.length > 0) {
+      return [{ ...module, report_ids: open.map((card) => card.id), status: 'available' as const }];
+    }
+
+    /**
+     * De-duplicated because two withheld cards in one module routinely share a
+     * reason — the four `coming` ones all name the rollup store — and a tile
+     * repeating "Needs the rollup store (ADR-010, Phase 2)" twice reads as a
+     * rendering bug rather than as two reports waiting on one thing.
+     */
+    const reasons = [...new Set(claimed.map((card) => card.reason).filter((r): r is string => r !== undefined))];
+    if (reasons.length === 0) return [];
+
+    return [{ ...module, report_ids: [], status: 'empty' as const, reason: reasons.join(' · ') }];
+  });
+}
+
+
+/**
  * Everything the grid does NOT draw, for the strip beneath it.
  *
  * One kind lands here now: dashboards that are BUILT and simply not among the
@@ -353,14 +433,39 @@ export async function buildHomePreview(args: {
   asOfDate: string;
   correlationId: string;
 }): Promise<HomePreview> {
-  const card = previewableDashboards().find((c) => c.id === args.reportId);
-  if (card === undefined) {
+  /**
+   * Any SERVED dashboard, not just the eight the Dashboard grid leads with
+   * (widened 2026-09-01 for Module Wise Analysis).
+   *
+   * The old check was `previewableDashboards()`, and it was right while the grid
+   * was the only caller: asking for a card the grid does not draw was a caller
+   * bug. A module screen draws every report in its module — Admissions Funnel,
+   * Library & Textbooks, the Principal's Snapshot — and those are `available`
+   * reports a reader can already open in full, so refusing them a preview would
+   * have meant two kinds of card inside one module: live charts for the gridded
+   * ones and dead tiles for the rest, for a reason no reader could see.
+   *
+   * Nothing else about a preview changes, and the widening is safe for a reason
+   * that was already load-bearing: `DASHBOARD_LEAD_QUERY` is total over
+   * `DASHBOARD_IDS` ([MANDATORY], test/home-previews.test.ts), so every report
+   * here has one vetted statement to ask for, and the no-path branch below
+   * already draws that lead chart inert. The GRID is untouched — it is still the
+   * curated eight, still ranked by the server, and still holds every card on it
+   * to a drill path.
+   *
+   * What stays refused is a WITHHELD dashboard: `exam-performance` and the four
+   * `coming` cards have no screen to preview, and asking for one is still a
+   * caller bug rather than a state a card can describe.
+   */
+  const card = servedDashboards().find((c) => c.id === args.reportId);
+  if (card === undefined || !isDashboardId(card.id)) {
     throw new PlatformError({
       code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
       message: 'That dashboard has no preview.',
       correlationId: args.correlationId,
     });
   }
+  const reportId: DashboardId = card.id;
 
   try {
     /**
@@ -379,12 +484,12 @@ export async function buildHomePreview(args: {
      * Transport have no curated path yet, and a card that drew a clickable
      * chart over a path that does not exist would refuse the click it invited.
      */
-    const path = drillPathFor(card.id);
+    const path = drillPathFor(reportId);
     let queryKey: string;
     if (path === undefined) {
-      queryKey = DASHBOARD_LEAD_QUERY[card.id];
+      queryKey = DASHBOARD_LEAD_QUERY[reportId];
     } else {
-      const drillQuery = DASHBOARD_DRILL_QUERY[card.id];
+      const drillQuery = DASHBOARD_DRILL_QUERY[reportId];
       /**
        * [MANDATORY] CODING_GUIDELINES §10. A path with no drill query declared
        * is a table that has drifted, and the failure it would otherwise produce
@@ -396,7 +501,7 @@ export async function buildHomePreview(args: {
         throw new PlatformError({
           code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
           message: 'That dashboard could not be previewed.',
-          diagnostics: { report_id: card.id, missing: 'DASHBOARD_DRILL_QUERY' },
+          diagnostics: { report_id: reportId, missing: 'DASHBOARD_DRILL_QUERY' },
           correlationId: args.correlationId,
         });
       }
@@ -406,7 +511,7 @@ export async function buildHomePreview(args: {
     const result = await buildDashboard({
       session: args.session,
       schoolIds: args.schoolIds,
-      reportId: card.id,
+      reportId: reportId,
       academicYear: args.academicYear,
       asOfDate: args.asOfDate,
       correlationId: args.correlationId,
@@ -430,7 +535,7 @@ export async function buildHomePreview(args: {
         : result.spec.widgets.find((w) => w.id === path.widget_id);
 
     return {
-      id: card.id,
+      id: reportId,
       title: card.title,
       icon: card.icon,
       widget: widget ?? result.spec.widgets[0] ?? null,
@@ -445,7 +550,7 @@ export async function buildHomePreview(args: {
      * the SPA would render as a dead card.
      */
     return {
-      id: card.id,
+      id: reportId,
       title: card.title,
       icon: card.icon,
       widget: null,
@@ -477,6 +582,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'director',
     status: 'coming',
     reason: 'Cross-school aggregates are served from the rollup store (ADR-010, Phase 2)',
+    modules: ['general'],
   },
   {
     id: 'cross-school-attendance',
@@ -492,6 +598,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'director',
     status: 'coming',
     reason: 'Cross-school aggregates are served from the rollup store (ADR-010, Phase 2)',
+    modules: ['attendance'],
   },
   {
     id: 'workflow-agents',
@@ -501,6 +608,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'director',
     status: 'coming',
     reason: 'The agent runtime is a later phase (ADR-022)',
+    modules: ['general'],
   },
   {
     id: 'school-comparison',
@@ -510,6 +618,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'director',
     status: 'coming',
     reason: 'Needs the rollup store (ADR-010, Phase 2)',
+    modules: ['general'],
   },
   {
     id: 'trend-analysis',
@@ -526,6 +635,12 @@ export const DASHBOARDS: readonly DashboardCard[] = [
      */
     group: 'school',
     status: 'available',
+    /**
+     * Both, and not by indecision: the report charts six years of fee COLLECTION
+     * and twelve of ENROLLMENT on one page. Filing it under Fees alone would hide
+     * the enrollment curve from the module whose whole subject it is.
+     */
+    modules: ['fees', 'student'],
   },
   {
     id: 'fee-comparative',
@@ -546,6 +661,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
      */
     group: 'school',
     status: 'available',
+    modules: ['fees'],
   },
   {
     id: 'fee-collection',
@@ -559,6 +675,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     icon: '₹',
     group: 'school',
     status: 'available',
+    modules: ['fees'],
   },
   {
     id: 'fee-defaulters',
@@ -567,6 +684,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     icon: '⏳',
     group: 'school',
     status: 'available',
+    modules: ['fees'],
   },
   {
     id: 'fee-by-student',
@@ -581,6 +699,12 @@ export const DASHBOARDS: readonly DashboardCard[] = [
      * the platform's existing policy applied, not a rule this card invents.
      */
     status: 'available',
+    /**
+     * Fees only. It is keyed BY student, but what it reports is money owed, and a
+     * Student module that opened onto a dues ledger would be answering the fee
+     * question from the wrong door.
+     */
+    modules: ['fees'],
   },
   {
     id: 'staff-overview',
@@ -589,6 +713,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     icon: '👥',
     group: 'school',
     status: 'available',
+    modules: ['staff'],
   },
   {
     id: 'staff-attendance',
@@ -606,6 +731,12 @@ export const DASHBOARDS: readonly DashboardCard[] = [
      * taken and docs/11 records the amendment.
      */
     status: 'available',
+    /**
+     * Read by two different people for two different reasons — whoever runs the
+     * staff roll, and whoever watches presence across the school. One report,
+     * two doors.
+     */
+    modules: ['staff', 'attendance'],
   },
   {
     id: 'admissions-funnel',
@@ -614,6 +745,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     icon: '📝',
     group: 'school',
     status: 'available',
+    modules: ['student'],
   },
   {
     id: 'attendance-analytics',
@@ -629,6 +761,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
      * and putting it on a catalog card would state it about the platform.
      */
     status: 'available',
+    modules: ['attendance'],
   },
   {
     id: 'exam-performance',
@@ -638,6 +771,12 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'school',
     status: 'blocked',
     reason: 'No exam data exists in the ERP extract',
+    /**
+     * The only report in its module, and withheld — which is why the Exam tile
+     * renders `empty` with this card's own reason rather than vanishing
+     * (services/modules.ts).
+     */
+    modules: ['exam'],
   },
   {
     id: 'enrollment-overview',
@@ -646,6 +785,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     icon: '🎓',
     group: 'school',
     status: 'available',
+    modules: ['student'],
   },
   {
     id: 'transport-analytics',
@@ -662,6 +802,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
      * dashboard itself, where it is.
      */
     status: 'available',
+    modules: ['transport'],
   },
   {
     id: 'library-textbooks',
@@ -671,6 +812,7 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     group: 'school',
     // Same caveat as Transport Analytics above: available on an unverified schema.
     status: 'available',
+    modules: ['general'],
   },
   {
     id: 'principal-snapshot',
@@ -679,6 +821,13 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     icon: '🏫',
     group: 'school',
     status: 'available',
+    /**
+     * General, not all five of the modules it reports on. A one-page snapshot
+     * that appeared inside Fees, Staff, Attendance and Student would pad every
+     * module with the same card and tell a reader nothing about which one they
+     * are in.
+     */
+    modules: ['general'],
   },
 ];
 
@@ -1038,6 +1187,7 @@ export async function buildHomeSummary(args: {
     blocked_metrics: blocked,
     dashboards: servedDashboards(),
     grid: previewableDashboards().map((card) => card.id),
+    modules: servedModules(),
     degraded_schools: degradedFrom([students, staff, fees, attendance]),
   };
 

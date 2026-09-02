@@ -1,0 +1,78 @@
+# Continuous integration.
+#
+# WHY A DATABASE SERVICE IS HERE
+#
+# 627 of the 632 tests are hermetic and need nothing. The other five are the
+# ADR-008 invariant tests that prove non-SELECT SQL is refused over the wire —
+# and they cannot run without a seeded platform DB, because the SQL guard is
+# reached through `resolveConnectionTarget` (query-service.ts): validating a
+# statement needs the school's `schema_version` to pick a catalog, and that
+# lives in `tenant_registry`.
+#
+# Skipping them would leave the read-only invariant unproven in CI, which is the
+# one thing this pipeline most needs to keep true. So CI runs a throwaway MySQL,
+# applies the real migrations and the real seed, and runs the whole suite.
+#
+# No school database is needed: those five tests assert the statement is
+# REJECTED, so nothing ever opens a school connection.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR makes the previous run irrelevant; don't pay for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck + tests
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          # Throwaway container on an ephemeral runner, reachable only from this
+          # job. Not a credential to anything (CODING_GUIDELINES §12).
+          MYSQL_ROOT_PASSWORD: ci-not-a-credential
+          MYSQL_DATABASE: analytics_platform
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pci-not-a-credential"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      PLATFORM_DB_HOST: 127.0.0.1
+      PLATFORM_DB_PORT: '3306'
+      PLATFORM_DB_NAME: analytics_platform
+      PLATFORM_DB_USER: root
+      PLATFORM_DB_PASSWORD: ci-not-a-credential
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches package.json engines (>=20) and the version developed against.
+          node-version: '20'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Migrate and seed the platform DB
+        run: npm run db:reset
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

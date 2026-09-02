@@ -274,14 +274,32 @@ describe('what a card shows', () => {
   });
 
   /**
-   * A built dashboard that is simply NOT on the curated grid has no preview.
-   * The grid is six cards (services/home.ts `DASHBOARD_GRID`); Admissions
-   * Funnel is `available` and reachable from the sidebar, and asking for its
-   * card is a caller bug rather than a state the screen should render.
+   * A built dashboard the GRID does not draw still previews (widened
+   * 2026-09-01). It used to be refused, and that was right while Dashboard's
+   * grid was the only caller; Module Wise Analysis draws every report in a
+   * module, and Admissions Funnel, Library & Textbooks and the Principal's
+   * Snapshot are `available` reports a reader can already open in full. Two
+   * kinds of card inside one module — live charts for the gridded ones, dead
+   * tiles for the rest — would have been a distinction no reader could see.
+   *
+   * It has no curated drill path, so it takes the LEAD branch: exactly what a
+   * gridded report without a path takes, which is the point. Nothing about a
+   * preview is special-cased for the module screen.
    */
-  it('refuses a built dashboard that the grid does not draw', async () => {
-    await expect(build('admissions-funnel')).rejects.toThrow(PlatformError);
-    expect(buildDashboard).not.toHaveBeenCalled();
+  it('previews a built dashboard that the grid does not draw', async () => {
+    buildDashboard.mockResolvedValue(
+      specWith([
+        { id: 'bar-funnel', type: 'bar', title: 'Funnel', x: 's', y: 'n', data: [{ s: 'Enquiry', n: 4 }] },
+      ]),
+    );
+
+    const preview = await build('admissions-funnel');
+
+    expect(preview.status).toBe('ok');
+    expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
+      reportId: 'admissions-funnel',
+      queryKeys: [REAL_LEAD_QUERY['admissions-funnel']],
+    });
   });
 
   it('carries the catalog’s own title and icon, not the report’s', async () => {
@@ -322,8 +340,15 @@ describe('a card that cannot be read says why, and does not throw', () => {
     expect(preview.reason).toBe('This dashboard could not be loaded.');
   });
 
-  it('refuses an id that is not a previewable dashboard at all', async () => {
-    // A caller bug, not a state a card can describe -- so this one DOES throw.
+  /**
+   * A WITHHELD dashboard still has no preview, and that is the line the
+   * widening did not cross. `exam-performance` is `blocked` -- the ERP extract
+   * carries no exam data -- so there is no report to draw a card from at all.
+   * Asking for one is a caller bug, not a state a card can describe, so this
+   * one DOES throw. (The Exam MODULE says so on its own tile instead;
+   * test/modules.test.ts holds that.)
+   */
+  it('refuses a withheld dashboard', async () => {
     await expect(build('exam-performance')).rejects.toThrow(PlatformError);
     expect(buildDashboard).not.toHaveBeenCalled();
   });

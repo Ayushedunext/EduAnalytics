@@ -24,7 +24,43 @@ import type { DashboardCard } from '../api/client';
  * list, apart from a key-less Ask AI, is a place you can go. The reasons live
  * on in the catalog, where the people who can act on them read them, and a card
  * returns to this menu by turning `available` — not by anyone editing here.
+ *
+ * -- One row where twelve used to be (amended 2026-09-01) --------------------
+ * Every predefined report had its own row here. That is the list this menu was
+ * designed around when there were four of them; at twelve it had become the
+ * thing a reader scrolls past, and it grew by one every time a dashboard was
+ * built — an inventory, sorted by nothing a reader cares about, where a menu
+ * should be a small set of places.
+ *
+ * So the reports now live behind **Module Wise Analysis** (components/
+ * Modules.tsx), grouped by the part of the school they are about. Nothing became
+ * unreachable: a report opens from its module, from a Dashboard grid card, and
+ * from Home's "More dashboards" strip.
+ *
+ * TREND ANALYSIS and COMPARATIVE ANALYSIS keep rows of their own, and the
+ * exception is deliberate rather than a leftover. Both are cross-cutting reads
+ * — six years of collection against twelve of enrollment, this year's recovery
+ * against last — that a Director opens as a habit rather than as "the fee
+ * report I want today"; filing them one level down would put a routine
+ * destination behind a category. They are also still IN their modules, because
+ * a reader who goes looking under Fees should find them there too. A shortcut,
+ * not a second copy.
+ *
+ * Both rows are read out of the catalog by id (`PINNED` below) rather than
+ * typed here, so their titles and icons remain the server's words — a report
+ * renamed in the catalog renames itself in this menu, and one withheld drops
+ * out of it without leaving a row that goes nowhere.
  */
+
+/**
+ * The reports that keep a menu row of their own, in the order they appear.
+ *
+ * Ids, not cards: the row's title, icon and very existence still come from the
+ * served catalog. An id here that the server does not serve simply renders
+ * nothing, which is the correct behaviour for a report that has been withheld —
+ * the shortcut disappears with the destination.
+ */
+const PINNED: readonly string[] = ['trend-analysis', 'fee-comparative'];
 
 interface Props {
   orgName: string;
@@ -50,12 +86,18 @@ export function Sidebar({
   onNavigate,
 }: Props): JSX.Element {
   /**
-   * Which dashboards appear, and whether they are reachable, is the SERVER's
-   * answer (services/home.ts), not a list maintained here. A sidebar with its
-   * own opinion drifts from what the API will actually serve, and the drift
-   * shows up as a menu item that 404s.
+   * The pinned reports' cards, in `PINNED` order and skipping any the server did
+   * not serve.
+   *
+   * Which dashboards exist and whether they are reachable is still the SERVER's
+   * answer (services/home.ts), never a list maintained here. What this file now
+   * decides is only which TWO of them get a shortcut, which is a navigation
+   * decision and belongs to the navigation.
    */
-  const items = dashboards.filter((d) => d.group === 'school' || d.group === 'director');
+  const pinned = PINNED.flatMap((id) => {
+    const card = dashboards.find((d) => d.id === id);
+    return card === undefined ? [] : [card];
+  });
 
   return (
     <aside className="sidebar">
@@ -70,12 +112,12 @@ export function Sidebar({
       <ul className="nav">
         {/**
          * "Dashboard", not "Home" (renamed 2026-08-31). The screen is the
-         * overview a user lands on; the items directly BELOW it are the
-         * predefined reports, which docs/00's glossary and this codebase's own
-         * identifiers call "dashboards" (DASHBOARD_IDS, DashboardPage.tsx,
-         * buildDashboard). Both senses now sit in one menu, so the plural is
-         * deliberately never a nav label here: a "Dashboards" group listed under
-         * a "Dashboard" item reads as a typo rather than a hierarchy.
+         * overview a user lands on; what sits BELOW it leads to the predefined
+         * reports, which docs/00's glossary and this codebase's own identifiers
+         * call "dashboards" (DASHBOARD_IDS, DashboardPage.tsx, buildDashboard).
+         * Both senses share one menu, so the plural is deliberately never a nav
+         * label here: a "Dashboards" group listed under a "Dashboard" item reads
+         * as a typo rather than a hierarchy.
          *
          * Only the LABEL moved. The route key, `/api/home` and Home.tsx keep
          * their names — `Dashboard*` is already taken across the orchestrator for
@@ -96,7 +138,7 @@ export function Sidebar({
           <span className="flex-1">Dashboard</span>
         </li>
 
-        {items.map((item) => {
+        {pinned.map((item) => {
           /**
            * The server serves only `available` cards, so this is always true
            * today. It is still asked, rather than assumed: `status` is data off
@@ -124,6 +166,26 @@ export function Sidebar({
             </li>
           );
         })}
+
+        {/**
+         * Every other predefined report, one level down and grouped by subject
+         * (components/Modules.tsx). The row stays `active` while a module or a
+         * report opened FROM one is on screen (App.tsx decides that), so a
+         * reader three clicks into Fees ▸ Fee Defaulters ▸ a drill level can
+         * still see which part of the menu they are standing in.
+         *
+         * 🧩 rather than a subject glyph of its own: the two rows above are
+         * reports and wear their reports' icons, and the row that is a CONTAINER
+         * for the other eleven should not dress as a twelfth report.
+         */}
+        <li
+          className={`clickable ${active === 'modules' ? 'active' : ''}`}
+          title="All reports, grouped by fees, students, staff, attendance, transport and exams"
+          onClick={() => { onNavigate('modules'); }}
+        >
+          <span className="w-4 text-center opacity-80">🧩</span>
+          <span className="flex-1">Module Wise Analysis</span>
+        </li>
 
         {/**
          * Two different reasons Ask AI could be unreachable, and it must show

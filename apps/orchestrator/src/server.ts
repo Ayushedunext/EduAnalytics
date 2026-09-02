@@ -19,6 +19,8 @@ import { withCorrelationId, requireSession } from './middleware/context.js';
 import { requireCsrfToken } from './middleware/csrf.js';
 import { errorHandler, notFoundHandler } from './middleware/errors.js';
 import { launchRouter } from './routes/launch.js';
+import { healthRouter } from './routes/health.js';
+import { mountDocs } from './routes/docs.js';
 import { sessionRouter } from './routes/session.js';
 import { homeRouter } from './routes/home.js';
 import { reportRouter } from './routes/report.js';
@@ -80,9 +82,24 @@ app.use(express.json({ limit: '256kb' }));
  */
 app.use(launchRouter);
 
-app.get('/healthz', (_req, res) => {
-  res.json({ ok: true });
-});
+/**
+ * Container probes: `/HealthCheckAWS` (and the `/healthz` alias).
+ *
+ * Above the session gate, and deliberately checking nothing but this process --
+ * routes/health.ts explains why a liveness probe that queried the database would
+ * turn a database blip into a restart loop.
+ */
+app.use(healthRouter);
+
+/**
+ * The API reference: Swagger UI at /docs, the document at /openapi.json.
+ *
+ * Mounted here for the same reason /healthz is above the session gate -- neither
+ * is school data, and a reference that required a launch token to describe the
+ * launch endpoint would be a circle. Nothing is served in production
+ * (routes/docs.ts explains why).
+ */
+const docsMounted = mountDocs(app);
 
 /** Everything past here requires a session and a CSRF token on writes. */
 app.use(requireCsrfToken);
@@ -113,6 +130,9 @@ app.listen(config.ORCHESTRATOR_PORT, () => {
   console.log(`[orchestrator] listening on http://localhost:${config.ORCHESTRATOR_PORT}`);
   console.log(`[orchestrator] SPA origin  ${config.SPA_ORIGIN}`);
   console.log(`[orchestrator] ERP JWKS    ${config.ERP_JWKS_URL}`);
+  if (docsMounted) {
+    console.log(`[orchestrator] API docs    http://localhost:${config.ORCHESTRATOR_PORT}/docs`);
+  }
   console.log(`[orchestrator] secure cookies: ${String(isProduction)}`);
 });
 

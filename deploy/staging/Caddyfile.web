@@ -1,0 +1,33 @@
+# The internal static file server for the built SPA.
+#
+# Plain HTTP on the compose network, never published to the host. Two consumers:
+# the public proxy (browser traffic) and the orchestrator's Puppeteer, which
+# loads print.html from here to render PDFs (PRINT_URL, ADR-021).
+
+:8080 {
+	root * /srv
+
+	encode gzip zstd
+
+	# Vite fingerprints everything under /assets/, so those files are immutable
+	# by construction -- a changed file gets a changed name. index.html and
+	# print.html are NOT fingerprinted and must never be cached, or a deploy
+	# leaves browsers loading yesterday's HTML pointing at asset names that no
+	# longer exist, which presents as a blank page rather than as stale content.
+	@fingerprinted path /assets/*
+	header @fingerprinted Cache-Control "public, max-age=31536000, immutable"
+
+	@entrypoints path /index.html /print.html /
+	header @entrypoints Cache-Control "no-cache"
+
+	# No `try_files ... /index.html` fallback, deliberately.
+	#
+	# App.tsx keeps navigation in one piece of React state and says so: "two
+	# screens do not need a router". With no client-side routes to rescue, a
+	# catch-all would only turn missing assets into 200 OK responses containing
+	# HTML -- which the browser then fails to parse as JavaScript, reporting a
+	# syntax error somewhere in a bundle instead of the 404 that actually
+	# happened. When a router is adopted deliberately, this is where its
+	# fallback belongs.
+	file_server
+}

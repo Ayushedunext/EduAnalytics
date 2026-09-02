@@ -63,8 +63,17 @@ async function handle(
 ): Promise<void> {
   const path = (req.url ?? '/').split('?')[0];
 
-  if (path === '/healthz') {
-    sendJson(res, 200, { ok: true });
+  /**
+   * Container probes. `/HealthCheckAWS` is the path the deployment's startup,
+   * liveness and readiness probes call; `/healthz` is the original name, kept so
+   * existing callers keep working.
+   *
+   * Answered from memory, like the orchestrator's (routes/health.ts): one path
+   * serves liveness, whose only remedy is a restart, so a dependency check here
+   * would restart pods over a blip it cannot fix.
+   */
+  if (path === '/HealthCheckAWS' || path === '/healthz') {
+    sendJson(res, 200, { status: 'ok', service: 'mcp-server', ok: true });
     return;
   }
 

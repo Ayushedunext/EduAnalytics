@@ -1,0 +1,154 @@
+# The public edge for the staging environment.
+#
+# ONE ORIGIN, AND WHY IT HAS TO BE
+#
+# Everything a browser touches is served from a single hostname: the SPA, the
+# API, the launch endpoint and the sign-in page. That is not tidiness. The
+# session and CSRF cookies are SameSite=Lax (apps/orchestrator/src/auth/
+# session.ts), and a browser does not attach Lax cookies to a cross-SITE fetch.
+# Split the SPA and the API across two registrable domains and every `/api/*`
+# call arrives with no session -- a signed-in user staring at a "please open
+# Analytics from the ERP menu" screen, with correct cookies sitting unused in
+# the jar. So: one hostname, paths routed to services behind it.
+#
+#   /signin*          -> the staging identity provider (tools/erp-stub)
+#   /launch           -> orchestrator: the SSO handshake (docs/02 §2)
+#   /api/*            -> orchestrator: everything the SPA calls
+#   /HealthCheckAWS   -> orchestrator: uptime probes (routes/health.ts)
+#   everything else   -> the built SPA
+#
+# TLS is automatic. Caddy provisions a Let's Encrypt certificate for
+# STAGING_HOSTNAME on first boot, which requires that the name already resolves
+# to this machine and that ports 80 and 443 are reachable from the internet.
+# HTTPS is not optional here: the session cookie is issued with `Secure` when
+# NODE_ENV=production (auth/session.ts), so a plain-HTTP deployment sets a
+# cookie the browser then refuses to store, and sign-in appears to succeed and
+# immediately land back on the sign-in page.
+{
+	# Where Let's Encrypt sends expiry warnings. Set ACME_EMAIL, or certificates
+	# renew silently until the day one does not.
+	email {$ACME_EMAIL}
+
+	# Staging traffic is a handful of people; the default access log is more
+	# useful than it is expensive.
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+{$STAGING_HOSTNAME} {
+	header {
+		# A staging copy of real school data must not be indexed, ever.
+		X-Robots-Tag "noindex, nofollow, noarchive"
+
+		# HSTS is deliberately ABSENT. It is right for production and wrong
+		# here: a max-age pins this hostname to HTTPS in every visitor's browser
+		# for its whole duration, which is precisely the wrong property for a
+		# name that may later be re-pointed at something without a certificate.
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "same-origin"
+
+		# Caddy advertises itself by default; there is no reason to.
+		-Server
+	}
+
+	# ── Everything below runs in WRITTEN ORDER ───────────────────────────────
+	#
+	# `route` exists here for one reason, and it is not style.
+	#
+	# Outside a route block Caddy sorts directives by its own global ordering,
+	# in which `respond` comes AFTER `handle`. Since every request matches one of
+	# the `handle` blocks below (the last one is a catch-all) and a matched
+	# `handle` is terminal, the allowlist's `respond 403` sorted to the end and
+	# became unreachable -- STAGING_ALLOW_CIDRS looked configured, adapted
+	# without a warning, and let every address through. `route` preserves the
+	# order written here, which puts the check genuinely first.
+	route {
+		# ── Who may reach this at all ────────────────────────────────────
+		#
+		# This box holds a copy of REAL school data -- 242k students and
+		# their guardians, with names and contact details. The application's
+		# own sign-in (tools/erp-stub/src/logins.ts) is the access control,
+		# with a password per role and an attempt throttle, and for a demo
+		# environment that is a reasonable front door.
+		#
+		# It is a front door on the open internet, though, and the cheapest
+		# way to make that a much smaller statement is to decide which
+		# addresses may knock. Set STAGING_ALLOW_CIDRS to your office and
+		# VPN ranges, space-separated:
+		#
+		#     STAGING_ALLOW_CIDRS="203.0.113.0/24 198.51.100.7/32"
+		#
+		# The default is open, because a default of closed would lock out
+		# the person deploying it before they ever saw the sign-in page.
+		# Narrowing it is one variable and `docker compose up -d proxy`.
+		@blocked not remote_ip {$STAGING_ALLOW_CIDRS:0.0.0.0/0 ::/0}
+		respond @blocked "Not available from this network." 403
+
+		# ── The sign-in page ─────────────────────────────────────────────────────
+		#
+		# `handle_path` strips the /signin prefix, so the identity provider serves
+		# its own `/` and `/login` and needs no knowledge of where it is mounted --
+		# except for the form's action attribute, which must name the un-stripped
+		# path. That is what ERP_STUB_BASE_PATH tells it (see the compose file).
+		handle_path /signin* {
+			reverse_proxy idp:4000
+		}
+
+		# ── The orchestrator ─────────────────────────────────────────────────────
+		#
+		# /launch is a top-level form POST from the sign-in page, not an API call.
+		# It is listed first because it is the one unauthenticated POST in the
+		# system, and its protection is the single-use 60-second signed token in the
+		# body rather than a CSRF cookie that cannot exist yet (ADR-029, and the
+		# route-order comment in apps/orchestrator/src/server.ts).
+		handle /launch {
+			reverse_proxy orchestrator:3000
+		}
+
+		handle /api/* {
+			# PDF export streams a rendered document and Ask AI waits on a model
+			# turn, both of which outlast Caddy's default expectations of a fast
+			# JSON API. The orchestrator has its own budgets for each
+			# (PDF_TIMEOUT_MS, AI_CHAT_TIMEOUT_MS); the proxy's job is to not be the
+			# thing that gives up first, because a proxy timeout surfaces as a bare
+			# 502 with no correlation id while the service's own timeout surfaces as
+			# the structured error the SPA knows how to display.
+			reverse_proxy orchestrator:3000 {
+				transport http {
+					response_header_timeout 120s
+					read_timeout 120s
+				}
+			}
+		}
+
+		handle /HealthCheckAWS {
+			reverse_proxy orchestrator:3000
+		}
+
+		# ── Everything else: the SPA ─────────────────────────────────────────────
+		handle {
+			# A visitor with no session lands on the sign-in page rather than on the
+			# app's "open Analytics from the ERP menu" card -- which is the correct
+			# message in production and a dead end here, where there is no ERP menu
+			# to return to.
+			#
+			# The check is the presence of the session cookie, not its validity;
+			# this proxy holds no key and cannot verify one, and must not pretend
+			# otherwise. It does not need to: the cookie expires with the session it
+			# represents (auth/session.ts sets maxAge from SESSION_TTL_HOURS), so a
+			# stale cookie is a rare and self-clearing case, and the app still
+			# renders its own honest no-session state behind it. Authorisation
+			# happens in the orchestrator, on every request, as it already did --
+			# nothing here is a security decision.
+			@signed_out {
+				path /
+				not header_regexp Cookie "(^|;\s*)sap_session="
+			}
+			redir @signed_out /signin 302
+
+			reverse_proxy web:8080
+		}
+	}
+}

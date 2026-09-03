@@ -9,6 +9,7 @@
     "start": "tsx src/server.ts"
   },
   "dependencies": {
+    "dotenv": "^16.4.7",
     "jose": "^5.9.6"
   }
 }

@@ -36,6 +36,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
 import { SignJWT } from 'jose';
 import { getKeys, jwks } from './keys.js';
 import { FAULTS, IDENTITIES, findIdentity, type Fault } from './identities.js';
@@ -48,6 +50,27 @@ import {
   throttleRecordFailure,
 } from './logins.js';
 import { esc, loginPage } from './login-page.js';
+
+/**
+ * The repo-root `.env`, named explicitly -- the same file, loaded the same way,
+ * as apps/orchestrator/src/config.ts and apps/mcp-server/src/config.ts.
+ *
+ * ISSUER HAS TO AGREE WITH THE ORCHESTRATOR OR NOTHING LAUNCHES. This process
+ * signs `iss` and the orchestrator verifies it against its own ERP_ISSUER, so
+ * the two values are one setting wearing two hats. While this file read only
+ * the shell environment and the orchestrator read only `.env`, the obvious
+ * local fix -- edit `.env` -- moved one side and left the other, and the
+ * symptom was the launch failure page with nothing wrong on either side alone.
+ * One file both processes read is what removes that drift.
+ *
+ * dotenv does not overwrite variables already present in the environment, so
+ * this changes nothing where the environment is authoritative: the staging
+ * compose file sets every ERP_STUB_* value explicitly, `.env` is excluded from
+ * the image by .dockerignore, and a shell that exports a variable still wins.
+ * Resolved from this module rather than the working directory because
+ * `npm run -w @sap/erp-stub` runs from the workspace directory.
+ */
+dotenv.config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)), quiet: true });
 
 const PORT = Number(process.env.ERP_STUB_PORT ?? 4000);
 const ISSUER = process.env.ERP_ISSUER ?? `http://localhost:${PORT}`;

@@ -17,6 +17,12 @@
 *.jks
 secrets.json
 credentials.json
+# Kubernetes Secret manifests carry the same credentials in a different
+# envelope -- base64 in a Secret is encoding, not encryption. The templates
+# beside them (*.example.yaml) document the shape and hold no real values.
+deploy/k8s/*secret*.yaml
+deploy/k8s/*secret*.yml
+!deploy/k8s/*.example.yaml
 .aws/
 
 # Recorded LLM fixtures / query captures containing real school data

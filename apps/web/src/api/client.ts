@@ -128,11 +128,36 @@ export interface KpiWidget {
   tone?: 'neutral' | 'positive' | 'warning' | 'negative';
 }
 
+/**
+ * A panel Home draws below the KPI strip — today only the outliers table
+ * (services/home.ts, `table-highlights`).
+ *
+ * Typed loosely on purpose. The authoritative widget contract lives in
+ * `@sap/chart-spec` and `WidgetSpecView` validates against it before drawing;
+ * a second, hand-written copy of the table schema here would be a weaker check
+ * that eventually disagrees with the real one.
+ */
+export interface HomePanelWidget {
+  id: string;
+  type: 'table';
+  title?: string;
+  columns: unknown[];
+  rows: unknown[];
+}
+
+export type HomeWidget = KpiWidget | HomePanelWidget;
+
 export interface ChartSpecLike {
   spec_version: 1;
   title: string;
   narrative?: string;
-  widgets: KpiWidget[];
+  /**
+   * KPI tiles AND panels, in the server's order. Home splits them by `type`:
+   * tiles go in the strip, everything else below it. It was `KpiWidget[]`, which
+   * was true until the outliers table landed and is the kind of assumption that
+   * fails silently — the table rendered as a blank tile in the strip.
+   */
+  widgets: HomeWidget[];
   meta: {
     scope: { school_id: string; school_name: string }[];
     generated_at: string;

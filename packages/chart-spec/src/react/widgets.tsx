@@ -59,83 +59,96 @@ import type {
 } from '../spec.js';
 
 /**
- * docs/10 §1: the platform palette. Five categorical steps, each with a
- * three-stop ramp (2026-09-01).
+ * docs/10 §1: the platform palette — "Meadow", adopted 2026-09-03.
  *
  * -- What changed and why ----------------------------------------------------
- * The previous four steps were flat single fills, and two of them did not
- * survive their own audit: `#028090` sat at OKLCH chroma 0.095, under the 0.10
- * floor at which a colour starts reading grey, and `#f2a93b` sat at lightness
- * 0.787, outside the 0.43-0.77 band. Both are the measurable form of "the
- * charts look dull" -- the palette was desaturated and pale by the numbers,
- * not just to taste.
+ * Softer and lighter than the set it replaces, chosen from four directions put
+ * side by side on real figures. The brief was "very soothing colours instead of
+ * dark ones", and the useful finding along the way was that a five-slot
+ * categorical palette CANNOT simply be washed out to get there: four
+ * hand-picked pastel sets were measured and all four failed, dropping below the
+ * 0.10 chroma floor at which a colour starts reading grey and collapsing
+ * teal↔green to ΔE 10 against a normal-vision floor of 15 — a pair full-colour
+ * readers cannot separate.
  *
- * The replacements were not chosen by eye. Each is the least-drifted colour
- * from a hand-designed soothing target that still clears the checks in
- * `scripts/validate_palette.js`: lightness band, chroma floor, adjacent-pair
- * CVD separation, and the normal-vision floor. Measured on the shipped set:
- * worst adjacent pair ΔE 9.1 (deutan) and 9.8 (tritan), worst normal-vision
- * pair ΔE 16.2 -- against floors of 8 and 15.
+ * So the softness is bought with LIGHTNESS and with how the mark is drawn, not
+ * by draining hue. Every slot here sits higher and lighter than its predecessor
+ * while still clearing every check in `scripts/validate_palette.js`: lightness
+ * band, chroma floor, adjacent-pair CVD separation and the normal-vision floor.
+ * The one accepted deviation is unchanged in kind from before — `#72ba63` sits
+ * under 3:1 against the card, and the remedy is the relief this product already
+ * ships: a mandatory legend on every multi-series chart, axis values, and a
+ * table view. The old palette failed that same check on two slots.
  *
  * -- The order is SEMANTIC and cannot be permuted --------------------------
  * This product means things by colour: slot 0 is demand, 1 is collected, 2 is
  * pending, 3 is defaulters. Reordering the slots would make the separation
- * maths easier -- putting amber between teal and green is worth several ΔE --
- * and would repaint "fee collected" amber, which is worse than any number.
- * So the hues were pushed apart within their families instead, and lightness
- * does the separating that hue cannot: under protanopia and deuteranopia green
- * and amber collapse to one hue, and only their 0.03 lightness gap survives.
+ * maths easier — putting ochre between teal and green is worth several ΔE —
+ * and would repaint "fee collected" ochre, which is worse than any number. So
+ * the hues are pushed apart within their families and LIGHTNESS does the
+ * separating that hue cannot: under protanopia and deuteranopia green and ochre
+ * collapse to one hue, and only their lightness gap survives. That gap is why
+ * slot 2 is the darkest colour in the set rather than a cheerful amber.
  *
- * -- Two accepted deviations, both stated rather than hidden ------------------
- * `#3db575` sits at contrast 2.54 against the card, under the 3:1 relief line.
- * The skill's own remedy is visible labels or a table view, and this product
- * has both plus a mandatory legend on every multi-series chart. Today's
- * palette fails this check on TWO slots, so it is an improvement, not a new
- * debt. Separately, the all-pairs (rather than adjacent) worst normal-vision
- * pair is teal↔indigo at ΔE 13.4; they are three slots apart, so a reader
- * meets them with a legend between them.
- *
- * A fifth step exists now where four did before. Beyond five it is still never
- * a generated hue -- see `SERIES_OTHER`.
+ * Beyond five it is still never a generated hue — see `SERIES_OTHER`.
  */
 const SERIES: readonly [string, ...string[]] = [
-  '#008a9d', // teal    — demand, headcount, the brand lead
-  '#3db575', // emerald — collected, present, positive
-  '#c78100', // amber   — pending, outstanding, warning
-  '#c74859', // rose    — defaulters, absent, negative
-  '#4967c6', // indigo  — the fifth measure, no fixed meaning
+  '#00a5cb', // cyan-teal — demand, headcount, the brand lead
+  '#72ba63', // meadow    — collected, present, positive
+  '#a17a00', // ochre     — pending, outstanding, warning
+  '#cd617e', // rose      — defaulters, absent, negative
+  '#a886e5', // violet    — the fifth measure, no fixed meaning
 ];
 
 /**
  * Each series hue at four steps: shaded foot, base, a half-step above it, lit
  * cap.
  *
- * Derived rather than hand-picked, then gamut-clamped: teal and green run out
- * of sRGB about 0.1 lightness before red does, so a shared chroma offset would
- * have produced nulls for half the palette.
+ * Derived by moving LIGHTNESS only — hue and chroma are held, so every step of
+ * a ramp is unmistakably the same colour as its base. Gamut-clamped on the way
+ * out, which is why the lit steps of the greener hues sit slightly lower in
+ * chroma than the arithmetic asked for.
  *
- * -- What each step is for, after 2026-09-03 --------------------------------
+ * -- What each step is for ---------------------------------------------------
  * `deep` is pressed and hovered states and the KPI tile's edge gradient.
- * `light` is the lit cap of a donut slice, where a wedge has real area to
- * shade and the ring genuinely reads better with a curve of light on it.
+ * `soft` is the magnitude ramp's pale end on a single-series bar chart.
+ * `light` is available for anything that needs a tint darker than the 10% rail.
  *
- * `soft` is new and exists because the bars needed a step the palette did not
- * have. A bar's fill runs from its lit edge to its base colour across the
- * mark's thickness, and running that from `light` made a 22px bar visibly
- * two-tone — a reader matching a bar against its legend dot was matching two
- * different colours, which is the one thing a categorical palette must not
- * ask. `soft` sits about halfway up, so the sheen is a lit EDGE rather than a
- * wash and the mark still reads as exactly its palette hue.
+ * Regenerated 2026-09-03 for the Meadow palette (docs/10 §1).
  */
 const RAMP: Record<string, { deep: string; soft: string; light: string }> = {
-  '#008a9d': { deep: '#006472', soft: '#2f9eb0', light: '#61b3c3' },
-  '#3db575': { deep: '#048e53', soft: '#5fc98e', light: '#84dea7' },
-  '#c78100': { deep: '#986100', soft: '#d99833', light: '#ecb165' },
-  '#c74859': { deep: '#9e1e38', soft: '#d96471', light: '#eb7f88' },
-  '#4967c6': { deep: '#2a439e', soft: '#607ed6', light: '#7795e5' },
-  '#64748b': { deep: '#475569', soft: '#7c8ba2', light: '#94a3b8' },
-  '#cbd5e1': { deep: '#94a3b8', soft: '#d7dfe9', light: '#e2e8f0' },
+  '#00a5cb': { deep: '#007da1', soft: '#3cb8dc', light: '#68cdee' },
+  '#72ba63': { deep: '#4a913b', soft: '#88cc79', light: '#a3e297' },
+  '#a17a00': { deep: '#795400', soft: '#b28d30', light: '#c5a356' },
+  '#cd617e': { deep: '#a13959', soft: '#df7691', light: '#f090a7' },
+  '#a886e5': { deep: '#815fba', soft: '#ba9af6', light: '#cfb3ff' },
+  '#64748b': { deep: '#404f65', soft: '#76869c', light: '#8c9baf' },
+  '#cbd5e1': { deep: '#a2acb7', soft: '#dce6f1', light: '#e3ecf7' },
 };
+
+/**
+ * A hue at partial strength, mixed toward the CARD rather than made translucent.
+ *
+ * The distinction matters for the rails below: a translucent fill picks up
+ * whatever sits behind it, and behind a rail on a stacked or grouped chart is
+ * another mark. Mixing toward white gives the same appearance with none of that.
+ */
+function tintOf(hex: string, strength: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (m === null) return hex;
+  const n = Number.parseInt(m[1] as string, 16);
+  const mix = (c: number): string =>
+    Math.round(c + (255 - c) * (1 - strength))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${mix((n >> 16) & 255)}${mix((n >> 8) & 255)}${mix(n & 255)}`;
+}
+
+/**
+ * How strong a mark's own rail is. 0.10 — visible as a scale, nowhere near
+ * competing with the mark sitting on it (docs/10 §1, "Meadow").
+ */
+const RAIL_STRENGTH = 0.1;
 
 /** The ramp for a colour, falling back to the flat colour at every step. */
 function rampOf(base: string): { deep: string; base: string; soft: string; light: string } {
@@ -482,6 +495,48 @@ function categoryAxis(rows: readonly Record<string, unknown>[], field: string) {
 }
 
 /**
+ * Whether a panel has to take the whole row, or can sit in a half.
+ *
+ * -- Two-up is the default and full width is EARNED (2026-09-03) -------------
+ * Every widget used to declare a footprint by kind: a horizontal bar and a
+ * table were always 12, a vertical bar 6, a line 7 and a donut 5. Kind is the
+ * wrong thing to key on, because it does not vary with the one thing that
+ * actually decides whether a chart is legible at half width -- what is IN it.
+ * Fee Collection's "by school" chart is three bars labelled "World School" and
+ * was taking a full row; Staff Overview's is twenty departments labelled
+ * "ADHOC OFFICE STAFF(A.O.S)" and genuinely needs one.
+ *
+ * So the test is the data -- and WHICH part of the data depends on which way the
+ * categories run, which is the distinction this function exists to make.
+ *
+ * On a HORIZONTAL bar chart the categories run down the panel: their number sets
+ * the chart's HEIGHT (`perRow` below) and costs no width at all. The only thing
+ * competing for width is the label text, so that is the only thing tested.
+ * Fifteen classes labelled "NURSERY" are perfectly legible in half a page; five
+ * departments labelled "ADHOC OFFICE STAFF(A.O.S)" are not.
+ *
+ * On a VERTICAL axis -- columns, or a line's periods -- every category needs its
+ * own slice of width, so the count matters as much as the label. 78 months in
+ * half a page is a smear whatever the labels say.
+ *
+ * `longest > 16` is roughly where the axis starts ellipsing at the label width a
+ * half-width panel allows; `count > 14` is about where a vertical axis stops
+ * having room for a legible tick per category.
+ *
+ * The point of the change is screen space. On a 1900px page a full-width panel
+ * holding three bars spends about a thousand horizontal pixels on nothing, and
+ * a reader comparing two panels has to scroll between them instead of putting
+ * them side by side -- which is most of what a reporting surface is for.
+ */
+function needsFullWidth(
+  orientation: 'horizontal' | 'vertical',
+  count: number,
+  longest: number,
+): boolean {
+  return orientation === 'horizontal' ? longest > 16 : longest > 16 || count > 14;
+}
+
+/**
  * How a VERTICAL chart's category labels are set: flat where they fit, tilted
  * where they do not.
  *
@@ -799,41 +854,20 @@ export function BarPanel({
    */
   const stacked = grouped && widget.stacked === true;
   const seriesColour = measureColour(widget.tone, accent);
-  /**
-   * Is this panel a level of a drill path (ADR-020)? True at every level: level
-   * 1 declares `drillable`, and a level reached by clicking carries the context
-   * that got it there — the leaf included, which declares `drillable: false`.
-   *
-   * It decides the panel's FOOTPRINT, below, and nothing else.
-   */
-  const drillPanel =
-    widget.drillable === true || (widget.drill_context ?? []).length > 0;
-  /**
-   * A depth gradient built from ONE hue at two opacities, never a second
-   * colour -- so it stays inside docs/10 section 1's "teal-family series" rule
-   * and costs nothing on the CVD audit (opacity, unlike hue, isn't a channel a
-   * colour-vision deficiency affects). Solid at the value end, softer toward
-   * the baseline, so the gradient points at the number that matters.
-   *
-   * Single-series only. With three colours already spending the reader's
-   * attention on identity, a fourth signal drawn in opacity is decoration.
-   */
-  const gradId = useGradientId('bar');
-  // Placed beside the existing hook so hook ORDER is unchanged from before.
   const animation = useAnimation();
 
   /**
-   * Both hooks run before the empty check, unconditionally. React requires the
+   * The hook runs before the empty check, unconditionally. React requires the
    * same hooks in the same order on every render, and an early `return` above
-   * a `useId()` would break that the first time a widget went from having rows
-   * to having none -- a filter change, or a drill into an empty slice, which is
-   * exactly when this chart is most likely to be re-rendered.
+   * it would break that the first time a widget went from having rows to having
+   * none -- a filter change, or a drill into an empty slice, which is exactly
+   * when this chart is most likely to be re-rendered.
    */
   if (widget.data.length === 0) {
     return (
       <Panel
         title={widget.title}
-        variant={drillPanel ? 'wide' : 'medium'}
+        variant="medium"
         compact={compact}
         actions={actions}
       >
@@ -876,9 +910,6 @@ export function BarPanel({
    * already wider, which is what makes the grouping legible without a box
    * around it.
    */
-  /** One gradient id per series — declared here because `bars` below paints with them and `gradientDefs` further down declares them. */
-  const seriesIds = series.map((_, index) => `${gradId}-s${index}`);
-
   /**
    * The range a SINGLE series' magnitude shading is measured against, and the
    * ramp it is drawn from. Both are computed once here rather than per bar: the
@@ -902,6 +933,25 @@ export function BarPanel({
         return typeof value === 'number' && Number.isFinite(value) ? Math.max(most, value) : most;
       }, 0);
   const singleRamp = rampOf(seriesColour);
+
+  /**
+   * Whether the marks are thick enough for a rail to read as a CONTAINER rather
+   * than as background texture.
+   *
+   * The rail is the whole of the Meadow treatment (docs/10 §1) and it earns its
+   * place on the charts this product draws most: three schools, one to three
+   * measures each. It stops earning it as the marks multiply. Comparative
+   * Analysis draws twelve fee periods against three measures — thirty-six bars
+   * in one panel — and thirty-six full-height rails behind them is not a set of
+   * containers, it is a picket fence with the data threaded through it. Recharts
+   * thins a bar as its band shrinks, so past roughly sixteen marks the rail's
+   * own edges carry more ink than the mark inside them.
+   *
+   * Sixteen rather than a rounder number because it is the first count at which
+   * this product's real charts split cleanly: Fee Collection's fourteen classes
+   * keep their rails, Comparative Analysis' thirty-six lose them.
+   */
+  const rails = axis.count * series.length <= 16;
 
   const bars = grouped
     ? series.map((entry, index) => {
@@ -929,7 +979,24 @@ export function BarPanel({
             key={entry.field}
             dataKey={entry.field}
             name={entry.label}
-            fill={`url(#${seriesIds[index]})`}
+            /**
+             * Solid, since 2026-09-03. Meadow paints a mark in its palette hue
+             * and puts the shading in the RAIL behind it instead — so a reader
+             * matching a bar to its legend dot is matching one colour to itself
+             * rather than to the midpoint of a gradient.
+             */
+            fill={seriesColourAt(index)}
+            /**
+             * A rail per bar, in that bar's hue — the same device the
+             * single-series chart uses, applied to each member of the group.
+             *
+             * Never on a STACK: a stack's segments are parts of one bar, so a
+             * full-scale rail behind each of them would draw four scales for one
+             * measurement and the bar would sit inside its own ghost.
+             */
+            {...(stacked || !rails
+              ? {}
+              : { background: { fill: tintOf(seriesColourAt(index), RAIL_STRENGTH), radius: 4 } })}
             {...(stacked ? { stackId: 'a' } : {})}
             radius={stacked ? (last ? rounded : square) : rounded}
             /**
@@ -975,16 +1042,24 @@ export function BarPanel({
           radius={axis.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
           maxBarSize={axis.horizontal ? BAR_PX.single : BAR_PX.singleV}
           /**
-           * No track behind the mark, since 2026-09-03.
+           * The rail is back, and this time it is the mark's OWN hue at 10%
+           * rather than grey (Meadow, docs/10 §1).
            *
-           * It was drawn to give a short bar "a container to sit in", and on a
-           * chart of three schools it did. On Fee Collection's fourteen classes
-           * it drew fourteen full-width grey rails behind fourteen teal bars, and
-           * the panel read as a striped table with the data faint inside it — the
-           * scale rail is louder than the measurement, which is exactly backwards.
-           * The dashed grid below already says where the scale runs, once, for the
-           * whole chart rather than once per row.
+           * The grey version was removed because fourteen full-width grey rails
+           * behind fourteen teal bars read as a striped table with the data
+           * faint inside it — the scale louder than the measurement. A rail in
+           * the hue is a different object: it reads as the unfilled part of the
+           * same measure, so a short bar reads as a small share of something
+           * rather than a stub floating in space, and nothing on the card is
+           * competing with the mark for attention.
+           *
+           * It also replaces the grid on these charts rather than joining it
+           * (see `CartesianGrid` below): a rail per row and a rule per tick are
+           * two scales drawn over each other.
            */
+          {...(rails
+            ? { background: { fill: tintOf(seriesColour, RAIL_STRENGTH), radius: 4 } }
+            : {})}
           animationEasing="ease-out"
           {...animation}
           activeBar={{ stroke: INK, strokeWidth: 1, strokeOpacity: 0.35 }}
@@ -1045,61 +1120,19 @@ export function BarPanel({
       ];
 
   /**
-   * One gradient per series, running across the mark's THICKNESS: the hue's lit
-   * step at the leading edge falling to its base by the far edge.
+   * Bars carry no gradient at all since the Meadow pass (docs/10 §1).
    *
-   * -- Why this is now two stops and not five (2026-09-03) --------------------
-   * The five-stop version modelled a CYLINDER — deep at both edges, a highlight
-   * inside the top third — and it worked as described: the bars read as tubes.
-   * That turned out to be the problem rather than the achievement. A tube is an
-   * object with a surface, and a reader looking at an object looks at the object;
-   * the whole of a bar's meaning is the position of its end, and everything spent
-   * on making the middle interesting is spent against that. Stacked three-deep in
-   * a grouped chart the tubes also fought each other, and on Fee Collection's
-   * fourteen-class panel they read as plumbing.
+   * They have been through three treatments now, and the reasoning ran out in a
+   * useful direction. A five-stop cylinder read as plumbing; a two-stop sheen
+   * still meant a reader matching a bar to its legend dot was matching a colour
+   * to the midpoint of a wash. Meadow puts the tonal interest in the RAIL behind
+   * the mark instead, which leaves the mark free to be exactly one colour — the
+   * one in the legend, the one in `SERIES`, the one docs/10 §1 names.
    *
-   * Two stops keep the one thing the shading was actually buying — a mark that
-   * has a lit edge and therefore a direction, so it sits on the card rather than
-   * being a hole cut in it — and drop the rest. The bar is still recognisably
-   * its palette hue at every point, which a five-stop wash through `deep` was
-   * not: a reader matching a bar to its legend dot was matching two colours.
-   *
-   * Stops from `RAMP`, never opacity: a translucent fill picks up whatever is
-   * behind it, and a chart's background is not always the card (a grid line runs
-   * under these marks).
-   *
-   * The coloured drop shadow that used to sit under a single-series bar is gone
-   * with the tubes and for the same reason. It was there to lift the mark off the
-   * card; what it actually did at 0.34 opacity and 3px blur was smear the hue
-   * into the whitespace under every bar, which is the "dull" it was meant to fix.
-   *
-   * -- Grouped only ------------------------------------------------------------
-   * A single series is painted per bar from `singleRamp` instead (see the `Cell`
-   * children above), so there is nothing here for it to reference. Emitting the
-   * gradient anyway would put an unused `<linearGradient>` in every one-series
-   * chart's `<defs>` — dead paint that a later reader would reasonably assume
-   * something still uses.
+   * Nothing replaces `gradientDefs`; there is simply no `<defs>` on a bar chart
+   * any more. The area gradient under a LINE stays, because that one is a
+   * shadow of the trend rather than the paint on a mark.
    */
-  const gradientDefs = grouped ? (
-    <defs>
-      {series.map((_, index) => {
-        const ramp = rampOf(seriesColourAt(index));
-        return (
-          <linearGradient
-            key={index}
-            id={seriesIds[index]}
-            x1="0"
-            y1="0"
-            x2={axis.horizontal ? '0' : '1'}
-            y2={axis.horizontal ? '1' : '0'}
-          >
-            <stop offset="0%" stopColor={ramp.soft} />
-            <stop offset="100%" stopColor={ramp.base} />
-          </linearGradient>
-        );
-      })}
-    </defs>
-  ) : null;
 
   /**
    * [MANDATORY for two or more series] identity is never colour alone, so a
@@ -1222,12 +1255,20 @@ export function BarPanel({
      * than per-category: three measures across nine classes is 27 bars, and a
      * band sized for one would draw them on top of each other.
      */
-    const perRow = grouped && !stacked ? 19 * series.length + 12 : 34;
-    const compactPerRow = grouped && !stacked ? 17 * series.length + 10 : 30;
+    const perRow = grouped && !stacked ? 17 * series.length + 10 : 28;
+    const compactPerRow = grouped && !stacked ? 16 * series.length + 9 : 26;
+    /**
+     * The ceiling came down from 680 to 520 (2026-09-03) along with the per-row
+     * budget. A panel is half the page wide now rather than all of it, so a
+     * chart that runs 680px tall beside a 330px neighbour leaves the row looking
+     * broken -- and 680px of one chart is more than a screen of a reporting page
+     * can spend on a single reading anyway. Past the ceiling the bands thin on
+     * their own, which is the behaviour a long category list should have.
+     */
     const height =
       compact === true
-        ? clamp(64 + axis.count * compactPerRow, 230, 380)
-        : clamp(44 + axis.count * perRow + (grouped ? 26 : 0), 190, 680);
+        ? clamp(50 + axis.count * compactPerRow, 150, 330)
+        : clamp(40 + axis.count * perRow + (grouped ? 22 : 0), 180, 520);
     /**
      * The axis takes the width its labels need, up to a ceiling that leaves the
      * bars the larger half of the panel. `- 14` is the tick line and its gap.
@@ -1241,7 +1282,12 @@ export function BarPanel({
     const labelChars = Math.floor((labelWidth - 14) / CHAR_PX);
 
     return (
-      <Panel title={widget.title} variant="wide" compact={compact} actions={actions}>
+      <Panel
+        title={widget.title}
+        variant={needsFullWidth('horizontal', axis.count, axis.longest) ? 'wide' : 'medium'}
+        compact={compact}
+        actions={actions}
+      >
         <ChartFrame compact={compact} naturalHeight={height}>
           <BarChart
             data={[...widget.data]}
@@ -1252,8 +1298,16 @@ export function BarPanel({
           >
             {/* Grid lines run along the value axis only -- the category axis has
                 no scale to read against. */}
-            <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} horizontal={false} />
-            {gradientDefs}
+            {/* Exactly ONE scale device, always. Where each bar has a rail, the
+                rail already shows the full scale it is measured against, once per
+                mark, and a rule per tick on top of that is a second scale drawn
+                over the first. Where the rails were suppressed for density
+                (`rails`, above), the grid comes back — otherwise a chart of
+                thirty-six bars would have no scale at all behind its axis
+                labels (docs/10 §1, Meadow). */}
+            {!rails && (
+              <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} horizontal={false} />
+            )}
             {/* Both axes render at every size now -- Home's preview cards are wide
                 enough (2-up, tokens.css `.pgallery`) for the same truncate-with-
                 tooltip treatment the full dashboard uses (`CategoryTick`,
@@ -1299,14 +1353,23 @@ export function BarPanel({
      * clicking ← Back reflows it again. A stable frame is what makes three
      * levels read as one chart being narrowed rather than three charts.
      *
-     * `wide` and not `medium` for the pair of them, because level 1 is
-     * horizontal on every path in the catalog (they all begin with school
-     * names) and is therefore already 12. Widening the leaf costs nothing and
-     * narrowing the root would cramp the chart the whole path descends from.
+     * `medium` for the pair of them since 2026-09-03, where it was `wide`.
+     *
+     * The stability requirement is unchanged and is still the whole point; what
+     * changed is the span that satisfies it. `wide` was chosen when a horizontal
+     * bar was always 12 and a vertical one always 6, so 12 was the only value
+     * both orientations could share. Now that the default rhythm is two-up and
+     * BOTH orientations are 6 unless their data earns a full row
+     * (`needsFullWidth`), 6 is equally stable and costs half the screen.
+     *
+     * Note this is deliberately not `needsFullWidth` per level: that would
+     * reintroduce exactly the resizing this comment argues against, since a path
+     * changes its categories as it descends. A drill panel picks one span and
+     * keeps it for the whole descent.
      */
     <Panel
       title={widget.title}
-      variant={drillPanel ? 'wide' : 'medium'}
+      variant="medium"
       compact={compact}
       actions={actions}
     >
@@ -1320,8 +1383,9 @@ export function BarPanel({
           barGap={2}
           {...chartProps}
         >
-          <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
-          {gradientDefs}
+          {/* One scale device, always — the rails, or the grid when they were
+              suppressed for density. See the horizontal branch. */}
+          {!rails && <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />}
           <XAxis
             dataKey={widget.x}
             tick={tick}
@@ -1480,8 +1544,21 @@ export function LinePanel({
          *
          * Single-series lines are untouched: Fee Collection's row still pairs.
          */
-        <Panel title={widget.title} variant="wide" compact={compact} actions={actions}>
-          <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 320}>
+        <Panel
+          title={widget.title}
+          variant={
+            needsFullWidth(
+              'vertical',
+              pivoted.rows.length,
+              categoryAxis(pivoted.rows, widget.x).longest,
+            )
+              ? 'wide'
+              : 'medium'
+          }
+          compact={compact}
+          actions={actions}
+        >
+          <ChartFrame compact={compact} naturalHeight={compact === true ? 200 : 280}>
             <ComposedChart data={pivoted.rows} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
               <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
               <XAxis
@@ -1563,8 +1640,23 @@ export function LinePanel({
   }
 
   return (
-    <Panel title={widget.title} variant="hero" compact={compact} actions={actions}>
-      <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 260}>
+    /**
+     * A trend takes half the row unless its periods will not fit in one. Twelve
+     * months pair happily beside a donut; Trend Analysis' 78 months are a smear
+     * at that width, and `preserveStartEnd` would answer by dropping most of the
+     * axis rather than by making the chart readable.
+     */
+    <Panel
+      title={widget.title}
+      variant={
+        needsFullWidth('vertical', widget.data.length, categoryAxis(widget.data, widget.x).longest)
+          ? 'wide'
+          : 'medium'
+      }
+      compact={compact}
+      actions={actions}
+    >
+      <ChartFrame compact={compact} naturalHeight={compact === true ? 200 : 260}>
         <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <defs>
             {/* A static fade to transparent — fixed SVG stops, not a timed
@@ -1637,15 +1729,14 @@ export function DonutPanel({
   actions?: ReactNode | undefined;
 }): ReactElement {
   /**
-   * Both hooks run before the empty check, unconditionally — the same rule
+   * The hook runs before the empty check, unconditionally — the same rule
    * BarPanel states at its own empty check, and this branch was on the wrong
    * side of it. React requires the same hooks in the same order on every
    * render, so a donut that went from having rows to having none (a filter
    * change, a drill into an empty slice) rendered fewer hooks than the render
-   * before it and threw. Nothing else moves; only the two lines.
+   * before it and threw.
    */
   const animation = useAnimation();
-  const donutId = useGradientId('donut');
 
   if (widget.data.length === 0) {
     return (
@@ -1693,23 +1784,10 @@ export function DonutPanel({
       <div className="specDonutWrap">
         <ResponsiveContainer width="100%" height={compact === true ? 210 : 220}>
           <PieChart>
-            {/* One gradient per slice, lit from the top-left — the same two-stop
-                sheen the bars take (`gradientDefs` in BarPanel), for the same
-                reason it was cut to two stops there: a three-stop wash that ends
-                on `deep` paints the bottom of the ring in a colour the legend dot
-                beside it is not, and a reader matching a wedge to its label is
-                then matching two hues. Lit edge, base body, nothing else. */}
-            <defs>
-              {widget.data.map((_, index) => {
-                const ramp = rampOf(index < SERIES.length ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER);
-                return (
-                  <linearGradient key={index} id={`${donutId}-s${index}`} x1="0" y1="0" x2="0.8" y2="1">
-                    <stop offset="0%" stopColor={ramp.soft} />
-                    <stop offset="100%" stopColor={ramp.base} />
-                  </linearGradient>
-                );
-              })}
-            </defs>
+            {/* No gradient on a slice either (docs/10 §1, Meadow). A wedge is
+                one category and takes one colour, the same rule the bars now
+                follow — the ring's legibility comes from the card-coloured
+                hairline between neighbours, below, not from shading. */}
             <Pie
               data={[...widget.data]}
               dataKey={widget.value_field}
@@ -1727,7 +1805,7 @@ export function DonutPanel({
                 return (
                   <Cell
                     key={String(row[widget.label_field] ?? index)}
-                    fill={inPalette ? `url(#${donutId}-s${index})` : SERIES_OTHER}
+                    fill={inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
                     fillOpacity={inPalette ? 1 : 0.55}
                     /* The surface ring the dataviz spec asks for: slices touch
                        around the circle, and a hairline of card colour is what
@@ -1859,7 +1937,26 @@ export function TablePanel({
   })();
 
   return (
-    <Panel title={widget.title} variant="wide" actions={actions}>
+    /**
+     * A table earns a full row by its COLUMN COUNT, not by being a table.
+     *
+     * Comparative Analysis' "School by school" carries eleven columns of
+     * figures and cannot be read in half a page; its "Where to look first" is
+     * three columns of short strings and was taking the same full row for no
+     * reason.
+     *
+     * FOUR is the threshold, not five (corrected 2026-09-03 against the real
+     * Fee Collection table). A label column plus three columns of Indian-format
+     * rupee figures — "68,02,67,540" is twelve characters — already overflows a
+     * half-width panel, and `.specTableWrap` answered by scrolling the last
+     * column half out of view. A table the reader has to scroll sideways is
+     * worse than one that took the width it needed.
+     */
+    <Panel
+      title={widget.title}
+      variant={widget.columns.length > 3 ? 'wide' : 'medium'}
+      actions={actions}
+    >
       {widget.rows.length === 0 ? (
         <div className="specEmpty">
           <span className="icon" aria-hidden="true">▤</span>
@@ -1999,16 +2096,25 @@ function formatCell(value: unknown): string {
   return String(value);
 }
 
+/**
+ * The colour a KPI figure is drawn in, from the meaning the server assigned it.
+ *
+ * These are the PALETTE's own hues, not a parallel set. They had drifted into
+ * one — the four values here were still the pre-2026-09-01 palette, two
+ * generations behind `SERIES`, so a tile and the chart summarising the same
+ * measure were painted in visibly different colours. Read from `SERIES` by slot
+ * so the next palette change cannot leave them behind again.
+ */
 function toneColour(tone: KpiWidget['tone']): string {
   switch (tone) {
     case 'warning':
-      return '#f2a93b';
+      return SERIES[2] ?? SERIES[0];
     case 'negative':
-      return '#e05252';
+      return SERIES[3] ?? SERIES[0];
     case 'positive':
-      return '#02c39a';
+      return SERIES[1] ?? SERIES[0];
     default:
-      return '#028090';
+      return SERIES[0];
   }
 }
 

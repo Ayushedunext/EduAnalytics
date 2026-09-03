@@ -73,8 +73,14 @@
  * simply appear as they are ready.
  */
 
-import { KpiTile } from '@sap/chart-spec/react';
-import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
+import { KpiTile, WidgetSpecView } from '@sap/chart-spec/react';
+import type {
+  HomeResponse,
+  HomePreview,
+  KpiWidget,
+  SessionResponse,
+  DashboardCard,
+} from '../api/client';
 import { PreviewCard } from './PreviewCard';
 
 interface Props {
@@ -125,6 +131,18 @@ export function Home({
   const onGrid = new Set(home.grid);
   const more = home.dashboards.filter((card) => !onGrid.has(card.id));
 
+  /**
+   * The strip takes the KPI tiles; everything else is a panel drawn below it.
+   *
+   * Split on `type` rather than assuming the spec holds only tiles. It did hold
+   * only tiles until the outliers table landed, and the assumption failed the
+   * way assumptions like this always do — silently: the table went through
+   * `KpiTile`, which found no `label` or `value` on it and rendered a blank card
+   * at the end of the strip.
+   */
+  const kpiWidgets = home.spec.widgets.filter((w): w is KpiWidget => w.type === 'kpi');
+  const panelWidgets = home.spec.widgets.filter((w) => w.type !== 'kpi');
+
   return (
     <main className="flex-1 overflow-y-auto">
       {/* Wider than every other screen's 1180px content column (Settings.tsx,
@@ -134,23 +152,37 @@ export function Home({
           grid has nothing to gain from stopping short of the window on a wide
           monitor the way a filter-pills-and-table page does. */}
       <div className="px-7 py-6 max-w-[1900px]">
-        <h1 className="page-title">
-          {greeting()}, {session.user.role === 'DIRECTOR' ? 'Director ' : ''}
-          {surname(session.user.name)}
-        </h1>
-
-        {/* docs/10 §3: scope line under the title, and an "as of" label because
-            docs/03 assumption 2 accepts replica lag only if it is stated. */}
-        <div className="pageContext mb-5">
-          <span>{scopeNames}</span>
-          <span className="dot">·</span>
-          <span>data as of {asOf(home.spec.meta.as_of ?? home.spec.meta.generated_at)}</span>
-          {loading && (
-            <>
-              <span className="dot">·</span>
-              <span>refreshing…</span>
-            </>
-          )}
+        {/**
+          * Greeting and context on ONE line (2026-09-03).
+          *
+          * They were stacked, which spent about 60px at the top of the one
+          * screen every user lands on to say a name and a timestamp. Neither is
+          * a finding, and on a reporting surface the first fold belongs to the
+          * numbers. Side by side they read as a page header -- who is looking,
+          * at what, as of when -- and the KPI strip moves up by a whole row.
+          *
+          * The scope line stays mandatory and stays on screen (docs/10 §3); it
+          * has moved, not gone. `flex-wrap` keeps it under the greeting on a
+          * narrow window rather than squeezing either.
+          */}
+        <div className="pageHead">
+          <h1 className="page-title">
+            {greeting()}, {session.user.role === 'DIRECTOR' ? 'Director ' : ''}
+            {surname(session.user.name)}
+          </h1>
+          {/* docs/10 §3: scope, and an "as of" label because docs/03 assumption 2
+              accepts replica lag only if it is stated. */}
+          <div className="pageContext">
+            <span>{scopeNames}</span>
+            <span className="dot">·</span>
+            <span>data as of {asOf(home.spec.meta.as_of ?? home.spec.meta.generated_at)}</span>
+            {loading && (
+              <>
+                <span className="dot">·</span>
+                <span>refreshing…</span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* docs/02 §6: a school dropped from scope is surfaced, never silently
@@ -216,8 +248,27 @@ export function Home({
           <div className="go">{aiActive ? 'Ask AI →' : 'Locked'}</div>
         </div>
 
-        <div className="kpis">
-          {home.spec.widgets.map((widget) => (
+        {/**
+          * The strip, inside a labelled group (2026-09-03).
+          *
+          * Reference dashboards of this kind file their summary tiles under a
+          * heading rather than floating them on the canvas, and the reason is
+          * hierarchy: a row of four cards with nothing above it is four
+          * unrelated facts, where the same row under "Key indicators" is one
+          * answer to one question. It also gives the blocked tiles a home --
+          * "Students · NO DATA" reads as part of a set rather than as a card
+          * that failed to load.
+          *
+          * A `<section>` with a real heading, not a styled div: this is a
+          * labelled region of the page and a screen reader should be able to
+          * jump to it.
+          */}
+        <section className="group" aria-labelledby="kpi-group-label">
+          <h2 className="groupLabel" id="kpi-group-label">
+            Key indicators
+          </h2>
+          <div className="kpis">
+          {kpiWidgets.map((widget) => (
             // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
             // reads identically everywhere in the product, and since 2026-09-01
             // that includes its SIZE: the lead metric leads by being first, not
@@ -241,7 +292,30 @@ export function Home({
               </span>
             </div>
           ))}
-        </div>
+          </div>
+        </section>
+
+        {/**
+          * Panels the server sent with the summary — today the outliers table
+          * (services/home.ts, "Where to look first").
+          *
+          * Drawn through `WidgetSpecView`, which validates the widget against
+          * the real chart-spec schema before rendering it (CODING_GUIDELINES
+          * §10). Home must not be the one screen in the product that renders an
+          * unvalidated widget just because it happens to build its own layout.
+          *
+          * In a `.specPanels` grid so the panel takes the same footprint rule
+          * every report page uses — a three-column table is `medium`, so it
+          * sits at half width and the row's other half is the natural slot for
+          * whatever goes on this page next.
+          */}
+        {panelWidgets.length > 0 && (
+          <div className="specPanels mt-3">
+            {panelWidgets.map((widget) => (
+              <WidgetSpecView key={widget.id} widget={widget} />
+            ))}
+          </div>
+        )}
 
         <div className="sect">
           Your dashboards

@@ -546,7 +546,9 @@ export const openApiDocument: OpenApiDocument = {
         required: [
           'spec',
           'academic_year',
+          'academic_years',
           'blocked_metrics',
+          'partial_metrics',
           'dashboards',
           'grid',
           'modules',
@@ -557,7 +559,17 @@ export const openApiDocument: OpenApiDocument = {
           academic_year: {
             type: ['string', 'null'],
             description:
-              'The year this summary resolved to. Feed it back to `/api/home/preview/{id}`.',
+              'The year this summary resolved to — what the topbar OPENS on. Feed it back to ' +
+              '`/api/home/preview/{id}`.',
+          },
+          academic_years: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Every year the selected schools hold data for, newest first — the options behind the ' +
+              'topbar year control. Derived from rows already read for the KPI strip, so it costs no ' +
+              'extra query against a school database. Contains `academic_year` whenever that is not ' +
+              'null. Empty when no metric could be read.',
           },
           blocked_metrics: {
             type: 'array',
@@ -571,6 +583,22 @@ export const openApiDocument: OpenApiDocument = {
                 label: { type: 'string' },
                 reason: { type: 'string' },
                 kind: { type: 'string', enum: ['no_data', 'not_permitted'] },
+              },
+            },
+          },
+          partial_metrics: {
+            type: 'array',
+            description:
+              'Metrics whose figure covers only some of the selected schools, with the missing ones ' +
+              'named. Schools roll their student roll over at different times, so the resolved year ' +
+              'may be one that part of the selection has no rows for; those schools contribute ' +
+              'nothing to the sum. Annotated rather than silently reduced (ADR-011).',
+            items: {
+              type: 'object',
+              required: ['label', 'schools'],
+              properties: {
+                label: { type: 'string', example: 'Students' },
+                schools: { type: 'array', items: { type: 'string' }, example: ['World School'] },
               },
             },
           },

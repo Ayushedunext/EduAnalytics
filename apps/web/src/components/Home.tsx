@@ -171,6 +171,22 @@ export function Home({
           </div>
         )}
 
+        {/* A different partiality from the one above, and it needs different
+            words. Those schools FAILED; these answered fine and simply have no
+            data recorded for the academic year on screen -- almost always a roll
+            that has not been rolled over yet. Saying "could not be reached"
+            would send someone to look for an outage that is not there.
+
+            Stated per metric, because they do not move together: a trust can
+            have next year's fee demand raised for all three schools while only
+            one has enrolled its students. */}
+        {home.partial_metrics.map((metric) => (
+          <div key={metric.label} className="notice mb-4">
+            {metric.label} for {home.academic_year ?? 'this year'} does not include{' '}
+            {metric.schools.join(', ')} — no data is recorded there for that year yet.
+          </div>
+        ))}
+
         <div
           className={`askbar mb-5 ${aiActive ? '' : 'locked'}`}
           onClick={() => {

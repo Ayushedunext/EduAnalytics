@@ -121,19 +121,38 @@ const METRIC_SQL = {
    *   3. It reads `statusname`, not `statusid`, because the ids mean different
    *      things in the two attendance tables.
    *
-   * The three-month floor is a cost decision, not a semantic one. Home is the
-   * one screen every user loads, this tile is about now, and without a floor the
-   * statement groups a school's entire attendance history to render a single
-   * month. `CURDATE()` is acceptable here for the same reason it is refused in
-   * the reports (mcp-server/src/reports/catalog.ts, AS_OF_DATE): a tile labelled
-   * with the month it shows is not a figure anyone will print and reconcile
-   * later.
+   * The floor is a cost decision, not a semantic one. Home is the one screen
+   * every user loads, and without a floor the statement groups a school's entire
+   * attendance history to render a single month. `CURDATE()` is acceptable here
+   * for the same reason it is refused in the reports (mcp-server/src/reports/
+   * catalog.ts, AS_OF_DATE): a tile labelled with the month it shows is not a
+   * figure anyone will print and reconcile later.
+   *
+   * -- Why the floor is two academic years and not three months (2026-09-03) ---
+   * The floor used to be `CURDATE() - 3 MONTH`, which is a window pinned to
+   * TODAY. Every other tile on this strip is pinned to the academic year in the
+   * topbar, and the moment that became a control the strip was mixing two time
+   * bases: at AY 2026-27 the fee tile showed the year's book while attendance
+   * showed "the last three calendar months", and a school whose register stops
+   * in April read as a school that has never marked attendance at all.
+   *
+   * The floor is now 1 April of the PREVIOUS academic year, computed from
+   * `CURDATE()` alone — no value is interpolated into this statement, which
+   * `run_multi` forbids outright (it takes no placeholders). Two years is what
+   * makes the tile answer for both years a reader realistically has selected:
+   * the current one and the one before it, which is the same span the reports'
+   * "Compare with" control assumes anybody cares about. Months are then filtered
+   * to the SELECTED year in `home.ts`, so the tile follows the topbar.
+   *
+   * A year older than the floor is reported as being outside what this tile
+   * covers — never as "no attendance was marked", which would be this file
+   * asserting something it did not look for.
    */
   attendanceByMonth:
     "SELECT LEFT(a.attendancedate, 7) AS ym, COUNT(*) AS marked, " +
     "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present " +
     'FROM (SELECT MAX(id) AS id FROM student_attendance_data_set ' +
-    "WHERE attendancedate >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 3 MONTH), '%Y-%m-01') " +
+    "WHERE attendancedate >= CONCAT(YEAR(CURDATE()) - IF(MONTH(CURDATE()) < 4, 2, 1), '-04-01') " +
     'GROUP BY studentid, attendancedate) k ' +
     'JOIN student_attendance_data_set a ON a.id = k.id ' +
     'GROUP BY LEFT(a.attendancedate, 7)',
@@ -150,6 +169,27 @@ export interface BlockedMetric {
    * user, or a different token, would see it.
    */
   readonly kind: 'no_data' | 'not_permitted';
+}
+
+/**
+ * One metric whose figure covers fewer schools than the reader selected.
+ *
+ * See `HomeSummary.partial_metrics` for what this is for and why the answer is
+ * to annotate rather than to change the number.
+ */
+export interface PartialMetric {
+  /** The tile's own label, so the notice and the tile name the same thing. */
+  readonly label: string;
+  /**
+   * The schools NOT in the figure, by display name.
+   *
+   * Names, where `degraded_schools` carries ids. The difference is who the line
+   * is for: a degraded school is a fault report, and an id is what someone
+   * grepping a log needs. This one is read by a director looking at a total and
+   * asking which of their schools is in it, and "stmarksmb" does not answer that
+   * question for the person asking it.
+   */
+  readonly schools: readonly string[];
 }
 
 export interface DashboardCard {
@@ -191,7 +231,74 @@ export interface DashboardCard {
 export interface HomeSummary {
   readonly spec: ChartSpec;
   readonly academic_year: string | null;
+  /**
+   * Every academic year the SELECTED schools hold data for, newest first — the
+   * options behind the topbar's year control (docs/10 §2).
+   *
+   * -- Why the list is derived and not configured ------------------------------
+   * The same rule `academic_year` already follows: the year comes from the data,
+   * never from a constant. A hardcoded list ("the last five years") would offer
+   * a school a year it has nothing for and hide one it does — and this product
+   * serves 1,500+ schools that went live in different years, so there is no list
+   * that is right for all of them.
+   *
+   * -- Why it costs no extra query ---------------------------------------------
+   * `studentsByYear` and `feeBookByYear` already GROUP BY the academic year and
+   * are already being read for the KPI strip. The years are sitting in rows this
+   * function has in hand; taking the union of them is arithmetic, not I/O. That
+   * matters more than usual here because Invariant 1 makes every avoidable query
+   * against a school database a cost the ERP does not have to pay.
+   *
+   * -- Why the UNION of two metrics, not the students alone --------------------
+   * They genuinely disagree, and each is right about its own subject. A school
+   * that has raised next year's fee demand but not yet rolled its students over
+   * has fee data for a year its roll has never heard of, which is exactly what
+   * the local development extract looks like today. Offering only the years the
+   * ROLL knows would make next year's money unreachable from the one control
+   * that exists to reach it. `academic_year` — the year the page OPENS on — is
+   * unchanged and still prefers the roll: a default is a claim about which year
+   * a reader means, and the roll is the better evidence for that than a demand
+   * raised in advance.
+   *
+   * Empty when neither metric could be read, in which case `academic_year` is
+   * `null` too and the control has nothing to offer rather than one made-up
+   * entry.
+   */
+  readonly academic_years: readonly string[];
   readonly blocked_metrics: readonly BlockedMetric[];
+  /**
+   * Metrics whose figure covers only SOME of the selected schools, and which
+   * schools are missing from it.
+   *
+   * -- The bug this exists for -------------------------------------------------
+   * The academic year is one value for the whole selection, resolved as the
+   * newest year ANY school in it has. Schools roll their student roll over at
+   * different times, so a trust of three schools routinely has one school
+   * already in the new year and two still in the old one. The strip then
+   * resolved to the new year, summed the one school that had it, and printed
+   * "Students · 3 schools — 1,760" while 4,801 children in the other two
+   * contributed nothing. Every part of that tile was individually defensible and
+   * the number was wrong by a factor of four.
+   *
+   * This is the success-shaped failure of CODING_GUIDELINES §10 in its purest
+   * form: not a crash, not a blank, a confident total in the same typeface as
+   * the true ones. It is invisible on a staging extract where every school has
+   * been rolled over together, and it is guaranteed to appear across 1,500+
+   * schools that roll over whenever they each get round to it.
+   *
+   * -- Why annotate rather than change the number ------------------------------
+   * The alternatives are worse. Falling back to the newest year they ALL share
+   * would hide the new year from the school that has it — punishing the school
+   * that is up to date. Summing whatever each school's own latest year holds
+   * would add 2026-27 to 2024-25 and call the result a year. The figure shown is
+   * a real figure for a real year; what was missing was any statement of who it
+   * covers, which is the same fix ADR-011 already applies to a school that could
+   * not be reached (`degraded_schools`) — annotate, never quietly shrink.
+   *
+   * Empty in the ordinary case where every school has the year, so a selection
+   * that is fully covered says nothing at all.
+   */
+  readonly partial_metrics: readonly PartialMetric[];
   /**
    * Every card in the catalog. Still the whole list, because the SIDEBAR
    * renders from it (Sidebar.tsx) and it is also the set a custom report can be
@@ -834,6 +941,21 @@ export const DASHBOARDS: readonly DashboardCard[] = [
 export async function buildHomeSummary(args: {
   session: SessionClaims;
   schoolIds: readonly string[];
+  /**
+   * The year the reader picked in the topbar, if they picked one.
+   *
+   * Absent means "resolve it from the data", which is what this function always
+   * did and still does. Present means the strip is rebuilt for that year — the
+   * tiles have to follow the control, or the page contradicts itself: the grid's
+   * preview cards already take the year as a parameter, so a strip that stayed
+   * on the derived year would put next year's charts under last year's totals
+   * with nothing on screen admitting the two were different.
+   *
+   * Validated for SHAPE at the route and for MEMBERSHIP here: a year the data
+   * has no rows for falls back to the derived one rather than summing nothing
+   * into a confident `0` (see `requestedYear` below).
+   */
+  academicYear?: string | undefined;
   correlationId: string;
 }): Promise<HomeSummary> {
   const scope = await schoolNames(args.schoolIds);
@@ -859,7 +981,13 @@ export async function buildHomeSummary(args: {
     kind: 'home',
     schoolIds: args.schoolIds,
     permissionClass: args.session.permission_class,
-    filters: {},
+    /**
+     * The requested year is part of the key, because it changes every figure in
+     * the response. Omitted when there is none, so the default request keeps the
+     * key it has always had and a deploy does not cold-start the landing screen
+     * for every school at once.
+     */
+    filters: args.academicYear === undefined ? {} : { academic_year: args.academicYear },
   });
 
   const hit = await cacheGet<HomeSummary>(key);
@@ -946,18 +1074,113 @@ export async function buildHomeSummary(args: {
    * and therefore silently lost the FEES figure too — one missing permission
    * cascading into an unrelated wrong number.
    */
-  const academicYear =
+  const derivedYear =
     (studentsOutcome.available ? latestYear(students.rows) : null) ??
     (feesOutcome.available ? latestYear(fees.rows) : null);
+
+  /**
+   * The years the control offers. See `HomeSummary.academic_years` for why this
+   * is the union of the two metrics rather than the one the default comes from.
+   *
+   * `academicYear` is in here by construction whenever it is not null — it is
+   * the maximum of one of the two sets being unioned — so the control can never
+   * open showing a value that is not one of its own options.
+   */
+  const academicYears = yearsIn([
+    ...(studentsOutcome.available ? students.rows : []),
+    ...(feesOutcome.available ? fees.rows : []),
+  ]);
+
+  /**
+   * The year this strip is actually built for.
+   *
+   * A requested year is honoured only if the data HAS it. That check is not
+   * defensive tidiness — it is the difference between a tile that says nothing
+   * and a tile that lies. `sumForYear` over a year with no rows returns 0, and 0
+   * renders in the same confident typeface as every true number on the page,
+   * which is the exact bug the tests at the top of test/home-summary.ts exist
+   * for. The SPA only offers years from `academic_years`, so this should never
+   * fire from our own UI; it fires for a stale bookmark, a hand-edited URL, or a
+   * school whose data moved between the page loading and the request landing.
+   */
+  const academicYear =
+    args.academicYear !== undefined && academicYears.includes(args.academicYear)
+      ? args.academicYear
+      : derivedYear;
 
   const widgets: Widget[] = [];
   const blocked: BlockedMetric[] = [];
 
-  if (studentsOutcome.available) {
+  /**
+   * Whether a metric has anything to say about the year on screen.
+   *
+   * Separate from `outcomeOf` and answering a different question: that one asks
+   * whether the query was allowed to RUN, this one asks whether the answer
+   * covers the year being shown. Both must hold before a figure is drawn, and
+   * only the first used to be checked — which was invisible while the year was
+   * always derived FROM one of these metrics, and became reachable the moment a
+   * reader could pick a year for themselves.
+   *
+   * The case this is really for is the ordinary one: a school that has raised
+   * next year's fee demand before rolling its student roll over. Ask for next
+   * year and the roll has nothing — so the tile says so, naming the year, rather
+   * than reporting that the school has no children.
+   */
+  const hasRowsForYear = (rows: readonly Record<string, unknown>[]): boolean =>
+    academicYear !== null && rows.some((row) => row['ay'] === academicYear);
+
+  const studentsForYear = studentsOutcome.available && hasRowsForYear(students.rows);
+  const feesForYear = feesOutcome.available && hasRowsForYear(fees.rows);
+
+  /**
+   * Which selected schools are NOT in a metric's figure for the year on screen.
+   *
+   * Every row from `run_multi` is tagged with its `school_id` (ADR-011,
+   * tools/run-multi.ts), so this needs no extra column, no change to the vetted
+   * SQL and no second query — the evidence was already in the rows being summed.
+   * A school contributes nothing when it has no row for this year at all, which
+   * is the ordinary "has not rolled its roll over yet" case.
+   *
+   * Note this asks about the YEAR, not about zero. A school with a genuine zero
+   * for the year IS in the figure and is not listed here: it answered, and its
+   * answer was none. Conflating "answered nothing" with "was not asked about
+   * this year" would put a school on a caveat line that has no business there.
+   */
+  const schoolsMissingYear = (rows: readonly Record<string, unknown>[]): string[] => {
+    if (academicYear === null) return [];
+    const present = new Set<string>();
+    for (const row of rows) {
+      if (row['ay'] === academicYear) present.add(String(row['school_id'] ?? ''));
+    }
+    return scope.filter((s) => !present.has(s.school_id)).map((s) => s.school_name);
+  };
+
+  const studentsMissing = studentsForYear ? schoolsMissingYear(students.rows) : [];
+  const feesMissing = feesForYear ? schoolsMissingYear(fees.rows) : [];
+  const partial: PartialMetric[] = [];
+
+  /** What a tile says when its query ran fine and the chosen year is simply empty. */
+  const noRowsReason = (subject: string): string =>
+    `No ${subject} recorded for ${academicYear ?? 'this year'}.`;
+
+  if (studentsForYear) {
     widgets.push({
       id: 'kpi-students',
       type: 'kpi',
-      label: `Students · ${String(scope.length)} school${scope.length > 1 ? 's' : ''}`,
+      /**
+       * The count of schools in the LABEL is the count that contributed, never
+       * the count selected.
+       *
+       * The notice above the strip names which are missing, but the tile has to
+       * be honest standing alone: it is the thing that gets screenshotted, read
+       * across a room, and quoted in a meeting, and "3 schools" over a
+       * one-school figure is wrong in every one of those settings even when a
+       * caveat is sitting above it.
+       */
+      label:
+        studentsMissing.length === 0
+          ? `Students · ${String(scope.length)} school${scope.length > 1 ? 's' : ''}`
+          : `Students · ${String(scope.length - studentsMissing.length)} of ${String(scope.length)} schools`,
       value: formatCount(sumForYear(students.rows, academicYear)),
       tone: 'neutral',
       /**
@@ -978,6 +1201,11 @@ export async function buildHomeSummary(args: {
         ),
       ),
     });
+    if (studentsMissing.length > 0) partial.push({ label: 'Students', schools: studentsMissing });
+  } else if (studentsOutcome.available) {
+    // The query ran; this year simply has no roll yet. A different fact from a
+    // refusal, so it is reported as `no_data` and says which year it means.
+    blocked.push({ label: 'Students', reason: noRowsReason('students'), kind: 'no_data' });
   } else {
     blocked.push({
       label: 'Students',
@@ -1027,7 +1255,7 @@ export async function buildHomeSummary(args: {
    * that denominator and no other). Two screens showing the same metric by two
    * definitions is a trust problem even when both are defensible.
    */
-  const attendanceMonth = latestMonth(attendance.rows);
+  const attendanceMonth = latestMonth(attendance.rows, academicYear);
   if (attendanceOutcome.available && attendanceMonth !== null) {
     const marked = sumForMonth(attendance.rows, attendanceMonth, 'marked');
     const present = sumForMonth(attendance.rows, attendanceMonth, 'present');
@@ -1066,14 +1294,25 @@ export async function buildHomeSummary(args: {
     });
   } else {
     /**
-     * The query ran and found nothing. That is a real and actionable state —
-     * nobody has taken the register — and it is not the same as having no
-     * permission or having no such data in the ERP, which is why it gets its own
-     * words rather than either of theirs.
+     * The query ran and this year has no marked month in it. That is a real and
+     * actionable state — nobody has taken the register — and it is not the same
+     * as having no permission or no such data in the ERP, which is why it gets
+     * its own words rather than either of theirs.
+     *
+     * The two reasons below are a distinction this tile has to draw honestly.
+     * The statement reaches back two academic years and no further (see
+     * `attendanceByMonth`), so for an older year the truthful answer is that the
+     * tile did not look — not that nothing was marked. Saying "no attendance was
+     * marked in 2019-20" on the strength of a query that never covered 2019-20
+     * would be this file asserting a fact it does not have, which is the same
+     * error as summing an absent year into a confident zero.
      */
     blocked.push({
       label: 'Student attendance',
-      reason: 'No attendance has been marked for these schools in the last three months',
+      reason:
+        academicYear !== null && !withinAttendanceReach(academicYear)
+          ? `This tile covers the current and previous academic year; open Attendance Analytics for ${academicYear}`
+          : `No attendance has been marked for these schools in ${academicYear ?? 'this year'}`,
       kind: 'no_data',
     });
   }
@@ -1097,7 +1336,7 @@ export async function buildHomeSummary(args: {
    * slightly. Netting would understate what is actually owed, and arrears are
    * the number a bursar acts on.
    */
-  if (feesOutcome.available && academicYear !== null) {
+  if (feesForYear && academicYear !== null) {
     const payable = sumForYear(fees.rows, academicYear, 'payable');
     const paid = sumForYear(fees.rows, academicYear, 'paid');
     const pending = sumForYear(fees.rows, academicYear);
@@ -1123,6 +1362,11 @@ export async function buildHomeSummary(args: {
         },
       ],
     });
+    if (feesMissing.length > 0) partial.push({ label: 'Total fees', schools: feesMissing });
+  } else if (feesOutcome.available) {
+    // Same distinction the students tile draws: the fee query ran, and this year
+    // has no demand raised against it yet.
+    blocked.push({ label: 'Total fees', reason: noRowsReason('fees'), kind: 'no_data' });
   } else {
     blocked.push({
       label: 'Total fees',
@@ -1184,7 +1428,9 @@ export async function buildHomeSummary(args: {
   const summary: HomeSummary = {
     spec: parsed.data,
     academic_year: academicYear,
+    academic_years: academicYears,
     blocked_metrics: blocked,
+    partial_metrics: partial,
     dashboards: servedDashboards(),
     grid: previewableDashboards().map((card) => card.id),
     modules: servedModules(),
@@ -1252,11 +1498,27 @@ function degradedFrom(
 }
 
 function latestYear(rows: readonly Record<string, unknown>[]): string | null {
-  const years = rows
-    .map((row) => row['ay'])
-    .filter((value): value is string => typeof value === 'string' && value !== '');
-  if (years.length === 0) return null;
-  return [...years].sort().reverse()[0] ?? null;
+  return yearsIn(rows)[0] ?? null;
+}
+
+/**
+ * The distinct academic years present in a set of statement rows, newest first.
+ *
+ * Sorted as TEXT, which is correct for the labels the ERP writes and is the same
+ * comparison `latestYear` has always made: `2024-25` < `2025-26` < `2026-27`
+ * lexically as well as chronologically, because the leading four digits are a
+ * fixed-width year. It holds for the long spelling (`2024-2025`) too. What it
+ * would not survive is a school labelling a year some third way, and the honest
+ * answer there is that the label is the ERP's to define — inventing a parser for
+ * shapes nobody has seen would be guessing at data rather than reporting it.
+ */
+function yearsIn(rows: readonly Record<string, unknown>[]): string[] {
+  const years = new Set<string>();
+  for (const row of rows) {
+    const value = row['ay'];
+    if (typeof value === 'string' && value !== '') years.add(value);
+  }
+  return [...years].sort().reverse();
 }
 
 /**
@@ -1409,12 +1671,62 @@ function sumAll(rows: readonly Record<string, unknown>[]): number {
  * says which one it found. A school that stopped marking in June should see June
  * labelled June — not an empty tile for August that reads as a system fault.
  */
-function latestMonth(rows: readonly Record<string, unknown>[]): string | null {
+function latestMonth(
+  rows: readonly Record<string, unknown>[],
+  /**
+   * The academic year the strip is showing, or null to take the latest month
+   * from whatever came back.
+   *
+   * Constrained since 2026-09-03. The statement fetches two academic years so
+   * the tile can answer for either (see `attendanceByMonth`), which means the
+   * newest month in the rows is not necessarily in the year the reader picked —
+   * and a tile reading "Student attendance · Apr 2026" under a topbar saying
+   * 2025-26 is the mislabelling the year control was built to end.
+   */
+  academicYear: string | null,
+): string | null {
+  const window = academicYear === null ? null : academicYearMonths(academicYear);
   const months = rows
     .map((row) => row['ym'])
-    .filter((value): value is string => typeof value === 'string' && value !== '');
+    .filter((value): value is string => typeof value === 'string' && value !== '')
+    .filter((ym) => window === null || (ym >= window.from && ym <= window.to));
   if (months.length === 0) return null;
   return [...months].sort().reverse()[0] ?? null;
+}
+
+/**
+ * Whether a year is inside the span `attendanceByMonth` actually fetches: the
+ * current academic year and the one before it.
+ *
+ * Derived the same way the SQL's floor is — April starts the year — so the two
+ * cannot drift apart. It exists so the tile can say "I did not look at that
+ * year" instead of "nothing was marked that year", which are different claims
+ * and only one of them is true.
+ */
+function withinAttendanceReach(academicYear: string, now = new Date()): boolean {
+  const start = Number(academicYear.slice(0, 4));
+  if (!Number.isInteger(start)) return true;
+  const currentStart = now.getMonth() + 1 < 4 ? now.getFullYear() - 1 : now.getFullYear();
+  return start >= currentStart - 1;
+}
+
+/**
+ * An academic year as a pair of `YYYY-MM` bounds, inclusive.
+ *
+ * April to March, the same boundary `academicYearWindow` uses in
+ * services/dashboards.ts and the same one every quarter in the product is cut
+ * on — so the tile and the Attendance Analytics dashboard cover exactly the
+ * same months. Two screens showing one metric over two different periods is a
+ * trust problem even when both are defensible.
+ *
+ * A label this cannot read yields null, and the caller then falls back to the
+ * latest month it has rather than showing nothing: an unparseable year is this
+ * function's problem, not a reason to hide a figure that exists.
+ */
+function academicYearMonths(academicYear: string): { from: string; to: string } | null {
+  const start = Number(academicYear.slice(0, 4));
+  if (!Number.isInteger(start)) return null;
+  return { from: `${String(start)}-04`, to: `${String(start + 1)}-03` };
 }
 
 /**

@@ -184,7 +184,21 @@ export interface ModuleCard {
 
 export interface HomeResponse {
   spec: ChartSpecLike;
+  /** The year the app OPENS on. The server's, derived from the data (home.ts). */
   academic_year: string | null;
+  /**
+   * The years the selected schools hold data for, newest first — the options
+   * the topbar's year control offers.
+   *
+   * Never derived here from `academic_year`. The report-level "Compare with"
+   * control does derive its options (DashboardPage.tsx `precedingYears`) and
+   * says why: there is no endpoint that lists the years a school's FEE tables
+   * hold, and adding a query to find out would cost a scan on every page load.
+   * This list has no such excuse — `/api/home` reads the years as a side effect
+   * of the KPI strip it was already fetching — so guessing them would be
+   * offering a school years it has nothing for while hiding ones it does.
+   */
+  academic_years: string[];
   /**
    * Metrics that could not be shown, and why. `no_data` means the ERP holds
    * none (AUDIT_REPORT C20); `not_permitted` means this session's perms do not
@@ -192,6 +206,17 @@ export interface HomeResponse {
    * is worse than an absent one.
    */
   blocked_metrics: { label: string; reason: string; kind: 'no_data' | 'not_permitted' }[];
+  /**
+   * Metrics whose figure covers only some of the selected schools, and which
+   * schools are missing by name.
+   *
+   * Schools roll their student roll over at different times, so the year the
+   * strip resolved to may be a year some of the selection has no rows for at
+   * all. Those schools contribute nothing to the sum, and without this the total
+   * looked like a whole-trust figure. Annotated rather than silently reduced,
+   * exactly as `degraded_schools` is (ADR-011).
+   */
+  partial_metrics: { label: string; schools: string[] }[];
   dashboards: DashboardCard[];
   /**
    * Which dashboards the grid draws, in the order it draws them (services/
@@ -345,9 +370,22 @@ export function drillReport(
   );
 }
 
-export function getHome(schoolIds: readonly string[]): Promise<HomeResponse> {
-  const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
-  return request<HomeResponse>(`/api/home${query}`);
+/**
+ * `academicYear` is omitted on the first load and sent once the reader picks one
+ * in the topbar. Omitting it is not the same as sending the year the server last
+ * resolved: absent means "work it out from the data", which is what makes the
+ * app open on a year each school actually has, and what keeps the response
+ * cacheable under the key every user of that school shares.
+ */
+export function getHome(
+  schoolIds: readonly string[],
+  academicYear?: string,
+): Promise<HomeResponse> {
+  const query = new URLSearchParams();
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  if (academicYear !== undefined) query.set('academic_year', academicYear);
+  const suffix = query.toString();
+  return request<HomeResponse>(`/api/home${suffix === '' ? '' : `?${suffix}`}`);
 }
 
 /**

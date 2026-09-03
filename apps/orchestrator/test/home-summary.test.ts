@@ -61,6 +61,32 @@ function refused(code: string, message: string, schoolId = 'stmarksmb') {
   };
 }
 
+/**
+ * A fan-out that several schools answered — rows already tagged with their own
+ * `school_id`, exactly as `run_multi` returns them (ADR-011, tools/run-multi.ts).
+ *
+ * Needed because the single-school `ok()` above cannot express the case the
+ * `partial_metrics` tests are about: schools whose data reaches DIFFERENT
+ * academic years, which is what a trust mid-rollover actually looks like.
+ */
+function okMulti(rows: (Record<string, unknown> & { school_id: string })[]) {
+  const schoolIds = [...new Set(rows.map((r) => r.school_id))];
+  return {
+    rows,
+    columns: Object.keys(rows[0] ?? {}),
+    truncated: false,
+    masked_columns: [],
+    per_school: schoolIds.map((school_id) => ({
+      school_id,
+      status: 'ok',
+      rows: rows.filter((r) => r.school_id === school_id).length,
+    })) as SchoolStatus[],
+    schools_succeeded: schoolIds.length,
+    schools_failed: 0,
+    as_of: '2026-08-19T10:00:00.000Z',
+  };
+}
+
 /** Queued in call order: students, staff, outstanding, attendance (services/home.ts). */
 let queue: unknown[] = [];
 
@@ -314,9 +340,36 @@ describe('the summary reports what it actually served', () => {
     expect(kpis(summary.spec).map((w) => w.value)).not.toContain('0.0%');
     expect(summary.blocked_metrics).toContainEqual({
       label: 'Student attendance',
-      reason: 'No attendance has been marked for these schools in the last three months',
+      // Names the YEAR, since 2026-09-03: the tile follows the topbar's academic
+      // year rather than a rolling three-month window pinned to today, so "in
+      // the last three months" no longer describes what was looked at.
+      reason: 'No attendance has been marked for these schools in 2026-27',
       kind: 'no_data',
     });
+  });
+
+  /**
+   * A year the statement never reached is reported as exactly that.
+   *
+   * `attendanceByMonth` fetches the current academic year and the one before it
+   * and no further (a cost decision — Home is the screen every user loads). For
+   * anything older the truthful answer is that the tile did not look, and
+   * claiming "nothing was marked" on the strength of a query that never covered
+   * the year would be asserting a fact this service does not have — the same
+   * error as summing an absent year into a confident zero.
+   */
+  it('does not claim an empty register for a year it never queried', async () => {
+    queue = [
+      ok([{ ay: '2019-20', n: 10 }]),
+      ok([{ n: 2 }]),
+      ok([{ ay: '2019-20', payable: 10, paid: 5, n: 5 }]),
+      ok([]),
+    ];
+    const summary = await build();
+
+    const attendance = summary.blocked_metrics.find((b) => b.label === 'Student attendance');
+    expect(attendance?.reason).toContain('current and previous academic year');
+    expect(attendance?.reason).not.toContain('No attendance has been marked');
   });
 
   it('separates a refusal from an empty register', async () => {
@@ -515,5 +568,354 @@ describe('the summary cards break their figure down', () => {
 
     expect(students?.value).toBe('3,929');
     expect(students?.breakdown).toBeUndefined();
+  });
+});
+
+/**
+ * The years the topbar's academic-year control offers (`academic_years`).
+ *
+ * These exist because of a real report, and it is worth stating as plainly as
+ * the students-read-as-zero bug at the top of this file. A development extract
+ * held fee data for 2026-27 and a student roll that stopped at 2025-26. The
+ * summary resolved the year from the roll — correctly — and the topbar printed
+ * it as a read-only chip, so next year's ₹92Cr of demand was being served by the
+ * API and was unreachable from the UI. Nobody could see it and nothing said why.
+ *
+ * The rule these pin down: the DEFAULT prefers the roll, and the OPTIONS are the
+ * union, so a year that exists in either metric can always be reached.
+ */
+describe('the academic years offered', () => {
+  it('offers every year either metric holds, newest first', async () => {
+    queue = [
+      ok([
+        { ay: '2024-25', gender: 'Girl', n: 1800 },
+        { ay: '2025-26', gender: 'Girl', n: 1900 },
+      ]),
+      ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
+      ok([
+        { ay: '2025-26', payable: 100, paid: 90, n: 10 },
+        { ay: '2026-27', payable: 200, paid: 20, n: 180 },
+      ]),
+      ok([{ ym: '2026-07', marked: 100, present: 81 }]),
+    ];
+
+    const summary = await build();
+
+    expect(summary.academic_years).toEqual(['2026-27', '2025-26', '2024-25']);
+  });
+
+  /**
+   * The reported bug, as a test. A roll that has not rolled over must not hide
+   * the year the fee book has already moved to.
+   */
+  it('offers a fee year the student roll has never heard of', async () => {
+    queue = [
+      ok([{ ay: '2025-26', gender: 'Girl', n: 1900 }]),
+      ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
+      ok([
+        { ay: '2025-26', payable: 100, paid: 99, n: 1 },
+        { ay: '2026-27', payable: 200, paid: 20, n: 180 },
+      ]),
+      ok([{ ym: '2026-07', marked: 100, present: 81 }]),
+    ];
+
+    const summary = await build();
+
+    // The default still comes from the roll: a default is a claim about which
+    // year the reader means, and demand raised in advance is weaker evidence.
+    expect(summary.academic_year).toBe('2025-26');
+    // ...but the fee year is reachable, which is the whole point.
+    expect(summary.academic_years).toContain('2026-27');
+  });
+
+  /**
+   * [MANDATORY] The control must never open showing a value that is not one of
+   * its own options — a select whose current value is absent from its list
+   * renders blank in every browser, which reads as "no year" on a page whose
+   * every number depends on one.
+   */
+  it('always contains the year the summary resolved to', async () => {
+    queue = [
+      ok([{ ay: '2025-26', gender: 'Girl', n: 1900 }]),
+      ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
+      ok([{ ay: '2026-27', payable: 200, paid: 20, n: 180 }]),
+      ok([{ ym: '2026-07', marked: 100, present: 81 }]),
+    ];
+
+    const summary = await build();
+
+    expect(summary.academic_year).not.toBeNull();
+    expect(summary.academic_years).toContain(summary.academic_year);
+  });
+
+  /**
+   * A metric that was REFUSED contributes no years, for the same reason it
+   * contributes no number: rows nobody was allowed to read are not evidence
+   * about what the school holds.
+   */
+  it('ignores years from a metric that could not be read', async () => {
+    queue = [
+      refused('PERMISSION_DENIED', 'no students'),
+      refused('PERMISSION_DENIED', 'no staff'),
+      ok([{ ay: '2026-27', payable: 200, paid: 20, n: 180 }]),
+      refused('PERMISSION_DENIED', 'no attendance'),
+    ];
+
+    const summary = await build();
+
+    expect(summary.academic_years).toEqual(['2026-27']);
+  });
+
+  /**
+   * Neither metric that CARRIES a year could be read, but staff could — so
+   * there is a summary, and it has no year to resolve and none to offer.
+   *
+   * The staff statement groups by `stafftype` and not by academic year, which is
+   * the point: a staff roll is a headcount as of now, not a fact about a year.
+   * The Topbar renders the read-only chip in this case rather than an empty
+   * select (`academicYears.length > 1`).
+   *
+   * Note this is the only way to reach an empty list. All four metrics refused
+   * throws instead — there is no summary at all then, which is the honest answer
+   * and is covered at the top of this file.
+   */
+  it('offers nothing when no metric that carries a year could be read', async () => {
+    queue = [
+      refused('PERMISSION_DENIED', 'no students'),
+      ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
+      refused('PERMISSION_DENIED', 'no fees'),
+      refused('PERMISSION_DENIED', 'no attendance'),
+    ];
+
+    const summary = await build();
+
+    expect(summary.academic_year).toBeNull();
+    expect(summary.academic_years).toEqual([]);
+  });
+});
+
+/**
+ * The strip follows the topbar's year.
+ *
+ * The grid's preview cards already took the year as a request parameter, so
+ * before this the control moved the charts and left the tiles behind: next
+ * year's charts under last year's totals, with nothing on screen saying the two
+ * were about different years. Both look equally authoritative, which is what
+ * makes it a trust bug rather than a cosmetic one.
+ */
+describe('a requested academic year', () => {
+  const twoYears = () => [
+    ok([
+      { ay: '2025-26', gender: 'Girl', n: 1900 },
+      { ay: '2026-27', gender: 'Girl', n: 2100 },
+    ]),
+    ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
+    ok([
+      { ay: '2025-26', payable: 1000000, paid: 990000, n: 10000 },
+      { ay: '2026-27', payable: 2000000, paid: 200000, n: 1800000 },
+    ]),
+    ok([{ ym: '2026-07', marked: 100, present: 81 }]),
+  ];
+
+  function buildFor(academicYear: string) {
+    return buildHomeSummary({
+      session: SESSION,
+      schoolIds: ['stmarksmb'],
+      academicYear,
+      correlationId: 'corr-1',
+    });
+  }
+
+  it('rebuilds every year-bearing tile for the year asked for', async () => {
+    queue = twoYears();
+
+    const summary = await buildFor('2025-26');
+
+    expect(summary.academic_year).toBe('2025-26');
+    expect(kpis(summary.spec).find((w) => w.id === 'kpi-fees')?.label).toBe('Total fees · 2025-26');
+    expect(kpis(summary.spec).find((w) => w.id === 'kpi-fees')?.value).toBe('₹10.0L');
+    expect(kpis(summary.spec).find((w) => w.id === 'kpi-students')?.value).toBe('1,900');
+  });
+
+  it('defaults to the derived year when none is asked for', async () => {
+    queue = twoYears();
+
+    const summary = await buildHomeSummary({
+      session: SESSION,
+      schoolIds: ['stmarksmb'],
+      correlationId: 'corr-1',
+    });
+
+    expect(summary.academic_year).toBe('2026-27');
+    expect(kpis(summary.spec).find((w) => w.id === 'kpi-students')?.value).toBe('2,100');
+  });
+
+  /**
+   * [MANDATORY] The rule this whole file exists for, at a new entry point. A
+   * year with no rows must never be summed into a confident `0` — the reader
+   * would be told the school has no children, in the same typeface as every true
+   * number beside it.
+   */
+  it('blocks a tile whose metric has nothing for the requested year', async () => {
+    queue = [
+      // The roll has not been rolled over; the fee book has.
+      ok([{ ay: '2025-26', gender: 'Girl', n: 1900 }]),
+      ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
+      ok([
+        { ay: '2025-26', payable: 1000000, paid: 990000, n: 10000 },
+        { ay: '2026-27', payable: 2000000, paid: 200000, n: 1800000 },
+      ]),
+      ok([{ ym: '2026-07', marked: 100, present: 81 }]),
+    ];
+
+    const summary = await buildFor('2026-27');
+
+    // The fee tile is the reason to be looking at 2026-27 at all.
+    expect(kpis(summary.spec).find((w) => w.id === 'kpi-fees')?.value).toBe('₹20.0L');
+    // The students tile says so instead of reading zero.
+    expect(kpis(summary.spec).map((w) => w.id)).not.toContain('kpi-students');
+    expect(kpis(summary.spec).map((w) => w.value)).not.toContain('0');
+    const students = summary.blocked_metrics.find((b) => b.label === 'Students');
+    expect(students?.kind).toBe('no_data');
+    // The reason names the YEAR — "no students" alone reads as an outage.
+    expect(students?.reason).toContain('2026-27');
+  });
+
+  /**
+   * A year the data does not have at all — a stale bookmark, a hand-edited URL.
+   * It falls back rather than rendering a strip of zeros, and says which year it
+   * fell back to, so the control cannot end up showing a value it did not use.
+   */
+  it('falls back to the derived year when the requested one has no data', async () => {
+    queue = twoYears();
+
+    const summary = await buildFor('2011-12');
+
+    expect(summary.academic_year).toBe('2026-27');
+    expect(summary.academic_years).not.toContain('2011-12');
+    expect(kpis(summary.spec).find((w) => w.id === 'kpi-students')?.value).toBe('2,100');
+  });
+});
+
+/**
+ * A total must never claim schools that contributed nothing to it.
+ *
+ * The reported bug, and the reason this is worth its own describe block: three
+ * schools were selected, one had rolled its student roll over to 2025-26 and two
+ * had not, the strip resolved to 2025-26 because that is the newest year ANY of
+ * them had — and then printed "Students · 3 schools — 1,760" while 4,801
+ * children in the other two schools contributed nothing at all.
+ *
+ * Nothing failed. No query was refused, no school was unreachable, no value was
+ * null. The number was simply wrong by a factor of four, in the same typeface as
+ * every true number beside it — CODING_GUIDELINES §10's worst class of bug, and
+ * one that is invisible on any extract where the schools were rolled over
+ * together.
+ */
+describe('a figure that covers only some of the selected schools', () => {
+  const THREE = ['stmarksg', 'stmarksj', 'stmarksmb'];
+
+  function buildThree(academicYear?: string) {
+    return buildHomeSummary({
+      session: { ...SESSION, school_ids: THREE, perms: ['fees.read', 'students.read'] },
+      schoolIds: THREE,
+      ...(academicYear === undefined ? {} : { academicYear }),
+      correlationId: 'corr-1',
+    });
+  }
+
+  /** One school rolled over, two not — the shape that produced the bug. */
+  const unevenRollover = () => [
+    okMulti([
+      { school_id: 'stmarksj', ay: '2025-26', gender: 'Girl', n: 1760 },
+      { school_id: 'stmarksg', ay: '2024-25', gender: 'Girl', n: 1297 },
+      { school_id: 'stmarksmb', ay: '2024-25', gender: 'Girl', n: 3504 },
+    ]),
+    okMulti([{ school_id: 'stmarksj', stafftype: 'CONFIRMATION', n: 2 }]),
+    okMulti([
+      { school_id: 'stmarksj', ay: '2025-26', payable: 100, paid: 90, n: 10 },
+      { school_id: 'stmarksg', ay: '2025-26', payable: 100, paid: 90, n: 10 },
+      { school_id: 'stmarksmb', ay: '2025-26', payable: 100, paid: 90, n: 10 },
+    ]),
+    okMulti([{ school_id: 'stmarksj', ym: '2026-07', marked: 100, present: 81 }]),
+  ];
+
+  it('names the schools missing from the figure', async () => {
+    queue = unevenRollover();
+
+    const summary = await buildThree();
+
+    expect(summary.academic_year).toBe('2025-26');
+    const students = summary.partial_metrics.find((m) => m.label === 'Students');
+    expect(students).toBeDefined();
+    // Named, not counted — a director asking "which of my schools is in this?"
+    // is not helped by "2".
+    expect(students?.schools).toHaveLength(2);
+  });
+
+  /**
+   * [MANDATORY] The tile has to be honest standing alone. It is what gets
+   * screenshotted and quoted; a caveat above it does not travel with it.
+   */
+  it('does not let the tile claim three schools for a one-school figure', async () => {
+    queue = unevenRollover();
+
+    const summary = await buildThree();
+    const students = kpis(summary.spec).find((w) => w.id === 'kpi-students');
+
+    expect(students?.value).toBe('1,760');
+    expect(students?.label).toBe('Students · 1 of 3 schools');
+    expect(students?.label).not.toBe('Students · 3 schools');
+  });
+
+  /**
+   * The metrics are annotated INDEPENDENTLY. A trust can have next year's fee
+   * demand raised for every school while only one has enrolled its students,
+   * which is exactly the fixture above — so the fee tile must carry no caveat.
+   */
+  it('says nothing about a metric every school does cover', async () => {
+    queue = unevenRollover();
+
+    const summary = await buildThree();
+
+    expect(summary.partial_metrics.map((m) => m.label)).toEqual(['Students']);
+  });
+
+  it('says nothing at all when every school covers the year', async () => {
+    queue = [
+      okMulti([
+        { school_id: 'stmarksj', ay: '2025-26', gender: 'Girl', n: 1760 },
+        { school_id: 'stmarksg', ay: '2025-26', gender: 'Girl', n: 1297 },
+        { school_id: 'stmarksmb', ay: '2025-26', gender: 'Girl', n: 3504 },
+      ]),
+      okMulti([{ school_id: 'stmarksj', stafftype: 'CONFIRMATION', n: 2 }]),
+      okMulti([{ school_id: 'stmarksj', ay: '2025-26', payable: 100, paid: 90, n: 10 }]),
+      okMulti([{ school_id: 'stmarksj', ym: '2026-07', marked: 100, present: 81 }]),
+    ];
+
+    const summary = await buildThree();
+    const students = kpis(summary.spec).find((w) => w.id === 'kpi-students');
+
+    expect(students?.value).toBe('6,561');
+    expect(students?.label).toBe('Students · 3 schools');
+    expect(summary.partial_metrics.filter((m) => m.label === 'Students')).toEqual([]);
+  });
+
+  /**
+   * Picking the year the laggards DO have clears the caveat and moves it to
+   * whichever metric is now short — the annotation follows the year on screen
+   * rather than being a fixed property of the selection.
+   */
+  it('follows the year the reader picked', async () => {
+    queue = unevenRollover();
+
+    const summary = await buildThree('2024-25');
+
+    expect(summary.academic_year).toBe('2024-25');
+    const students = kpis(summary.spec).find((w) => w.id === 'kpi-students');
+    expect(students?.value).toBe('4,801');
+    expect(students?.label).toBe('Students · 2 of 3 schools');
+    // The fee book is 2025-26 only, so at 2024-25 it is the one with nothing.
+    expect(summary.blocked_metrics.map((b) => b.label)).toContain('Total fees');
   });
 });

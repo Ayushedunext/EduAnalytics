@@ -350,6 +350,29 @@ body {
   border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); padding: 8px 12px;
   font-size: 12.5px; font-weight: 600; color: var(--color-text-secondary); background: var(--color-surface);
 }
+/* The same chip, with a year SELECTOR in it (Topbar.tsx, 2026-09-03).
+
+   It keeps `.ay`'s box exactly so the control and the read-only chip a
+   single-year school still sees are the same object at the same size — a
+   selection that changed the shape of the chrome around it would make the
+   topbar shift as schools are picked.
+
+   The padding drops on the right because a native `<select>` brings its own
+   disclosure arrow and reserves room for it; without this the chip carries a
+   visible gap after the caret that nothing else in the row has. */
+.aySelect {
+  display: inline-flex; align-items: center; gap: 6px; padding-right: 7px; cursor: pointer;
+}
+.aySelect > span { color: var(--color-text-muted); }
+.aySelect select {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: var(--color-text-primary); cursor: pointer;
+}
+/* The focus ring goes on the CHIP, not the bare select inside it: the select
+   has no border of its own here, so a ring drawn on it would trace the text
+   rather than the control a keyboard user is standing on. */
+.aySelect:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(0, 138, 157, 0.14); }
+.aySelect select:focus-visible { outline: none; }
 .avatar {
   width: 34px; height: 34px; border-radius: 50%;
   background: linear-gradient(155deg, var(--color-chip) 0%, #d3ece6 100%);

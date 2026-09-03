@@ -107,33 +107,72 @@ const SERIES: readonly [string, ...string[]] = [
 ];
 
 /**
- * Each series hue at three steps: shaded foot, base, lit cap.
- *
- * This is what makes a mark read as an object rather than a rectangle. A bar
- * is painted with a gradient ACROSS its thickness -- deep at the bottom edge,
- * base through the middle, light along the top -- which is how a cylinder
- * catches light, and it is the whole of the "3D" impression without any of the
- * geometry that would make a 3D bar lie about its value. The bar's END still
- * lands exactly on its number; only the shading is dimensional.
+ * Each series hue at four steps: shaded foot, base, a half-step above it, lit
+ * cap.
  *
  * Derived rather than hand-picked, then gamut-clamped: teal and green run out
  * of sRGB about 0.1 lightness before red does, so a shared chroma offset would
  * have produced nulls for half the palette.
+ *
+ * -- What each step is for, after 2026-09-03 --------------------------------
+ * `deep` is pressed and hovered states and the KPI tile's edge gradient.
+ * `light` is the lit cap of a donut slice, where a wedge has real area to
+ * shade and the ring genuinely reads better with a curve of light on it.
+ *
+ * `soft` is new and exists because the bars needed a step the palette did not
+ * have. A bar's fill runs from its lit edge to its base colour across the
+ * mark's thickness, and running that from `light` made a 22px bar visibly
+ * two-tone — a reader matching a bar against its legend dot was matching two
+ * different colours, which is the one thing a categorical palette must not
+ * ask. `soft` sits about halfway up, so the sheen is a lit EDGE rather than a
+ * wash and the mark still reads as exactly its palette hue.
  */
-const RAMP: Record<string, { deep: string; light: string }> = {
-  '#008a9d': { deep: '#006472', light: '#61b3c3' },
-  '#3db575': { deep: '#048e53', light: '#84dea7' },
-  '#c78100': { deep: '#986100', light: '#ecb165' },
-  '#c74859': { deep: '#9e1e38', light: '#eb7f88' },
-  '#4967c6': { deep: '#2a439e', light: '#7795e5' },
-  '#64748b': { deep: '#475569', light: '#94a3b8' },
-  '#cbd5e1': { deep: '#94a3b8', light: '#e2e8f0' },
+const RAMP: Record<string, { deep: string; soft: string; light: string }> = {
+  '#008a9d': { deep: '#006472', soft: '#2f9eb0', light: '#61b3c3' },
+  '#3db575': { deep: '#048e53', soft: '#5fc98e', light: '#84dea7' },
+  '#c78100': { deep: '#986100', soft: '#d99833', light: '#ecb165' },
+  '#c74859': { deep: '#9e1e38', soft: '#d96471', light: '#eb7f88' },
+  '#4967c6': { deep: '#2a439e', soft: '#607ed6', light: '#7795e5' },
+  '#64748b': { deep: '#475569', soft: '#7c8ba2', light: '#94a3b8' },
+  '#cbd5e1': { deep: '#94a3b8', soft: '#d7dfe9', light: '#e2e8f0' },
 };
 
 /** The ramp for a colour, falling back to the flat colour at every step. */
-function rampOf(base: string): { deep: string; base: string; light: string } {
+function rampOf(base: string): { deep: string; base: string; soft: string; light: string } {
   const r = RAMP[base];
-  return { deep: r?.deep ?? base, base, light: r?.light ?? base };
+  return { deep: r?.deep ?? base, base, soft: r?.soft ?? base, light: r?.light ?? base };
+}
+
+/**
+ * A point between two sRGB hexes. `t` of 0 is `from`, 1 is `to`.
+ *
+ * Straight-line sRGB rather than an OKLCH interpolation, because both ends are
+ * already steps of ONE audited hue (`RAMP`) rather than two arbitrary colours —
+ * the path between them is short, stays in the family, and the perceptual
+ * bunching that makes naive sRGB blending look muddy needs a long path across
+ * hues to show up. A colour-space conversion here would be arithmetic nobody
+ * could check against a value in docs/10 §1.
+ *
+ * A malformed hex yields `from`, which is a palette colour: a mark drawn in the
+ * series' own base is wrong about magnitude, where a mark drawn in `NaN` is not
+ * drawn at all.
+ */
+function mixHex(from: string, to: string, t: number): string {
+  const parse = (hex: string): [number, number, number] | null => {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex);
+    if (m === null) return null;
+    const n = Number.parseInt(m[1] as string, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const a = parse(from);
+  const b = parse(to);
+  if (a === null || b === null) return from;
+  const k = Math.min(1, Math.max(0, t));
+  const channel = (i: 0 | 1 | 2): string =>
+    Math.round(a[i] + (b[i] - a[i]) * k)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(0)}${channel(1)}${channel(2)}`;
 }
 
 const SERIES_NEUTRALS: readonly [string, string] = ['#64748b', '#cbd5e1'];
@@ -175,15 +214,41 @@ const ACCENT_COLOUR: Record<ChartAccent, string> = {
   negative: SERIES[3] ?? SERIES[0],
 };
 const AXIS: CSSProperties = { fontSize: 11 };
-const GRID = '#eef2f6';
-/** The rail a bar sits in — one step off the card, never a visible box. */
-const TRACK = '#f5f8fa';
+/**
+ * The scale rule behind the marks.
+ *
+ * A grid is a RULER, not part of the picture: it exists so a reader can put a
+ * number on a mark, and every pixel of it that is darker than that job requires
+ * is ink competing with the data. Lightened from `#eef2f6` and drawn dashed on
+ * 2026-09-03, which together are most of the difference between a chart that
+ * looks boxed and one that looks drawn on the card.
+ */
+const GRID = '#e3e8ef';
+/**
+ * A dashed rule reads as a reference line; a solid one reads as a border. The
+ * distinction matters here because these grids run edge to edge across a card
+ * that already has a border of its own, and two solid lines at right angles to
+ * each other is a table, not a chart.
+ */
+const GRID_DASH = '3 4';
 /** The card behind a chart — what a surface gap is painted in. */
 const SURFACE = '#ffffff';
 const MUTED = '#64748b';
 const INK = '#032e36';
 
 const tick = { fill: MUTED, fontSize: 11 };
+
+/**
+ * Axis chrome, off. The tick VALUES stay; the line they hang from and the little
+ * stub beside each one go.
+ *
+ * Recharts draws both by default because a standalone chart has nothing else to
+ * bound it. A panel here does: the card's own border is the frame, the grid is
+ * the scale, and an axis line drawn on top of both is a third boundary saying
+ * what the first two already said. Applied to every axis in this file so no
+ * chart carries chrome another one has dropped.
+ */
+const AXIS_BARE = { axisLine: false, tickLine: false } as const;
 
 /** Numbers are read as quantities, so they are grouped Indian-style. */
 const compactNum = new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 });
@@ -414,6 +479,45 @@ function categoryAxis(rows: readonly Record<string, unknown>[], field: string) {
   let longest = 0;
   for (const row of rows) longest = Math.max(longest, String(row[field] ?? '').length);
   return { count: rows.length, longest, horizontal: longest > 8 || (longest > 5 && rows.length > 14) };
+}
+
+/**
+ * How a VERTICAL chart's category labels are set: flat where they fit, tilted
+ * where they do not.
+ *
+ * Every such axis in this file used to pass `angle={-35}` unconditionally, and
+ * on the axes that needed it — twelve month names across a half-width panel —
+ * it is the right answer. On the ones that did not it is pure chrome: four
+ * quarters, six academic years and twelve roman-numeral classes were all being
+ * drawn on the diagonal, which makes a reader tilt their head to read "Q1" and
+ * gives the bottom of the panel a ragged edge that a flat axis does not have.
+ * Nothing about the reference dashboards this was measured against tilts a short
+ * label, and neither does anything else in the product.
+ *
+ * The threshold is about the label's WIDTH, and the arithmetic is the same
+ * budget `CHAR_PX` states: a category gets roughly `panel / count` pixels, and
+ * `longest * CHAR_PX` has to fit inside that. This module does not know the
+ * panel width (see `rotatedTicks`), so the test is deliberately conservative —
+ * six characters is about 44px, which fits at every count and every panel width
+ * the grid produces, including a `medium` panel with a dozen categories in it.
+ * Anything longer keeps the tilt, so no axis that currently reads gets worse.
+ *
+ * `height` follows the same branch, because a flat row of labels needs one line
+ * of type plus its margin and a tilted one needs room for the diagonal.
+ */
+function categoryTicks(longest: number): {
+  angle?: number;
+  textAnchor: 'end' | 'middle';
+  tickMargin: number;
+  height: number;
+} {
+  if (longest <= 6) return { textAnchor: 'middle', tickMargin: 8, height: 34 };
+  return {
+    angle: -35,
+    textAnchor: 'end',
+    tickMargin: 6,
+    height: clamp(longest * 4.8 + 26, 40, 76),
+  };
 }
 
 /**
@@ -775,6 +879,30 @@ export function BarPanel({
   /** One gradient id per series — declared here because `bars` below paints with them and `gradientDefs` further down declares them. */
   const seriesIds = series.map((_, index) => `${gradId}-s${index}`);
 
+  /**
+   * The range a SINGLE series' magnitude shading is measured against, and the
+   * ramp it is drawn from. Both are computed once here rather than per bar: the
+   * scale of a chart is a property of the chart, and recomputing the maximum
+   * inside the map would be the same scan fourteen times over.
+   *
+   * The largest value, not the largest MINUS the smallest. A bar chart's value
+   * axis starts at zero — that is what makes bar length comparable at all — so
+   * the shading is measured from the same origin the marks are, and a set of
+   * nearly-equal values is nearly-equally shaded rather than being stretched
+   * across the whole ramp to manufacture a difference that is not there.
+   *
+   * Negative values are floored at zero where the share is taken (below), not
+   * here: a negative measure has no position on a zero-based ramp, and clamping
+   * it to the palest step is the same thing the axis does to its bar.
+   */
+  const barMax = grouped
+    ? 0
+    : widget.data.reduce((most, row) => {
+        const value = row[widget.y];
+        return typeof value === 'number' && Number.isFinite(value) ? Math.max(most, value) : most;
+      }, 0);
+  const singleRamp = rampOf(seriesColour);
+
   const bars = grouped
     ? series.map((entry, index) => {
         /**
@@ -844,54 +972,118 @@ export function BarPanel({
         <Bar
           key={widget.y}
           dataKey={widget.y}
-          fill={`url(#${seriesIds[0] ?? gradId})`}
           radius={axis.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
           maxBarSize={axis.horizontal ? BAR_PX.single : BAR_PX.singleV}
           /**
-           * The track behind the mark: the full scale, drawn once at a whisper.
-           * It gives every bar a container to sit in, so a short bar reads as a
-           * small share of something rather than as a stub floating in space --
-           * and it is what makes the row of marks read as a set. Recharts draws
-           * it under the bar for free, so it costs no extra element and cannot
-           * fall out of alignment with the mark.
+           * No track behind the mark, since 2026-09-03.
+           *
+           * It was drawn to give a short bar "a container to sit in", and on a
+           * chart of three schools it did. On Fee Collection's fourteen classes
+           * it drew fourteen full-width grey rails behind fourteen teal bars, and
+           * the panel read as a striped table with the data faint inside it — the
+           * scale rail is louder than the measurement, which is exactly backwards.
+           * The dashed grid below already says where the scale runs, once, for the
+           * whole chart rather than once per row.
            */
-          background={{ fill: TRACK, radius: axis.horizontal ? 4 : 4 }}
-          filter={`url(#${gradId}-glow)`}
           animationEasing="ease-out"
           {...animation}
           activeBar={{ stroke: INK, strokeWidth: 1, strokeOpacity: 0.35 }}
         >
-          {/* Every bar takes the same lit gradient, the tallest included.
-              Painting the leader a deeper step used to mark it out; against a
-              gradient it stopped reading as emphasis and started reading as a
-              SECOND SERIES, which on a single-measure chart is a lie. The
-              longest bar is already the longest — length is the encoding and it
-              does not need help. */}
+          {/**
+            * Each bar shaded along the series' OWN ramp by how big it is —
+            * palest at the bottom of the range, deepest at the top (2026-09-03).
+            *
+            * -- Why this is not the thing that was removed --------------------
+            * What used to be here painted THE TALLEST bar a deeper step, and it
+            * was taken out because singling out one mark on a single-measure
+            * chart reads as a second series: two colours where the data has one
+            * category. A continuous ramp says the opposite. No bar is picked
+            * out, nothing is grouped, and the shade is a function of the same
+            * number the length already draws — so a reader cannot infer a
+            * category from it, because there is none to infer. Length remains
+            * the encoding; the shade is redundant with it, which is exactly what
+            * makes it safe.
+            *
+            * -- What it buys ---------------------------------------------------
+            * Fourteen classes in one flat teal is a picket fence: the panel has
+            * no focus, and the eye has to walk the axis to find the ends of the
+            * range. Shaded, the biggest and smallest classes are visible before
+            * anything is read. The complaint this comes from was that the charts
+            * looked monotonous, and a single-series bar chart is where the
+            * product has the most of them.
+            *
+            * -- The floor is deliberate -----------------------------------------
+            * The scale runs `soft` → `deep`, not `light` → `deep`: `light` is a
+            * cap for shading a donut wedge that has real area, and a 22px bar
+            * painted in it reads as disabled. Starting at `soft` keeps the
+            * smallest bar unmistakably the series' hue while still leaving a
+            * visible distance to the largest.
+            *
+            * A non-numeric or missing value takes the base colour rather than a
+            * position it has not earned. `max <= 0` (every value zero or absent)
+            * takes it too, and the chart is then one flat hue — which is honest:
+            * there is no magnitude to shade by.
+            */}
+          {widget.data.map((row, index) => {
+            const value = row[widget.y];
+            const share =
+              typeof value === 'number' && Number.isFinite(value) && barMax > 0
+                ? Math.max(0, value) / barMax
+                : null;
+            return (
+              <Cell
+                key={String(row[widget.x] ?? index)}
+                fill={
+                  share === null
+                    ? singleRamp.base
+                    : mixHex(singleRamp.soft, singleRamp.deep, share)
+                }
+              />
+            );
+          })}
         </Bar>,
       ];
 
   /**
-   * One gradient per series, running across the mark's THICKNESS -- top-lit for
-   * a horizontal bar, left-lit for a vertical one.
+   * One gradient per series, running across the mark's THICKNESS: the hue's lit
+   * step at the leading edge falling to its base by the far edge.
    *
-   * This replaces a gradient that ran along the bar's LENGTH at two opacities.
-   * Along the length, a gradient fades the mark out toward the baseline and
-   * makes a short bar look washed out and thin -- which was most of "the bars
-   * look dull". Across the thickness it does the opposite: the mark reads as a
-   * lit cylinder, solid at every length, and the effect is strongest on exactly
-   * the small bars that looked weakest.
+   * -- Why this is now two stops and not five (2026-09-03) --------------------
+   * The five-stop version modelled a CYLINDER — deep at both edges, a highlight
+   * inside the top third — and it worked as described: the bars read as tubes.
+   * That turned out to be the problem rather than the achievement. A tube is an
+   * object with a surface, and a reader looking at an object looks at the object;
+   * the whole of a bar's meaning is the position of its end, and everything spent
+   * on making the middle interesting is spent against that. Stacked three-deep in
+   * a grouped chart the tubes also fought each other, and on Fee Collection's
+   * fourteen-class panel they read as plumbing.
    *
-   * Three stops from `RAMP`, never opacity: a translucent fill picks up
-   * whatever is behind it, and behind a bar is now a ghost track (below).
+   * Two stops keep the one thing the shading was actually buying — a mark that
+   * has a lit edge and therefore a direction, so it sits on the card rather than
+   * being a hole cut in it — and drop the rest. The bar is still recognisably
+   * its palette hue at every point, which a five-stop wash through `deep` was
+   * not: a reader matching a bar to its legend dot was matching two colours.
    *
-   * `glowId` is a soft drop shadow in the series' own hue rather than grey.
-   * A grey shadow under a coloured mark reads as dirt; the hue's own shadow
-   * reads as the mark sitting above the card.
+   * Stops from `RAMP`, never opacity: a translucent fill picks up whatever is
+   * behind it, and a chart's background is not always the card (a grid line runs
+   * under these marks).
+   *
+   * The coloured drop shadow that used to sit under a single-series bar is gone
+   * with the tubes and for the same reason. It was there to lift the mark off the
+   * card; what it actually did at 0.34 opacity and 3px blur was smear the hue
+   * into the whitespace under every bar, which is the "dull" it was meant to fix.
+   *
+   * -- Grouped only ------------------------------------------------------------
+   * A single series is painted per bar from `singleRamp` instead (see the `Cell`
+   * children above), so there is nothing here for it to reference. Emitting the
+   * gradient anyway would put an unused `<linearGradient>` in every one-series
+   * chart's `<defs>` — dead paint that a later reader would reasonably assume
+   * something still uses.
    */
-  const gradientDefs = (
+  const gradientDefs = grouped ? (
     <defs>
       {series.map((_, index) => {
-        const ramp = rampOf(grouped ? seriesColourAt(index) : seriesColour);
+        const ramp = rampOf(seriesColourAt(index));
         return (
           <linearGradient
             key={index}
@@ -901,30 +1093,13 @@ export function BarPanel({
             x2={axis.horizontal ? '0' : '1'}
             y2={axis.horizontal ? '1' : '0'}
           >
-            {/* Five stops, not three: a cylinder is dark at BOTH edges with the
-                highlight sitting inside the top third, and a three-stop wash
-                from light to deep only ever reads as a bar that has been faded.
-                The extra two stops are the whole difference between "gradient"
-                and "round". */}
-            <stop offset="0%" stopColor={ramp.deep} />
-            <stop offset="14%" stopColor={ramp.base} />
-            <stop offset="40%" stopColor={ramp.light} />
-            <stop offset="76%" stopColor={ramp.base} />
-            <stop offset="100%" stopColor={ramp.deep} />
+            <stop offset="0%" stopColor={ramp.soft} />
+            <stop offset="100%" stopColor={ramp.base} />
           </linearGradient>
         );
       })}
-      <filter id={`${gradId}-glow`} x="-12%" y="-25%" width="130%" height="160%">
-        <feDropShadow
-          dx={axis.horizontal ? 0 : 0}
-          dy={axis.horizontal ? 2 : 2}
-          stdDeviation="3"
-          floodColor={seriesColour}
-          floodOpacity="0.34"
-        />
-      </filter>
     </defs>
-  );
+  ) : null;
 
   /**
    * [MANDATORY for two or more series] identity is never colour alone, so a
@@ -961,10 +1136,10 @@ export function BarPanel({
   const legend = grouped ? (
     <Legend
       verticalAlign="top"
-      align="left"
+      align="center"
       iconType="circle"
       iconSize={8}
-      wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 6 }}
+      wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 10 }}
       /**
        * `content` rather than `payload`: this Recharts version derives the
        * payload itself and does not accept one, so the only way to fix the
@@ -977,7 +1152,18 @@ export function BarPanel({
           style={{
             display: 'flex',
             flexWrap: 'wrap',
-            gap: '4px 14px',
+            /**
+             * Centred over the plot since 2026-09-03, where it used to sit hard
+             * left under the title.
+             *
+             * Left-aligned, a legend is a second heading: it starts on the same
+             * x as the panel title one line above it and reads as a subtitle
+             * that happens to have dots in it. Centred over the plot it reads as
+             * a key TO the plot, which is what it is — and the gap it leaves
+             * under the title is what makes the title look like a title.
+             */
+            justifyContent: 'center',
+            gap: '4px 16px',
             listStyle: 'none',
             margin: 0,
             padding: 0,
@@ -987,12 +1173,12 @@ export function BarPanel({
           }}
         >
           {series.map((entry, index) => (
-            <li key={entry.field} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <li key={entry.field} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <span
                 aria-hidden="true"
                 style={{
-                  width: 8,
-                  height: 8,
+                  width: 9,
+                  height: 9,
                   borderRadius: '50%',
                   background: seriesColourAt(index),
                   display: 'inline-block',
@@ -1066,24 +1252,25 @@ export function BarPanel({
           >
             {/* Grid lines run along the value axis only -- the category axis has
                 no scale to read against. */}
-            <CartesianGrid stroke={GRID} horizontal={false} />
+            <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} horizontal={false} />
             {gradientDefs}
             {/* Both axes render at every size now -- Home's preview cards are wide
                 enough (2-up, tokens.css `.pgallery`) for the same truncate-with-
                 tooltip treatment the full dashboard uses (`CategoryTick`,
                 `axisNumber` below) to stay legible; a glance no longer has to
                 guess what a bar's category or scale is. */}
-            <XAxis type="number" tick={tick} tickFormatter={axisNumber} height={28} />
+            <XAxis type="number" tick={tick} tickFormatter={axisNumber} height={28} {...AXIS_BARE} />
             <YAxis
               type="category"
               dataKey={widget.x}
               tick={<CategoryTick maxChars={labelChars} />}
               interval={0}
               width={labelWidth}
+              {...AXIS_BARE}
             />
             {/* The tooltip carries the untruncated name: the axis may abbreviate,
                 the reader can still find out what a bar is. */}
-            <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
+            <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.04)' }} />
             {legend}
             {bars}
           </BarChart>
@@ -1133,19 +1320,17 @@ export function BarPanel({
           barGap={2}
           {...chartProps}
         >
-          <CartesianGrid stroke={GRID} vertical={false} />
+          <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
           {gradientDefs}
           <XAxis
             dataKey={widget.x}
             tick={tick}
             {...rotatedTicks}
-            angle={-35}
-            textAnchor="end"
-            tickMargin={4}
-            height={clamp(axis.longest * 4.8 + 26, 40, 76)}
+            {...AXIS_BARE}
+            {...categoryTicks(axis.longest)}
           />
-          <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
-          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.05)' }} />
+          <YAxis tick={tick} tickFormatter={axisNumber} width={54} {...AXIS_BARE} />
+          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(3,46,54,0.04)' }} />
           {legend}
           {bars}
         </BarChart>
@@ -1172,15 +1357,19 @@ interface LineDotProps {
 function makeLineDot(lastIndex: number, color: string): (props: LineDotProps) => ReactElement {
   return function LineDot({ cx = 0, cy = 0, index = -1 }: LineDotProps): ReactElement {
     const isLatest = index === lastIndex;
-    return (
-      <circle
-        cx={cx}
-        cy={cy}
-        r={isLatest ? 4.5 : 3}
-        fill={color}
-        stroke={isLatest ? '#fff' : 'none'}
-        strokeWidth={isLatest ? 2 : 0}
-      />
+    /**
+     * Every reading is a RING — card-coloured inside the series stroke — and the
+     * latest one is the single filled disc on the chart (2026-09-03).
+     *
+     * Filled dots everywhere made the emphasis a size difference of 1.5px, which
+     * nobody can see, and thickened the line into a beaded rule. Inverting it
+     * gives the distinction a channel of its own: the reader is not comparing two
+     * radii, they are finding the one solid mark among the hollow ones.
+     */
+    return isLatest ? (
+      <circle cx={cx} cy={cy} r={4} fill={color} stroke={SURFACE} strokeWidth={2} />
+    ) : (
+      <circle cx={cx} cy={cy} r={3} fill={SURFACE} stroke={color} strokeWidth={1.6} />
     );
   };
 }
@@ -1294,17 +1483,15 @@ export function LinePanel({
         <Panel title={widget.title} variant="wide" compact={compact} actions={actions}>
           <ChartFrame compact={compact} naturalHeight={compact === true ? 240 : 320}>
             <ComposedChart data={pivoted.rows} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
-              <CartesianGrid stroke={GRID} vertical={false} />
+              <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
               <XAxis
                 dataKey={widget.x}
                 tick={tick}
                 {...rotatedTicks}
-                angle={-35}
-                textAnchor="end"
-                tickMargin={4}
-                height={clamp(categoryAxis(pivoted.rows, widget.x).longest * 4.8 + 26, 40, 76)}
+                {...AXIS_BARE}
+                {...categoryTicks(categoryAxis(pivoted.rows, widget.x).longest)}
               />
-              <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
+              <YAxis tick={tick} tickFormatter={axisNumber} width={54} {...AXIS_BARE} />
               <Tooltip content={<ChartTooltip />} cursor={{ stroke: MUTED, strokeWidth: 1, strokeDasharray: '3 3' }} />
               {/* [MANDATORY for two or more series] identity is never colour
                   alone -- the same rule the grouped bar follows, including its
@@ -1314,10 +1501,10 @@ export function LinePanel({
                   plot down instead of printing on it. */}
               <Legend
                 verticalAlign="top"
-                align="left"
+                align="center"
                 iconType="plainline"
                 iconSize={14}
-                wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 6 }}
+                wrapperStyle={{ fontSize: 11, color: MUTED, paddingBottom: 10 }}
               />
               {pivoted.names.map((name, index) => (
                 <Line
@@ -1334,7 +1521,18 @@ export function LinePanel({
                    * print, which colour alone does not (docs/10 §1).
                    */
                   {...(index === 0 ? {} : { strokeDasharray: '5 4' })}
-                  dot={{ r: 2.5, fill: SERIES[index] ?? SERIES_OTHER, strokeWidth: 0 }}
+                  /**
+                   * A ring, not a disc: card-coloured fill inside the series'
+                   * own stroke.
+                   *
+                   * A filled dot is a blob of the same ink the line is drawn in,
+                   * so on a two-series chart the points stop reading as readings
+                   * and start reading as a thicker line — and where two lines
+                   * cross, four solid dots in two hues become one smudge. A ring
+                   * keeps the point locatable because the card shows THROUGH it,
+                   * which is also what stops the crossing from filling in.
+                   */
+                  dot={{ r: 3, fill: SURFACE, stroke: SERIES[index] ?? SERIES_OTHER, strokeWidth: 1.6 }}
                   activeDot={{ r: 5, fill: SERIES[index] ?? SERIES_OTHER, stroke: '#fff', strokeWidth: 2 }}
                   connectNulls={false}
                   {...animation}
@@ -1372,12 +1570,18 @@ export function LinePanel({
             {/* A static fade to transparent — fixed SVG stops, not a timed
                 effect, so the PDF capture (ADR-021) still matches the screen
                 exactly at whatever instant Puppeteer takes the shot. */}
+            {/* 0.18 at the top, not 0.30 (2026-09-03). The fill is there to say
+                which side of the line is "under" it; past about a fifth it stops
+                being a shadow of the trend and becomes a filled REGION, and the
+                eye starts reading its area — which on a monthly receipts chart
+                is a quantity nobody measured. The line is the finding; the wash
+                is punctuation. */}
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={seriesColor} stopOpacity={0.30} />
+              <stop offset="0%" stopColor={seriesColor} stopOpacity={0.18} />
               <stop offset="100%" stopColor={seriesColor} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke={GRID} vertical={false} />
+          <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
           {/* A line's x is a sequence — months, terms — so it stays horizontal
               and only sizes its band to the labels it actually has. Rendered
               at every size now (see BarPanel's axes above for why compact no
@@ -1386,12 +1590,10 @@ export function LinePanel({
             dataKey={widget.x}
             tick={tick}
             {...rotatedTicks}
-            angle={-35}
-            textAnchor="end"
-            tickMargin={4}
-            height={clamp(categoryAxis(widget.data, widget.x).longest * 4.8 + 26, 40, 76)}
+            {...AXIS_BARE}
+            {...categoryTicks(categoryAxis(widget.data, widget.x).longest)}
           />
-          <YAxis tick={tick} tickFormatter={axisNumber} width={54} />
+          <YAxis tick={tick} tickFormatter={axisNumber} width={54} {...AXIS_BARE} />
           <Tooltip
             content={<ChartTooltip />}
             cursor={{ stroke: seriesColor, strokeWidth: 1, strokeDasharray: '3 3' }}
@@ -1491,17 +1693,19 @@ export function DonutPanel({
       <div className="specDonutWrap">
         <ResponsiveContainer width="100%" height={compact === true ? 210 : 220}>
           <PieChart>
-            {/* One gradient per slice, lit from the top-left, so the ring reads
-                as a band with thickness rather than as flat colour wedges —
-                the same lighting the bars use, on a curve. */}
+            {/* One gradient per slice, lit from the top-left — the same two-stop
+                sheen the bars take (`gradientDefs` in BarPanel), for the same
+                reason it was cut to two stops there: a three-stop wash that ends
+                on `deep` paints the bottom of the ring in a colour the legend dot
+                beside it is not, and a reader matching a wedge to its label is
+                then matching two hues. Lit edge, base body, nothing else. */}
             <defs>
               {widget.data.map((_, index) => {
                 const ramp = rampOf(index < SERIES.length ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER);
                 return (
                   <linearGradient key={index} id={`${donutId}-s${index}`} x1="0" y1="0" x2="0.8" y2="1">
-                    <stop offset="0%" stopColor={ramp.light} />
-                    <stop offset="52%" stopColor={ramp.base} />
-                    <stop offset="100%" stopColor={ramp.deep} />
+                    <stop offset="0%" stopColor={ramp.soft} />
+                    <stop offset="100%" stopColor={ramp.base} />
                   </linearGradient>
                 );
               })}
@@ -1564,13 +1768,35 @@ export function DonutPanel({
         <ul className="specDonutLegend">
           {widget.data.map((row, index) => {
             const inPalette = index < SERIES.length;
+            /**
+             * Each slice's SHARE, beside its name (2026-09-03).
+             *
+             * A donut's whole subject is proportion, and a legend that gives
+             * only names hands the reader a colour key and asks them to
+             * eyeball the angles — which is the one thing people are measurably
+             * bad at. The number turns the legend into the readout and leaves
+             * the ring to do what it is good at, which is showing the shape of
+             * the split at a glance.
+             *
+             * A percentage, never the raw value: the underlying figures reach
+             * this renderer as numbers rather than the server-formatted strings
+             * a KPI carries, so printing them would mean this file inventing a
+             * currency format the rest of the product decided once, elsewhere.
+             * A share has no such problem — it is a ratio of two numbers in the
+             * same unit, and the unit cancels. Rounded to whole percent, so the
+             * column stays a column; the exact figure is a hover away on the
+             * ring, which is where an exact figure belongs.
+             */
+            const value = row[widget.value_field];
+            const share = typeof value === 'number' && total > 0 ? value / total : null;
             return (
               <li key={String(row[widget.label_field] ?? index)}>
                 <span
                   className="dot"
                   style={{ background: inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER }}
                 />
-                {String(row[widget.label_field] ?? '')}
+                <span className="name">{String(row[widget.label_field] ?? '')}</span>
+                {share !== null && <span className="share">{Math.round(share * 100)}%</span>}
               </li>
             );
           })}

@@ -231,14 +231,18 @@ body {
 
 /* ---------- chart depth on paper (added 2026-09-01) ----------
 
-   The screen's marks carry a soft drop shadow in their own hue (widgets.tsx,
-   `feDropShadow`). On a screen that lifts the bar off the card; in CMYK at
-   300dpi it prints as a smudge along one edge, and on a mono office printer it
-   prints as grey fringing that reads like a registration error.
+   The screen's marks used to carry a soft drop shadow in their own hue
+   (widgets.tsx, `feDropShadow`). On a screen that lifted the bar off the card;
+   in CMYK at 300dpi it printed as a smudge along one edge, and on a mono office
+   printer as grey fringing that reads like a registration error. So paper
+   dropped it, the same way it drops the drill hint and the pointer cursor: what
+   does not survive the medium is removed for that medium, not for both.
 
-   The gradient FILL stays -- it is the part that makes a bar look round, it
-   survives ink, and dropping it would make the PDF a different chart from the
-   one the reader approved on screen (ADR-021's whole point). Only the shadow
-   goes. Same reasoning as the drill hint and the pointer cursor: what does not
-   survive the medium is removed for that medium, not for both. */
+   The shadow itself went for everyone on 2026-09-03 (docs/10 §1 principle 2),
+   which leaves nothing for this rule to strip today. It stays anyway, and
+   deliberately: it is a rule about the MEDIUM, not about one filter that
+   happened to exist. An SVG filter is a screen effect by nature -- a blur, a
+   glow, a shadow -- and the next one someone reaches for will print as badly as
+   this one did. Removing the guard would mean discovering that again in a
+   customer's inbox, on a document that had already been approved on screen. */
 .printPage svg [filter] { filter: none !important; }

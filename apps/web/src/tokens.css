@@ -76,15 +76,30 @@
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
   --radius-sm: 7px;
-  --radius-card: 12px;
+  /* 14px, from 12px (2026-09-03). A card's corner is read against its own size:
+     at the ~340-720px a panel occupies, 12px reads as a square with the corners
+     knocked off and 14 reads as rounded. Chips and inputs keep `--radius-sm`,
+     so the step between "small control" and "surface" is now visible rather
+     than a two-pixel difference nobody registers. */
+  --radius-card: 14px;
   --radius-lg: 16px;
   --radius-pill: 999px;
 
   /* Soft-UI elevation scale: page → surface → elevated → hover/floating.
-     Two low-contrast layers, never one heavy drop shadow (§12 "restrained"). */
-  --shadow-xs: 0 1px 2px rgba(3, 46, 54, 0.05);
-  --shadow-card: 0 1px 2px rgba(3, 46, 54, 0.05), 0 6px 16px -6px rgba(3, 46, 54, 0.09);
-  --shadow-card-hover: 0 2px 4px rgba(3, 46, 54, 0.06), 0 14px 28px -10px rgba(3, 46, 54, 0.16);
+     Two low-contrast layers, never one heavy drop shadow (§12 "restrained").
+
+     Lightened 2026-09-03. A dashboard is a page of cards on a tinted canvas, and
+     the canvas ALREADY separates them: at the old weights every panel carried a
+     visible dark halo, and eleven of them on one page read as a stack of
+     floating slabs rather than as a quiet sheet of readings. The shadow's job
+     here is only to keep a white card from dissolving into a near-white
+     background, which takes far less ink than lifting it off the page.
+
+     `--shadow-float` is untouched: a popover or a menu really is floating above
+     the page, and that one has to look like it. */
+  --shadow-xs: 0 1px 2px rgba(3, 46, 54, 0.04);
+  --shadow-card: 0 1px 2px rgba(3, 46, 54, 0.04), 0 4px 12px -8px rgba(3, 46, 54, 0.08);
+  --shadow-card-hover: 0 1px 3px rgba(3, 46, 54, 0.05), 0 10px 22px -12px rgba(3, 46, 54, 0.13);
   --shadow-float: 0 8px 28px -6px rgba(3, 46, 54, 0.22), 0 2px 8px rgba(3, 46, 54, 0.08);
 }
 
@@ -399,11 +414,16 @@ body {
      as a layout accident beside its three neighbours. A strip ranks by ORDER
      and colours by `tone`; neither needs a tile to change size. */
   flex: 1 1 190px;
-  padding: 17px 19px 15px;
+  padding: 16px 20px 17px;
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  /* 3px, from 5px. The label and the figure it names are ONE thing and belong
+     on a tight rhythm; at 5px they read as two stacked items, which is what
+     made a four-tile strip look like a row of half-empty boxes. The air the gap
+     was providing moved into the padding, where it separates the tile's content
+     from the tile's edge instead of splitting the content. */
+  gap: 3px;
   border-left: 3px solid var(--color-border-strong);
   overflow: hidden;
 }
@@ -426,24 +446,32 @@ body {
   border-style: solid; border-width: 0 0 0 3px;
 }
 
+/* A kicker, not a sentence: smaller and tracked out, so it reads as the NAME of
+   the figure below rather than as a line of text the figure interrupts. This is
+   the docs/10 §1 caption step (11 + tracking) finally applied where the type
+   scale always said it should be. */
 .kpiLabel {
-  font-size: 11.5px; font-weight: 600; color: var(--color-text-muted);
-  letter-spacing: 0.01em; line-height: 1.35;
+  font-size: 11px; font-weight: 600; color: var(--color-text-muted);
+  letter-spacing: 0.03em; line-height: 1.35;
 }
+/* 29px, from 26px. The figure is the whole reason the tile exists and it was
+   sitting at barely twice its own label; the strip read as four labelled boxes
+   rather than four numbers. Still inside `.kpi`'s 190px basis at the longest
+   value the product produces ("₹87.6Cr"). */
 .kpiValue {
-  display: block; font-size: 26px; font-weight: 650; letter-spacing: -0.02em;
+  display: block; font-size: 29px; font-weight: 650; letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.15;
 }
 /* The one-off legacy shape (`<b>` direct child, no wrapper spans) still used by
    the unavailable-metric tile below keeps its own rule so both read the same
-   without every caller needing the new markup. Its figure sits at 26px — the
-   same as `.kpiValue` since 2026-09-01, where it was 24px before: an
+   without every caller needing the new markup. Its figure tracks `.kpiValue`
+   exactly — 24px, then 26px on 2026-09-01, then 29px on 2026-09-03: an
    unavailable tile stands in a row of real ones (Dashboard's "Student
    attendance · NO DATA" beside three live figures), and its em-dash sitting two
    pixels short was the same unevenness at tile scale that the hero was at strip
    scale. What marks it as unavailable is its muted colour and its pill, not a
    size nobody can name. */
-.kpi > b:first-child { display: block; font-size: 26px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
+.kpi > b:first-child { display: block; font-size: 29px; font-weight: 650; letter-spacing: -0.025em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
 .kpi > span { font-size: 12px; color: var(--color-text-muted); }
 .kpi.unavailable { border-left-color: var(--color-border); }
 .kpi.unavailable b { color: var(--color-border-strong); }
@@ -695,10 +723,19 @@ body {
      spec; DOM/reading order is untouched, so this is a paint-order effect
      only, not a semantic reordering. */
   grid-auto-flow: dense;
-  gap: 16px;
+  /* 20px, from 16px (2026-09-03). The gap is the only thing separating one
+     panel from the next now that the panels themselves are quieter — lighter
+     border, softer shadow — so it has to carry more of the work of saying
+     "these are separate readings". Under about 18px a row of cards reads as one
+     ruled block. */
+  gap: 20px;
   align-items: stretch;
 }
-.specPanel { grid-column: span 6; min-width: 0; padding: 19px 21px; display: flex; flex-direction: column; }
+/* Roomier than the 19/21 it was, for the same reason the grid gap grew: a
+   quiet card gets its definition from its whitespace rather than from its
+   edges, and a chart pressed to within 19px of a border reads as cramped
+   whatever the border looks like. */
+.specPanel { grid-column: span 6; min-width: 0; padding: 20px 22px 18px; display: flex; flex-direction: column; }
 .specPanel--hero { grid-column: span 7; }
 .specPanel--side { grid-column: span 5; }
 .specPanel--medium { grid-column: span 6; }
@@ -715,8 +752,11 @@ body {
   }
 }
 
-.specPanelHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-.specPanelTitle { font-size: 14.5px; color: var(--color-text-primary); font-weight: 600; letter-spacing: -0.005em; }
+/* `center`, not `baseline` (2026-09-03): the actions on the right are chips and
+   icon buttons with no text baseline of their own, so aligning to one put a
+   24px clone button a couple of pixels high on every panel that had one. */
+.specPanelHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; min-height: 24px; flex-wrap: wrap; }
+.specPanelTitle { font-size: 15px; color: var(--color-text-primary); font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; }
 .specPanelBadge { font-size: 10.5px; color: var(--color-text-muted); font-weight: 600; white-space: nowrap; }
 .specPanelActions { display: flex; align-items: center; flex-shrink: 0; }
 
@@ -977,12 +1017,33 @@ body {
 .specDonutCenter .value { font-size: 19px; font-weight: 700; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
 .specDonutCenter .label { font-size: 9.5px; color: var(--color-text-muted); letter-spacing: 0.06em; text-transform: uppercase; max-width: 15ch; text-align: center; }
 
+/* A two-column KEY, not a wrapped row of names (2026-09-03).
+
+   The old rule was `flex-wrap` centred, which packed five payment modes into a
+   ragged line-and-a-half under the ring — the reader's eye had to travel left,
+   right, then back left again to collect five labels, and the fifth one sat
+   alone looking like an afterthought. A two-column grid gives every entry the
+   same left edge and puts its share on a shared right edge, so the shares form
+   a column that can be read down like a small table; that column is the whole
+   reason the legend now carries numbers at all (widgets.tsx).
+
+   `auto-fit` with a 130px floor rather than a hard `repeat(2, …)`: on the narrow
+   side of a `side` panel, or in the Ask-AI canvas, two columns of long payment
+   names would clip, and one honest column beats two truncated ones. */
 .specDonutLegend {
-  display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px;
-  list-style: none; margin: 6px 0 0; padding: 0; font-size: 11.5px; color: var(--color-text-secondary);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 7px 18px; list-style: none; margin: 14px 0 0; padding: 0;
+  font-size: 11.5px; color: var(--color-text-secondary);
 }
-.specDonutLegend li { display: flex; align-items: center; gap: 6px; }
+.specDonutLegend li { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .specDonutLegend .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+/* The name yields; the share never does. A truncated label is still findable on
+   the ring by its colour, where a truncated percentage is just wrong. */
+.specDonutLegend .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.specDonutLegend .share {
+  margin-left: auto; flex-shrink: 0; font-weight: 650; font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
 
 /* Card-sized chart (Panel's `compact` prop, widgets.tsx) -- no `.card`/title
    chrome of its own, the caller's card supplies both. Used only by Home's
@@ -1014,20 +1075,39 @@ body {
 /* Wide tables scroll inside the panel rather than stretching the page. */
 .specTableWrap { overflow-x: auto; max-height: 420px; overflow-y: auto; border-radius: var(--radius-sm); }
 .specTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* The header is a LABEL STRIP, not a filled band (2026-09-03).
+
+   It used to carry `--color-surface-sunken` behind it, which put a grey bar
+   across the top of every table panel — the loudest horizontal element on a
+   card whose subject is the rows underneath. A single rule under smaller, more
+   tracked, muted type says "these are the column names" just as clearly and
+   costs one pixel of ink instead of a band.
+
+   Still sticky, and still opaque: it scrolls over rows inside `.specTableWrap`,
+   so it needs a background of its own or the rows show through it. That
+   background is now the CARD colour, which is invisible until the moment it has
+   to do its job. */
 .specTable th {
-  background: var(--color-surface-sunken); text-align: left; padding: 10px 13px; color: var(--color-text-secondary);
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase;
-  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface); text-align: left; padding: 0 14px 9px; color: var(--color-text-muted);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase;
+  border-bottom: 1px solid var(--color-border-strong);
   position: sticky; top: 0; z-index: 1;
 }
+/* Roomier rows: 12px, from 9px. A table on this page is read by scanning DOWN a
+   column of figures, and the thing that makes that easy is the air between
+   lines, not the rule under them — so the padding grew and the rule got
+   lighter. */
 .specTable td {
-  padding: 9px 13px; border-bottom: 1px solid #eef2f6; color: var(--color-text-secondary);
+  padding: 12px 14px; border-bottom: 1px solid #f1f5f9; color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .specTable tr:last-child td { border-bottom: none; }
 .specTable tbody tr { transition: background-color 0.1s ease; }
-.specTable tbody tr:hover td { background: var(--color-surface-sunken); }
-.specTable td:first-child, .specTable th:first-child { color: var(--color-text-primary); font-weight: 500; }
+.specTable tbody tr:hover td { background: #f8fafc; }
+/* The row's SUBJECT — the school, the fee head, the class — reads as ink; the
+   measurements beside it read as body text. Without the weight difference a
+   row is a line of eight equal strings and the reader has to find the label. */
+.specTable td:first-child, .specTable th:first-child { color: var(--color-text-primary); font-weight: 550; }
 
 /* A sortable column heading (chart-spec `TablePanel`).
 

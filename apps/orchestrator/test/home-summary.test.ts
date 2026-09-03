@@ -111,11 +111,11 @@ vi.mock('../src/mcp/client.js', () => ({
 /**
  * Distinct names per school, not one name for all of them.
  *
- * It used to answer "Meera Bagh" for every id, which was harmless while nothing
- * asserted on a name — and became actively misleading the moment the outliers
- * panel did: a test checking that the laggard is named correctly passes against
- * ANY school when every school has the same name. `stmarksmb` keeps its name so
- * the single-school cases above read as they did.
+ * It used to answer "Meera Bagh" for every id. That was harmless while nothing
+ * asserted on a name and quietly dangerous the moment something did — a test
+ * checking that the right school is named passes against ANY school when every
+ * school has the same name. `stmarksmb` keeps its name so the single-school
+ * cases below read as they did.
  */
 vi.mock('../src/db/registry.js', () => ({
   schoolNames: (ids: readonly string[]) =>
@@ -938,128 +938,5 @@ describe('a figure that covers only some of the selected schools', () => {
     expect(students?.label).toBe('Students · 2 of 3 schools');
     // The fee book is 2025-26 only, so at 2024-25 it is the one with nothing.
     expect(summary.blocked_metrics.map((b) => b.label)).toContain('Total fees');
-  });
-});
-
-/**
- * "Where to look first" — the outliers across the selected schools.
- *
- * Every row is a comparison built by regrouping rows the KPI strip already
- * read, so the panel costs no extra query against a school database. What these
- * pin down is the honesty of the comparison rather than the arithmetic: which
- * rows may appear at all, and which must not.
- */
-describe('the outliers panel', () => {
-  const THREE = ['stmarksg', 'stmarksj', 'stmarksmb'];
-
-  function buildThree() {
-    return buildHomeSummary({
-      session: { ...SESSION, school_ids: THREE, perms: ['fees.read', 'students.read'] },
-      schoolIds: THREE,
-      correlationId: 'corr-1',
-    });
-  }
-
-  function highlights(summary: Awaited<ReturnType<typeof buildHomeSummary>>) {
-    const table = summary.spec.widgets.find((w) => w.id === 'table-highlights');
-    return table !== undefined && table.type === 'table'
-      ? table.rows.map((r) => `${String(r['highlight'])} | ${String(r['school_name'])} | ${String(r['value'])}`)
-      : null;
-  }
-
-  it('names the laggard first, then the leader, the arrears and the register', async () => {
-    queue = [
-      okMulti([{ school_id: 'stmarksj', ay: '2026-27', gender: 'Girl', n: 100 }]),
-      okMulti([{ school_id: 'stmarksj', stafftype: 'CONFIRMATION', n: 2 }]),
-      okMulti([
-        { school_id: 'stmarksg', ay: '2026-27', payable: 1000, paid: 500, n: 500 },
-        { school_id: 'stmarksj', ay: '2026-27', payable: 1000, paid: 900, n: 100 },
-        { school_id: 'stmarksmb', ay: '2026-27', payable: 1000, paid: 800, n: 200 },
-      ]),
-      okMulti([
-        { school_id: 'stmarksg', ym: '2026-07', marked: 100, present: 90 },
-        { school_id: 'stmarksj', ym: '2026-07', marked: 100, present: 60 },
-      ]),
-    ];
-
-    const rows = highlights(await buildThree());
-
-    expect(rows?.[0]).toBe('Lowest fee realisation | World School | 50.0%');
-    expect(rows?.[1]).toBe('Best fee realisation | Janakpuri | 90.0%');
-    // World School owes the most (500 against 100 and 200).
-    expect(rows?.some((r) => r === 'Largest outstanding | World School | ₹500')).toBe(true);
-    // Only two schools marked a register; the worse of those two is named.
-    expect(rows?.some((r) => r.startsWith('Lowest attendance') && r.includes('Janakpuri | 60.0%'))).toBe(
-      true,
-    );
-  });
-
-  /**
-   * [MANDATORY] A "lowest" that is also the highest is not a finding.
-   *
-   * Two schools both realising 99.8% differ by rounding, and printing one of
-   * them as the laggard sends a reader to open a school with nothing wrong with
-   * it — a confident answer to a question the data does not settle, which is the
-   * failure class this whole file exists for.
-   */
-  it('names no laggard when the schools do not differ', async () => {
-    queue = [
-      okMulti([{ school_id: 'stmarksj', ay: '2026-27', gender: 'Girl', n: 100 }]),
-      okMulti([{ school_id: 'stmarksj', stafftype: 'CONFIRMATION', n: 2 }]),
-      okMulti([
-        { school_id: 'stmarksg', ay: '2026-27', payable: 1000, paid: 900, n: 100 },
-        { school_id: 'stmarksj', ay: '2026-27', payable: 2000, paid: 1800, n: 200 },
-        { school_id: 'stmarksmb', ay: '2026-27', payable: 500, paid: 450, n: 50 },
-      ]),
-      okMulti([{ school_id: 'stmarksj', ym: '2026-07', marked: 100, present: 90 }]),
-    ];
-
-    const rows = highlights(await buildThree());
-
-    expect(rows?.some((r) => r.startsWith('Lowest fee realisation'))).toBe(false);
-    expect(rows?.some((r) => r.startsWith('Best fee realisation'))).toBe(false);
-    // The arrears row still stands: those figures genuinely differ.
-    expect(rows?.some((r) => r.startsWith('Largest outstanding'))).toBe(true);
-  });
-
-  /**
-   * A school with no rows for the year is ABSENT from the ranking, never its
-   * bottom. Ranking an absence as the worst is the same error as summing it into
-   * a confident zero.
-   */
-  it('ranks only the schools that have figures for the year', async () => {
-    queue = [
-      okMulti([{ school_id: 'stmarksj', ay: '2026-27', gender: 'Girl', n: 100 }]),
-      okMulti([{ school_id: 'stmarksj', stafftype: 'CONFIRMATION', n: 2 }]),
-      okMulti([
-        { school_id: 'stmarksg', ay: '2026-27', payable: 1000, paid: 500, n: 500 },
-        { school_id: 'stmarksj', ay: '2026-27', payable: 1000, paid: 900, n: 100 },
-        // Meera Bagh has raised no demand for this year at all.
-      ]),
-      okMulti([{ school_id: 'stmarksj', ym: '2026-07', marked: 100, present: 90 }]),
-    ];
-
-    const rows = highlights(await buildThree());
-
-    expect(rows?.some((r) => r.includes('Meera Bagh'))).toBe(false);
-    expect(rows?.some((r) => r.includes('across 2 schools'))).toBe(true);
-  });
-
-  /**
-   * A single school in scope gets no panel. Every row is a comparison, and with
-   * one school "largest outstanding" names the only school there is while
-   * "average across 1 school" is that school — a table of tautologies.
-   */
-  it('is omitted for a single school', async () => {
-    queue = [
-      ok([{ ay: '2026-27', gender: 'Girl', n: 100 }]),
-      ok([{ stafftype: 'CONFIRMATION', n: 2 }]),
-      ok([{ ay: '2026-27', payable: 1000, paid: 900, n: 100 }]),
-      ok([{ ym: '2026-07', marked: 100, present: 90 }]),
-    ];
-
-    const summary = await build();
-
-    expect(highlights(summary)).toBeNull();
   });
 });

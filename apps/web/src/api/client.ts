@@ -128,36 +128,21 @@ export interface KpiWidget {
   tone?: 'neutral' | 'positive' | 'warning' | 'negative';
 }
 
-/**
- * A panel Home draws below the KPI strip — today only the outliers table
- * (services/home.ts, `table-highlights`).
- *
- * Typed loosely on purpose. The authoritative widget contract lives in
- * `@sap/chart-spec` and `WidgetSpecView` validates against it before drawing;
- * a second, hand-written copy of the table schema here would be a weaker check
- * that eventually disagrees with the real one.
- */
-export interface HomePanelWidget {
-  id: string;
-  type: 'table';
-  title?: string;
-  columns: unknown[];
-  rows: unknown[];
-}
-
-export type HomeWidget = KpiWidget | HomePanelWidget;
-
 export interface ChartSpecLike {
   spec_version: 1;
   title: string;
   narrative?: string;
   /**
-   * KPI tiles AND panels, in the server's order. Home splits them by `type`:
-   * tiles go in the strip, everything else below it. It was `KpiWidget[]`, which
-   * was true until the outliers table landed and is the kind of assumption that
-   * fails silently — the table rendered as a blank tile in the strip.
+   * KPI tiles, in the server's order — the strip is all Home draws from the spec.
+   *
+   * Narrow on purpose, and it has to STAY true: `Home.tsx` renders each of these
+   * through `KpiTile`, which reads `label` and `value` and nothing else. A widget
+   * of another kind would render as a blank card rather than fail, which is how
+   * this was found the one time the server did send one. If Home ever grows a
+   * panel, this widens and the component splits on `type` — it must not be left
+   * to discover the mismatch at runtime.
    */
-  widgets: HomeWidget[];
+  widgets: KpiWidget[];
   meta: {
     scope: { school_id: string; school_name: string }[];
     generated_at: string;

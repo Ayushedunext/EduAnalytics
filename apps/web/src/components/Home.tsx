@@ -73,14 +73,8 @@
  * simply appear as they are ready.
  */
 
-import { KpiTile, WidgetSpecView } from '@sap/chart-spec/react';
-import type {
-  HomeResponse,
-  HomePreview,
-  KpiWidget,
-  SessionResponse,
-  DashboardCard,
-} from '../api/client';
+import { KpiTile } from '@sap/chart-spec/react';
+import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
 import { PreviewCard } from './PreviewCard';
 
 interface Props {
@@ -130,18 +124,6 @@ export function Home({
   });
   const onGrid = new Set(home.grid);
   const more = home.dashboards.filter((card) => !onGrid.has(card.id));
-
-  /**
-   * The strip takes the KPI tiles; everything else is a panel drawn below it.
-   *
-   * Split on `type` rather than assuming the spec holds only tiles. It did hold
-   * only tiles until the outliers table landed, and the assumption failed the
-   * way assumptions like this always do — silently: the table went through
-   * `KpiTile`, which found no `label` or `value` on it and rendered a blank card
-   * at the end of the strip.
-   */
-  const kpiWidgets = home.spec.widgets.filter((w): w is KpiWidget => w.type === 'kpi');
-  const panelWidgets = home.spec.widgets.filter((w) => w.type !== 'kpi');
 
   return (
     <main className="flex-1 overflow-y-auto">
@@ -268,7 +250,7 @@ export function Home({
             Key indicators
           </h2>
           <div className="kpis">
-          {kpiWidgets.map((widget) => (
+          {home.spec.widgets.map((widget) => (
             // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
             // reads identically everywhere in the product, and since 2026-09-01
             // that includes its SIZE: the lead metric leads by being first, not
@@ -294,28 +276,6 @@ export function Home({
           ))}
           </div>
         </section>
-
-        {/**
-          * Panels the server sent with the summary — today the outliers table
-          * (services/home.ts, "Where to look first").
-          *
-          * Drawn through `WidgetSpecView`, which validates the widget against
-          * the real chart-spec schema before rendering it (CODING_GUIDELINES
-          * §10). Home must not be the one screen in the product that renders an
-          * unvalidated widget just because it happens to build its own layout.
-          *
-          * In a `.specPanels` grid so the panel takes the same footprint rule
-          * every report page uses — a three-column table is `medium`, so it
-          * sits at half width and the row's other half is the natural slot for
-          * whatever goes on this page next.
-          */}
-        {panelWidgets.length > 0 && (
-          <div className="specPanels mt-3">
-            {panelWidgets.map((widget) => (
-              <WidgetSpecView key={widget.id} widget={widget} />
-            ))}
-          </div>
-        )}
 
         <div className="sect">
           Your dashboards

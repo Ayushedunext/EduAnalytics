@@ -26,6 +26,7 @@ import {
   applyRefinement,
   cloneReport,
   deleteReport,
+  drillCustomReport,
   duplicateReport,
   listMyReports,
   listReportSources,
@@ -190,10 +191,98 @@ customReportsRouter.post('/api/reports/:id/duplicate', (req: Request, res: Respo
   })().catch(next);
 });
 
+/**
+ * The drill body, identical in shape to `routes/report.ts`'s.
+ *
+ * CODING_GUIDELINES §6 fixes the drill request as `{ level, context[] }`, and
+ * a custom report drilling by a differently-shaped body would be a second
+ * convention for the same interaction. What differs is only the resource this
+ * is addressed to: `/api/reports/:id` is a `report_definitions` row, so no
+ * filters ride in the query string — a clone drills under the filter values it
+ * SAVED (ADR-018), which the service reads from the definition.
+ */
+const drillBodySchema = z
+  .object({
+    widget_id: z.string().min(1).max(64),
+    level: z.number().int(),
+    context: z
+      .array(
+        z
+          .object({
+            dim: z.string().min(1).max(64),
+            value: z.string().min(1).max(128),
+            /** Display text, echoed into a chart title — capped like its predefined twin. */
+            label: z.string().min(1).max(128),
+          })
+          .strict(),
+      )
+      .max(3),
+  })
+  .strict();
+
+customReportsRouter.post('/api/reports/:id/drill', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const session = sessionOf(req);
+    const id = req.params['id'];
+    if (typeof id !== 'string' || id === '') badRequest('A report id is required.', req.correlationId);
+    const parsed = drillBodySchema.safeParse(req.body);
+    if (!parsed.success) badRequest('That drill request could not be read.', req.correlationId);
+    const schoolIds = await resolveRequestedSchools(req);
+
+    const drill = await drillCustomReport({
+      session,
+      correlationId: req.correlationId,
+      id,
+      requestedSchoolIds: schoolIds,
+      widgetId: parsed.data.widget_id,
+      level: parsed.data.level,
+      context: parsed.data.context,
+    });
+
+    /**
+     * [MANDATORY] docs/08 §7: "drill click + context", written AFTER the level
+     * was produced and against the NARROWED school set the level actually read
+     * — the same rule and the same reasoning as the predefined route's. The
+     * `report_id` is the custom report's own id, because that is the report
+     * this person opened; the base it clones is recoverable from the definition
+     * and is not what the trail is answering for.
+     */
+    await auditSink.write({
+      kind: 'drill.clicked',
+      at: new Date().toISOString(),
+      actor_sub: session.sub,
+      org_id: session.org_id,
+      correlation_id: req.correlationId,
+      report_id: id,
+      school_ids: drill.school_ids,
+      level: drill.level,
+      context: drill.context.map((step) => ({ dim: step.dim, value: step.value })),
+    });
+
+    res.json(drill);
+  })().catch(next);
+});
+
 const visualBodySchema = z.object({
   academic_year: z.string().min(1),
   as_of: z.string().min(1).optional(),
   chart_overrides: z.record(z.enum(['bar', 'line'])).optional(),
+  /**
+   * docs/06 §4.3's "clones may change or disable the path". Only the switch and
+   * the per-level chart: the dimensions are the curated catalog's and are never
+   * accepted from a client (ADR-020, and CODING_GUIDELINES §14's rule that
+   * drill-context filters are injected server-side, not editable inputs).
+   *
+   * Omitting the key leaves the report's existing drill block untouched, which
+   * is what makes a filter-only save a filter-only save.
+   */
+  drill: z
+    .object({
+      enabled: z.boolean(),
+      charts: z.record(z.enum(['1', '2', '3']), z.enum(['bar', 'line', 'donut'])).optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 customReportsRouter.put('/api/reports/:id/visual', (req: Request, res: Response, next: NextFunction): void => {
@@ -211,6 +300,7 @@ customReportsRouter.put('/api/reports/:id/visual', (req: Request, res: Response,
       academicYear: parsed.data.academic_year,
       asOfDate: parsed.data.as_of ?? new Date().toISOString().slice(0, 10),
       ...(parsed.data.chart_overrides === undefined ? {} : { chartOverrides: parsed.data.chart_overrides }),
+      ...(parsed.data.drill === undefined ? {} : { drill: parsed.data.drill }),
     });
     res.json(view);
   })().catch(next);

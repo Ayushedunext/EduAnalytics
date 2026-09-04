@@ -132,6 +132,7 @@ vi.mock('../src/mcp/client.js', () => ({
 
 const {
   cloneReport,
+  drillCustomReport,
   viewReport,
   saveAiReport,
   updateReportVisual,
@@ -610,5 +611,223 @@ describe('✎ Refine with AI (docs/06 §1, ADR-033’s explicitly-deferred actio
         draft: { spec_version: 1, title: 'x', widgets: [{ id: 'w1', type: 'kpi', label: 'x', value: '1' }] },
       }),
     ).rejects.toMatchObject({ code: ERROR_CODES.REPORT_DEFINITION_FORBIDDEN });
+  });
+});
+
+/**
+ * The drill path a CLONE owns (docs/06 §4.3's "clones may change or disable the
+ * path").
+ *
+ * The level-building itself is drill.test.ts's subject — same `buildDrill`,
+ * same catalog, same click validation. What is tested here is the three things
+ * that are only true of a clone: that the switch is a real gate and not a
+ * hidden button, that a per-level chart choice reaches the chart, and that a
+ * save which was not about drill-down leaves the path alone.
+ */
+describe('a clone owns its drill path (docs/06 §4.3)', () => {
+  /** `run_predefined` for Fee Collection carrying the rows level 1 is built from. */
+  function feeCollectionByComponentResult(schoolIds: string[]) {
+    return {
+      report_id: 'fee-collection',
+      title: 'Fee Collection',
+      source: 'fee_collection_data_set · fee_compile_data_set',
+      params: {},
+      as_of: '2026-08-25T00:00:00.000Z',
+      schools: schoolIds.map((school_id) => ({
+        school_id,
+        status: 'ok',
+        queries: [
+          {
+            key: 'by_component',
+            description: 'Demand, collection and pending by fee head',
+            sql: 'SELECT componentname, SUM(payable) AS payable FROM fee_compile_data_set WHERE academicyearname = :academic_year GROUP BY componentname',
+            status: 'ok',
+            rows: [{ componentname: 'Tuition', payable: 500, paid: 300, balance: 200 }],
+          },
+        ],
+      })),
+    };
+  }
+
+  async function cloneFeeCollection() {
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    return cloneReport({
+      session: DIRECTOR,
+      correlationId: 'corr-drill',
+      baseReportId: 'fee-collection',
+      name: 'Fees I watch',
+      schoolIds: DIRECTOR.school_ids,
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+    });
+  }
+
+  /** The drill-entry widget of a rendered clone, or undefined if it has none. */
+  function entryWidget(view: { spec: { widgets: readonly unknown[] } }, id: string) {
+    return view.spec.widgets.find((w) => (w as { id?: string }).id === id) as
+      | { id: string; type: string; drillable?: boolean; drill_dim?: string }
+      | undefined;
+  }
+
+  it('ships a clone of a drillable dashboard with its curated path ON', async () => {
+    const cloned = await cloneFeeCollection();
+
+    expect(cloned.drill?.available).toBe(true);
+    /* docs/06 §4.3: "predefined dashboards ship with curated paths ON", and a
+       clone inherits that rather than having to opt back in. */
+    expect(cloned.drill?.enabled).toBe(true);
+    expect(cloned.drill?.levels).toHaveLength(3);
+    expect(entryWidget(cloned, cloned.drill?.widget_id ?? '')?.drillable).toBe(true);
+  });
+
+  it('takes the affordance off the chart when a reader switches the path off', async () => {
+    const cloned = await cloneFeeCollection();
+    const widgetId = cloned.drill?.widget_id ?? '';
+    expect(entryWidget(cloned, widgetId)?.drillable).toBe(true);
+
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    const updated = await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-3',
+      id: cloned.id,
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      drill: { enabled: false },
+    });
+
+    expect(updated.drill?.enabled).toBe(false);
+    const widget = entryWidget(updated, widgetId);
+    expect(widget?.drillable).toBe(false);
+    /* The pair travels together — `drillable` without `drill_dim` is an invalid
+       widget, and a stale dim is a fact about a path this report no longer has. */
+    expect(widget?.drill_dim).toBeUndefined();
+    /* Invariant 6: a chart that stopped being clickable says so where its logic
+       is read, rather than leaving a dead click as the only evidence. */
+    expect(updated.logic.notes.some((n) => n.toLowerCase().includes('drill-down is turned off'))).toBe(true);
+  });
+
+  it('refuses a drill request on a report whose path is switched off', async () => {
+    const cloned = await cloneFeeCollection();
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-4',
+      id: cloned.id,
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      drill: { enabled: false },
+    });
+
+    /* Hiding the button is a UI fact, not an access decision: the request can
+       still be typed by hand, so the gate lives on the server. */
+    await expect(
+      drillCustomReport({
+        session: DIRECTOR,
+        correlationId: 'corr-drill-5',
+        id: cloned.id,
+        requestedSchoolIds: DIRECTOR.school_ids,
+        widgetId: cloned.drill?.widget_id ?? 'bar-school',
+        level: 2,
+        context: [{ dim: 'school', value: 'stmarksmb', label: 'Meera Bagh' }],
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.VALIDATION_FAILED });
+  });
+
+  it('refuses a drill request on an AI-saved report, which has no curated path', async () => {
+    mcpResponse = { columns: ['classname', 'n'], rows: [{ classname: 'IX', n: 40 }], truncated: false };
+    const saved = await saveAiReport({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-6',
+      name: 'From Ask AI',
+      schoolIds: ['stmarksmb'],
+      queries: [{ key: 'q1', sql: 'SELECT classname, COUNT(*) AS n FROM students_data_set GROUP BY classname' }],
+      draft: {
+        spec_version: 1,
+        title: 'From Ask AI',
+        widgets: [{ id: 'w1', type: 'bar', x: 'classname', y: 'n', query_ref: 'q1' }],
+      },
+    });
+
+    expect(saved.drill).toBeNull();
+    await expect(
+      drillCustomReport({
+        session: DIRECTOR,
+        correlationId: 'corr-drill-7',
+        id: saved.id,
+        requestedSchoolIds: ['stmarksmb'],
+        widgetId: 'w1',
+        level: 2,
+        context: [{ dim: 'school', value: 'stmarksmb', label: 'Meera Bagh' }],
+      }),
+    ).rejects.toBeInstanceOf(PlatformError);
+  });
+
+  it('draws the entry level as the chart the reader chose, still drillable', async () => {
+    const cloned = await cloneFeeCollection();
+    const widgetId = cloned.drill?.widget_id ?? '';
+
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    const updated = await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-8',
+      id: cloned.id,
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      drill: { enabled: true, charts: { '1': 'line' } },
+    });
+
+    expect(updated.drill?.levels[0]?.chart).toBe('line');
+    const widget = entryWidget(updated, widgetId);
+    expect(widget?.type).toBe('line');
+    /* The whole point of restricting a drilling level to bar/line: it has to
+       stay clickable, or the reader is left with a chart that says it drills. */
+    expect(widget?.drillable).toBe(true);
+    expect(widget?.drill_dim).toBe('school');
+  });
+
+  it('leaves the path alone on a save that was not about drill-down', async () => {
+    const cloned = await cloneFeeCollection();
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-9',
+      id: cloned.id,
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      drill: { enabled: true, charts: { '2': 'line' } },
+    });
+
+    /* A filter-only save omits the key entirely — resetting a drill
+       configuration nobody touched would be a change nobody asked for. */
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    const afterFilterEdit = await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-10',
+      id: cloned.id,
+      academicYear: '2025-26',
+      asOfDate: '2026-08-25',
+    });
+
+    expect(afterFilterEdit.drill?.enabled).toBe(true);
+    expect(afterFilterEdit.drill?.levels[1]?.chart).toBe('line');
+  });
+
+  it('refuses to store a chart the level cannot be drawn as', async () => {
+    const cloned = await cloneFeeCollection();
+
+    mcpResponse = feeCollectionByComponentResult(DIRECTOR.school_ids);
+    const updated = await updateReportVisual({
+      session: DIRECTOR,
+      correlationId: 'corr-drill-11',
+      id: cloned.id,
+      academicYear: '2026-27',
+      asOfDate: '2026-08-25',
+      /* A donut on level 1 would be a chart with nothing to click, on the one
+         level whose entire job is to be clicked. */
+      drill: { enabled: true, charts: { '1': 'donut' } },
+    });
+
+    expect(updated.drill?.levels[0]?.chart).toBe('bar');
+    expect(entryWidget(updated, cloned.drill?.widget_id ?? '')?.drillable).toBe(true);
   });
 });

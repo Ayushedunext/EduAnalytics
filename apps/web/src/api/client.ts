@@ -152,6 +152,23 @@ export interface ChartSpecLike {
   };
 }
 
+/**
+ * One card on the Dashboard grid: which report, and what shape its chart is
+ * (services/home.ts `GridCard`, services/dashboards.ts `DASHBOARD_PREVIEW`).
+ */
+export interface GridCard {
+  /**
+   * This CARD's id -- what `/api/home/preview/:key` takes and what the previews
+   * map is keyed by. Equal to `id` except where the grid draws two views of one
+   * report (Fee Collection's receipts curve and its drillable by-school bars),
+   * which is exactly why the map cannot be keyed by the report.
+   */
+  key: string;
+  /** The report the card OPENS. Two cards may share it. */
+  id: string;
+  kind: 'bar' | 'line' | 'donut';
+}
+
 export interface DashboardCard {
   id: string;
   title: string;
@@ -230,15 +247,24 @@ export interface HomeResponse {
   dashboards: DashboardCard[];
   /**
    * Which dashboards the grid draws, in the order it draws them (services/
-   * home.ts `DASHBOARD_GRID`). Ids, not cards -- the card itself is still read
-   * out of `dashboards`, so there is one description of a dashboard and this is
-   * only a ranking of it.
+   * home.ts `DASHBOARD_GRID`), each with the KIND of chart its card will hold.
+   *
+   * Still not cards -- the card itself is read out of `dashboards`, so there is
+   * one description of a dashboard and this is a ranking of it plus the one
+   * fact the LAYOUT needs.
+   *
+   * `kind` is here because the grid is a bento: a trend takes a wider slot than
+   * a ring (tokens.css `.pgallery`), and the slot must be sized before the chart
+   * exists to measure -- every card is its own request, so a grid that waited
+   * would lay eight equal skeletons and reflow the page as each one landed.
+   * Decided by the server (`DASHBOARD_PREVIEW`) alongside WHICH chart each card
+   * draws, so a card's width and its contents cannot disagree.
    *
    * The SPA does not decide this and must not re-derive it. What the overview
    * leads with is a product decision the server makes; a filter in the browser
    * would be a second copy of that rule, free to disagree with the first.
    */
-  grid: string[];
+  grid: GridCard[];
   /**
    * The Module Wise Analysis tiles, in the server's order. Travels with Home
    * because it is static catalog metadata — no query, no scope — and because
@@ -404,6 +430,9 @@ export function getHome(
  * period" -- either way there is nothing to show, and `reason` says why.
  */
 export interface HomePreview {
+  /** The CARD this answers for — see `GridCard.key`. */
+  key: string;
+  /** The report it opens. Two cards may share it. */
   id: string;
   title: string;
   icon: string;
@@ -427,12 +456,13 @@ export interface HomePreview {
 export function getHomePreview(
   schoolIds: readonly string[],
   academicYear: string,
-  reportId: string,
+  /** A grid CARD key (`GridCard.key`) or a bare dashboard id — both are valid. */
+  key: string,
 ): Promise<HomePreview> {
   const query = new URLSearchParams({ academic_year: academicYear });
   if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
   return request<HomePreview>(
-    `/api/home/preview/${encodeURIComponent(reportId)}?${query.toString()}`,
+    `/api/home/preview/${encodeURIComponent(key)}?${query.toString()}`,
   );
 }
 
@@ -495,6 +525,37 @@ export interface CustomReportResponse {
   logic: ReportLogic;
   degraded: { key: string; message: string }[];
   degraded_schools: { school_id: string; message: string }[];
+  /** This report's drill path (docs/06 §4); `null` for an AI-saved report. */
+  drill: ReportDrill | null;
+}
+
+/** What a drill level may be drawn as — see the server's `DrillChart`. */
+export type DrillChart = 'bar' | 'line' | 'donut';
+
+/**
+ * One row of the editor's Drill path control.
+ *
+ * `dim`, `drills_on` and `inherit` are the CURATED catalog's (ADR-020) and are
+ * rendered read-only: the editor picks how a level is drawn, never what it
+ * groups by. `chart_options` is the server's answer to what this particular
+ * level may become, so the select never offers something the save would refuse.
+ */
+export interface ReportDrillLevel {
+  n: number;
+  dim: string;
+  drills_on: string | null;
+  inherit: string[];
+  chart: DrillChart;
+  chart_options: DrillChart[];
+}
+
+export interface ReportDrill {
+  widget_id: string;
+  /** Does the base report have a curated path at all? */
+  available: boolean;
+  /** Is it switched on for this report? Always false when `available` is false. */
+  enabled: boolean;
+  levels: ReportDrillLevel[];
 }
 
 export interface ReportVersionSummary {
@@ -557,7 +618,17 @@ export function getCustomReport(id: string, schoolIds: readonly string[]): Promi
 
 export function updateReportVisual(
   id: string,
-  body: { academic_year: string; as_of?: string; chart_overrides?: Record<string, 'bar' | 'line'> },
+  body: {
+    academic_year: string;
+    as_of?: string;
+    chart_overrides?: Record<string, 'bar' | 'line'>;
+    /**
+     * docs/06 §4.3's "clones may change or disable the path". Omitting it
+     * leaves the report's saved drill configuration alone — a filter-only save
+     * must not reset a path nobody touched.
+     */
+    drill?: { enabled: boolean; charts?: Record<string, DrillChart> };
+  },
 ): Promise<CustomReportResponse> {
   return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/visual`, {
     method: 'PUT',
@@ -583,6 +654,28 @@ export function applyRefinement(
   return request<CustomReportResponse>(`/api/reports/${encodeURIComponent(id)}/refine`, {
     method: 'PUT',
     body: JSON.stringify(body),
+  });
+}
+
+/**
+ * One level of a CUSTOM report's drill path (ADR-020, docs/06 §4).
+ *
+ * The same `{widget_id, level, context}` body as `drillReport` — CODING_
+ * GUIDELINES §6 fixes that shape — addressed to the report_definitions row
+ * instead of a predefined dashboard. No filters travel with it: a clone drills
+ * under the filter values it SAVED, which only the server can read (ADR-018),
+ * and a year supplied from the browser here would let a reader change the
+ * question a saved report answers.
+ */
+export function drillCustomReport(
+  id: string,
+  schoolIds: readonly string[],
+  body: { widget_id: string; level: number; context: readonly DrillStep[] },
+): Promise<DrillResponse> {
+  const query = schoolIds.length > 0 ? `?school_ids=${encodeURIComponent(schoolIds.join(','))}` : '';
+  return request<DrillResponse>(`/api/reports/${encodeURIComponent(id)}/drill${query}`, {
+    method: 'POST',
+    body: JSON.stringify({ ...body, context: [...body.context] }),
   });
 }
 

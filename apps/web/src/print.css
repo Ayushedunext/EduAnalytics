@@ -105,6 +105,20 @@ body {
 .printPage .kpi b {
   font-size: 18px;
 }
+/* The rate dial prints, and prints smaller. It is paint, not an effect, so the
+   filter guard at the foot of this file leaves it alone -- and it must be left
+   alone, because a tile that showed a dial on screen and a bare figure on paper
+   would be the screen/export divergence ADR-021 exists to prevent. What changes
+   is only its SIZE: the figure beside it drops from 24px to 18px on paper, and a
+   42px ring next to an 18px number stops reading as an annotation on the
+   number and starts reading as the subject of the tile. */
+.printPage .kpiRing {
+  width: 30px;
+  height: 30px;
+}
+.printPage .kpiFigure {
+  gap: 7px;
+}
 /* The breakdown prints, at paper scale. Dropping it would make the PDF and the
    screen disagree about what the same tile says, which ADR-021 exists to
    prevent -- both read the one spec, so both show all of it. */
@@ -238,11 +252,18 @@ body {
    dropped it, the same way it drops the drill hint and the pointer cursor: what
    does not survive the medium is removed for that medium, not for both.
 
-   The shadow itself went for everyone on 2026-09-03 (docs/10 §1 principle 2),
-   which leaves nothing for this rule to strip today. It stays anyway, and
-   deliberately: it is a rule about the MEDIUM, not about one filter that
-   happened to exist. An SVG filter is a screen effect by nature -- a blur, a
-   glow, a shadow -- and the next one someone reaches for will print as badly as
-   this one did. Removing the guard would mean discovering that again in a
-   customer's inbox, on a document that had already been approved on screen. */
+   The shadow went for everyone on 2026-09-03 (docs/10 SS1 principle 2) and this
+   rule briefly had nothing to strip; it was kept anyway, on the argument that it
+   is a rule about the MEDIUM rather than about one filter that happened to
+   exist. That argument paid for itself the same day: "Meadow Lit" put a glow
+   back under every trend line (widgets.tsx, `LineGlow`), and it prints through
+   this guard without anyone having to remember the CMYK smudge. An SVG filter
+   is a screen effect by nature -- a blur, a glow, a shadow -- so the guard is
+   written against the ATTRIBUTE, not against a filter id, and the next one
+   someone reaches for is covered before it ships.
+
+   Gradients are deliberately NOT stripped. A `linearGradient` is paint, not an
+   effect: it separates cleanly into ink, prints as the flat-ish wash it looks
+   like on screen, and removing it would make the export disagree with the page
+   it was taken from -- which is the thing ADR-021 exists to prevent. */
 .printPage svg [filter] { filter: none !important; }

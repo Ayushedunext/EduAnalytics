@@ -18,25 +18,68 @@ import type { HomePreview, DashboardCard } from '../api/client';
 import { DrillTrail, useDrill, widgetIdOf } from './Drill';
 
 /**
- * Which of the four CVD-audited chart colours (widgets.tsx `ACCENT_COLOUR`)
- * a dashboard's preview chart draws in. Not a per-widget fact — the same
- * chart on its own full dashboard page still renders teal, since `accent` is
- * a presentation choice `WidgetSpecView` only honours when `compact`.
+ * The hue each preview card draws its single-series chart in.
  *
- * `fee-defaulters` -> `negative` reuses a meaning docs/10 §1's token table
- * already assigns platform-wide ("Red: ... defaulter counts"); it is not a
- * colour invented for this grid. The rest alternate `primary`/`secondary`
- * (teal/mint, both inside the audited four) purely so six teal cards in a
- * row don't read as one flat colour — never a fifth hue, never decoration
- * dressed up as meaning where none exists.
+ * -- Keyed by CARD, not by report (2026-09-03) -------------------------------
+ * The grid draws two Fee Collection cards and two Fee Defaulters cards
+ * (`DASHBOARD_GRID`), and they are not the same subject: receipts arriving over
+ * the year is money coming IN, the by-school bars are money still OUT. Keyed by
+ * report they would have had to share a colour, which is the one thing that
+ * would make a reader think they were the same chart twice.
+ *
+ * -- Why this is not decoration ----------------------------------------------
+ * `accent` is presentation chosen by the page, never a fact about the widget —
+ * the same chart on its own report page still renders in the platform teal,
+ * because `WidgetSpecView` honours this only when `compact`. And it can never
+ * overrule meaning: `measureColour` lets a widget's own `tone` win, so a caller
+ * cycling hues across a grid cannot repaint overdue money in the teal it used
+ * for headcounts.
+ *
+ * What it buys is DISTINCTION. Eight cards holding eight different subjects
+ * were drawing six of them in one colour, and a grid whose whole job is to be
+ * scanned is exactly where that costs the most: the eye has nothing to sort by
+ * until it has read every title. The hues are spread around the wheel and led
+ * by the blues, so the page still reads as one product.
+ *
+ * -- Where a hue MEANS something, it is the meaning ---------------------------
+ * Three of these are not free choices. Fee Defaulters' school bars are
+ * `negative` and its ageing chart `warning`, which are the meanings docs/10 §1's
+ * token table already assigns platform-wide ("amber: fees outstanding; red:
+ * defaulter counts") — not colours invented for this grid. Staff Attendance is
+ * `secondary` because meadow green is "present" everywhere else in the product.
+ * The rest — indigo, aqua, coral, plum, violet — carry identity only, and are
+ * assigned to the cards whose subject has no colour of its own.
  */
 const PREVIEW_ACCENT: Partial<Record<string, ChartAccent>> = {
-  'fee-defaulters': 'negative',
-  'staff-overview': 'secondary',
-  'attendance-analytics': 'secondary',
-  'transport-analytics': 'secondary',
-  'library-textbooks': 'secondary',
+  /* Money arriving over the year — the brand lead, and the one chart the page
+     is most often opened for. */
+  'fee-collection': 'primary',
+  /* Overdue money, by age. Amber is what this product means by "outstanding". */
+  'fee-defaulters': 'warning',
+  /* Defaulter counts per school. Red, per the token table. */
+  'fee-defaulters--by-school': 'negative',
+  /* Outstanding per student — money owed, but a headcount question rather than
+     a severity one, so it takes an identity hue rather than the amber above. */
+  'fee-by-student': 'coral',
+  /* Present staff-days. Green is "present" everywhere in this product. */
+  'staff-attendance': 'secondary',
+  /* Roll and headcount subjects: no colour of their own, so they take the
+     identity hues, spread so no two neighbours in the grid collide. */
+  'staff-overview': 'aqua',
+  'transport-analytics': 'indigo',
+  'library-textbooks': 'plum',
+  'admissions-funnel': 'violet',
+  'principal-snapshot': 'indigo',
 };
+
+/*
+ * `fee-collection--by-school`, `attendance-analytics` and `enrollment-overview`
+ * are deliberately absent: all three draw MULTI-series or multi-category charts
+ * (a grouped bar of payable/collected/pending, and two donuts), which take their
+ * colours from `SERIES` by slot because there the colour is carrying series
+ * identity rather than card identity. An accent would be ignored anyway; leaving
+ * them out says so.
+ */
 
 /**
  * A dashboard's own lead CHART, live -- the same bar/line/donut
@@ -48,12 +91,36 @@ const PREVIEW_ACCENT: Partial<Record<string, ChartAccent>> = {
  */
 export function PreviewCard({
   card,
+  kind,
+  slotKey,
   preview,
   schoolIds,
   academicYear,
   onOpen,
 }: {
   card: DashboardCard;
+  /**
+   * The chart kind this card will hold, from the server (`/api/home` `grid`).
+   *
+   * It sizes the card's slot in the bento (`pcard--${kind}`, tokens.css
+   * `.pgallery`): a trend takes a wider slot than a ring. Taken as a prop rather
+   * than read off `preview.widget` because the SLOT has to be right from the
+   * first paint — every card is its own request, and sizing from the widget
+   * would mean eight equal skeletons reflowing the page one at a time as the
+   * charts landed.
+   *
+   * Optional so the Module screen, which draws these cards in a plain grid of
+   * its own, does not have to invent one.
+   */
+  kind?: 'bar' | 'line' | 'donut' | undefined;
+  /**
+   * This card's key on the grid (`GridCard.key`), where it has one.
+   *
+   * Only the ACCENT reads it: two cards of one report are two subjects and take
+   * two colours (`PREVIEW_ACCENT`). Absent on the Module screen, which draws one
+   * card per report and falls back to the report's own hue.
+   */
+  slotKey?: string | undefined;
   preview: HomePreview | undefined;
   schoolIds: readonly string[];
   academicYear: string | null;
@@ -72,6 +139,13 @@ export function PreviewCard({
     academicYear,
     onError: useCallback((message: string | null) => { setDrillError(message); }, []),
   });
+
+  /**
+   * Keyed by the card, falling back to the report — a module screen draws these
+   * cards with no slot key of its own, and its Fee Collection card should still
+   * be the colour the grid's is.
+   */
+  const accent = PREVIEW_ACCENT[slotKey ?? card.id] ?? PREVIEW_ACCENT[card.id];
 
   const base = preview?.status === 'ok' ? preview.widget : null;
   const baseId = widgetIdOf(base);
@@ -95,7 +169,12 @@ export function PreviewCard({
     (shown !== null && 'drillable' in shown && shown.drillable === true);
 
   return (
-    <div className="card pcard" onClick={() => { onOpen(card.id); }} role="button" tabIndex={0}>
+    <div
+      className={`card pcard${kind === undefined ? '' : ` pcard--${kind}`}`}
+      onClick={() => { onOpen(card.id); }}
+      role="button"
+      tabIndex={0}
+    >
       <div className="pcardHead">
         <span className="pcardIc">{card.icon}</span>
         <b>{card.title}</b>
@@ -116,7 +195,7 @@ export function PreviewCard({
             <WidgetSpecView
               widget={shown}
               compact
-              accent={PREVIEW_ACCENT[card.id]}
+              accent={accent}
               /**
                * The renderer reports WHICH value was clicked; deciding what to
                * fetch is this screen's job, because the drill path is a

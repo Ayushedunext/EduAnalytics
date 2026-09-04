@@ -1,8 +1,9 @@
 /**
- * Drill navigation, shared by the two surfaces that drill (ADR-020, docs/06
- * §4.4): a report page's panels and the Dashboard grid's cards.
+ * Drill navigation, shared by every surface that drills (ADR-020, docs/06
+ * §4.4): a dashboard page's panels, the Dashboard grid's cards, and a custom
+ * report's own page and live preview (docs/06 §4.8).
  *
- * -- Why this is one module and not two implementations -----------------------
+ * -- Why this is one module and not three implementations ---------------------
  * The Dashboard grid draws each report's drill-ENTRY chart, so a card is a
  * drillable surface in exactly the sense a panel is: same endpoint, same
  * `{widget_id, level, context}` body, same "level is `context.length + 1`"
@@ -12,9 +13,15 @@
  * would render a chart under a breadcrumb naming a slice it is not showing —
  * the success-shaped failure CODING_GUIDELINES §10 names.
  *
- * What is NOT here is anything about layout. The two surfaces present a trail
- * very differently (a panel has a full actions row; a card has about one line),
- * and that is a presentation decision each makes for itself through `compact`.
+ * What is NOT here is anything about layout. The surfaces present a trail very
+ * differently (a panel has a full actions row; a card, and the editor's preview
+ * column, have about one line), and that is a presentation decision each makes
+ * for itself through `compact`.
+ *
+ * Nor is the ENDPOINT here, beyond a default. A custom report drills through a
+ * different route under different filter rules (docs/06 §4.8), and it injects
+ * that as `fetchLevel` rather than this hook growing a branch — the shared part
+ * is the navigation, not the URL.
  *
  * [MANDATORY] ADR-015: nothing here composes a chart, a title or a caveat. The
  * server sends the level's widget, its context labels and its notes; this
@@ -24,7 +31,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { ApiFailure, drillReport, type DrillStep } from '../api/client';
+import { ApiFailure, drillReport, type DrillResponse, type DrillStep } from '../api/client';
 
 /**
  * Where a drilled surface currently is (ADR-020, docs/06 §4.4).
@@ -72,6 +79,20 @@ export function useDrill(args: {
   schoolIds: readonly string[];
   academicYear: string | null;
   /**
+   * How ONE level is fetched, for a surface that does not drill a predefined
+   * dashboard. Omitted means `POST /api/report/:id/drill` — the predefined
+   * path, and the reason `academicYear` is required there.
+   *
+   * A CUSTOM report passes `drillCustomReport` bound to its own id and sends
+   * `academicYear: null`, because its year is not the topbar's: a clone drills
+   * under the filters it saved, read server-side from its definition (ADR-018).
+   * Injecting the request rather than branching inside this hook keeps the
+   * level arithmetic, the failure handling and the "level 1 is a delete, not a
+   * fetch" rule in ONE place for every surface that drills — which is the whole
+   * argument of this file's header.
+   */
+  fetchLevel?: ((body: { widget_id: string; level: number; context: readonly DrillStep[] }) => Promise<DrillResponse>) | undefined;
+  /**
    * The comparison year the surface is currently showing, for a report that
    * takes one. Passed down so a drilled level is fetched under the SAME filters
    * as the chart it was reached from — a level that arrived under the server's
@@ -90,7 +111,7 @@ export function useDrill(args: {
   const [drills, setDrills] = useState<Record<string, DrillState>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
-  const { reportId, schoolIds, academicYear, compareYear, onError } = args;
+  const { reportId, schoolIds, academicYear, compareYear, fetchLevel, onError } = args;
 
   const clear = useCallback(() => {
     setDrills({});
@@ -99,7 +120,13 @@ export function useDrill(args: {
 
   const navigate = useCallback(
     (widgetId: string, context: readonly DrillStep[]): void => {
-      if (academicYear === null) return;
+      /**
+       * The predefined path cannot build a request without a year. A surface
+       * with its own `fetchLevel` supplies its filters server-side, so a null
+       * year there is not a missing input — it is the topbar not being in
+       * charge of this report.
+       */
+      if (fetchLevel === undefined && academicYear === null) return;
 
       /** Level 1 is already in hand — restoring it is a delete, not a fetch. */
       if (context.length === 0) {
@@ -113,13 +140,12 @@ export function useDrill(args: {
 
       setBusy(widgetId);
       onError(null);
-      drillReport(
-        reportId,
-        schoolIds,
-        academicYear,
-        { widget_id: widgetId, level: context.length + 1, context },
-        { compareYear },
-      )
+      const body = { widget_id: widgetId, level: context.length + 1, context };
+      const request =
+        fetchLevel !== undefined
+          ? fetchLevel(body)
+          : drillReport(reportId, schoolIds, academicYear ?? '', body, { compareYear });
+      request
         .then((result) => {
           setDrills((current) => ({
             ...current,
@@ -146,7 +172,7 @@ export function useDrill(args: {
           setBusy((current) => (current === widgetId ? null : current));
         });
     },
-    [reportId, schoolIds, academicYear, compareYear, onError],
+    [reportId, schoolIds, academicYear, compareYear, fetchLevel, onError],
   );
 
   return { drills, busy, navigate, clear };

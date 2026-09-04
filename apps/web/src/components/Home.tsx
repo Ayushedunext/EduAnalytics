@@ -56,13 +56,23 @@
  * Everything else drops to the strip below, where every chip is a real click:
  * the strip is the rest of the built catalog, not a waiting room.
  *
- * -- Each card draws the chart a click DESCENDS from -------------------------
- * A card shows the report's drill-entry chart (level 1, one bar per school)
- * where the report has a curated path, and its lead chart where it does not.
- * Fee Collection is why the distinction matters: its page opens with receipts
- * by month, but the chart a reader drills into is demand by school, fed by a
- * different statement. A card drawing the first would invite a click it cannot
- * honour.
+ * -- Each card draws the chart that answers ITS question (2026-09-03) ---------
+ * Every card used to draw its report's drill-ENTRY chart, so a reader could
+ * descend from the card in place. That was correct and it was redundant: level
+ * 1 of every curated path is "one bar per school", so eight cards drew the same
+ * three horizontal bars and only the axis told them apart. A page of one chart
+ * repeated is not an overview — there is nothing to compare when every card
+ * makes the same kind of statement.
+ *
+ * The server now names a chart per card (`DASHBOARD_PREVIEW`, services/
+ * dashboards.ts): a trend where the subject is movement over time, a ring where
+ * it is composition, bars where it is comparison. The three cards whose
+ * by-school bars really are their best reading keep the drill entry and keep
+ * drilling in place; the rest are inert and open the full report on a click,
+ * which is where the drill still lives at all three levels.
+ *
+ * This file does not choose any of that — it renders the id, the kind and the
+ * widget it is handed, for the same reason it does not re-derive the order.
  *
  * -- Each card is its own request ---------------------------------------------
  * The cards used to arrive together, which meant the grid was only as fast as
@@ -73,9 +83,43 @@
  * simply appear as they are ready.
  */
 
-import { KpiTile } from '@sap/chart-spec/react';
+import { KpiTile, type ChartAccent } from '@sap/chart-spec/react';
 import type { HomeResponse, HomePreview, SessionResponse, DashboardCard } from '../api/client';
 import { PreviewCard } from './PreviewCard';
+
+/**
+ * A hue per tile in the Key indicators strip, by position.
+ *
+ * -- Why position, and why it is not meaning ---------------------------------
+ * The strip holds five unrelated subjects — children, staff, presence, money
+ * raised, money realised — and painted them all one teal, because the server
+ * marks every one of them `tone: 'neutral'` and neutral resolves to the brand
+ * colour. That is right about the DATA (there is no threshold at which a student
+ * count is good or bad news, which is exactly why services/home.ts says neutral)
+ * and wrong about the strip: five identical tiles are five things a reader has
+ * to read the label of before they can tell apart.
+ *
+ * So the hue here says "different subject", nothing more, and it is applied by
+ * POSITION rather than by metric on purpose — a colour chosen per metric would
+ * be a second, client-side claim about what that metric means, and the one place
+ * this product refuses to put meaning is the browser. Order is the server's
+ * (`spec.widgets`, held as contract in test/home-summary.test.ts), so the hues
+ * follow the server's ranking rather than leading it.
+ *
+ * `KpiTile` applies these ONLY to a neutral tile. A tile the server marked
+ * `warning` or `negative` keeps the colour its meaning earned, whatever position
+ * it happens to sit in — so this list can never repaint a finding.
+ *
+ * Led by the platform teal and kept to the blue half of the wheel apart from one
+ * warm step, so the strip reads as one band rather than a paint chart.
+ */
+const KPI_ACCENTS: readonly ChartAccent[] = [
+  'primary',
+  'indigo',
+  'aqua',
+  'violet',
+  'coral',
+];
 
 interface Props {
   session: SessionResponse;
@@ -118,11 +162,17 @@ export function Home({
    * accident of what was built first.
    */
   const byId = new Map(home.dashboards.map((card) => [card.id, card]));
-  const previewable = home.grid.flatMap((id) => {
-    const card = byId.get(id);
-    return card === undefined ? [] : [card];
+  /**
+   * Each gridded card paired with the CHART KIND the server says it will draw.
+   * The kind sizes the card's bento slot (tokens.css `.pgallery`) and has to be
+   * known before the chart is, so it travels on `grid` rather than being read
+   * off a widget that has not arrived yet.
+   */
+  const previewable = home.grid.flatMap((entry) => {
+    const card = byId.get(entry.id);
+    return card === undefined ? [] : [{ card, entry }];
   });
-  const onGrid = new Set(home.grid);
+  const onGrid = new Set(home.grid.map((entry) => entry.id));
   const more = home.dashboards.filter((card) => !onGrid.has(card.id));
 
   return (
@@ -250,12 +300,20 @@ export function Home({
             Key indicators
           </h2>
           <div className="kpis">
-          {home.spec.widgets.map((widget) => (
+          {home.spec.widgets.map((widget, index) => (
             // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
             // reads identically everywhere in the product, and since 2026-09-01
             // that includes its SIZE: the lead metric leads by being first, not
             // by being twice as wide (KpiTile's own comment has the reasoning).
-            <KpiTile key={widget.id} widget={widget} />
+            //
+            // The HUE is this screen's, and only for a tile whose tone is
+            // neutral — `kpiColour` refuses it otherwise, so a warning tile
+            // stays amber however the strip is arranged. See `KPI_ACCENTS`.
+            <KpiTile
+              key={widget.id}
+              widget={widget}
+              accent={KPI_ACCENTS[index % KPI_ACCENTS.length]}
+            />
           ))}
 
           {/*
@@ -289,11 +347,16 @@ export function Home({
           )}
         </div>
         <div className="pgallery">
-          {previewable.map((card) => (
+          {/* Keyed by the CARD, not the report: the grid draws two Fee Collection
+              cards and two Fee Defaulters cards (`DASHBOARD_GRID`), and keying
+              by report id would collide and mount one component for both. */}
+          {previewable.map(({ card, entry }) => (
             <PreviewCard
-              key={card.id}
+              key={entry.key}
               card={card}
-              preview={previews[card.id]}
+              kind={entry.kind}
+              slotKey={entry.key}
+              preview={previews[entry.key]}
               schoolIds={schoolIds}
               academicYear={home.academic_year}
               onOpen={onOpen}

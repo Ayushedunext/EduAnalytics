@@ -208,15 +208,24 @@ export function App(): JSX.Element {
    * failed — a dropped connection, an expired session — which the card cannot
    * explain and must not invent a reason for. It stays a skeleton.
    */
+  /**
+   * `keys` are CARD keys, not report ids.
+   *
+   * They coincide for every card except a second view of a report already on the
+   * grid -- Fee Collection's receipts curve and its drillable by-school bars are
+   * one report drawn twice (`DASHBOARD_GRID`) -- and keying the map by report
+   * would make those two cards overwrite each other. A module screen passes bare
+   * report ids, which are valid keys, so nothing there had to change.
+   */
   const fetchPreviews = useCallback(
-    (ids: readonly string[], schoolIds: readonly string[], academicYear: string) => {
+    (keys: readonly string[], schoolIds: readonly string[], academicYear: string) => {
       let cancelled = false;
       setPreviewsLoading(true);
       void Promise.allSettled(
-        ids.map(async (id) => {
-          const preview = await getHomePreview([...schoolIds], academicYear, id);
+        keys.map(async (key) => {
+          const preview = await getHomePreview([...schoolIds], academicYear, key);
           if (cancelled) return;
-          setPreviews((prev) => ({ ...prev, [id]: preview }));
+          setPreviews((prev) => ({ ...prev, [key]: preview }));
         }),
       ).finally(() => { if (!cancelled) setPreviewsLoading(false); });
       return () => { cancelled = true; };
@@ -258,7 +267,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (home === null || effectiveYear === null || selected.length === 0) return;
     if (home.grid.length === 0) return;
-    return fetchPreviews(home.grid, selected, effectiveYear);
+    return fetchPreviews(home.grid.map((entry) => entry.key), selected, effectiveYear);
   }, [home, effectiveYear, selected, fetchPreviews]);
 
   /**

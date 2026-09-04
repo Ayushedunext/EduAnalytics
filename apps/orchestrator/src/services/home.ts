@@ -45,9 +45,11 @@ import { config } from '../config.js';
 import {
   DASHBOARD_DRILL_QUERY,
   DASHBOARD_LEAD_QUERY,
+  DASHBOARD_PREVIEW,
   buildDashboard,
   drillPathFor,
   isDashboardId,
+  previewKindFor,
   type DashboardId,
 } from './dashboards.js';
 import { MODULES, type ModuleCard, type ModuleId } from './modules.js';
@@ -228,6 +230,20 @@ export interface DashboardCard {
   readonly modules: readonly ModuleId[];
 }
 
+/**
+ * One card on the Dashboard grid: which report, and what shape its chart is.
+ *
+ * A pair rather than a bare id because the two are one decision — see
+ * `HomeSummary.grid` and `DASHBOARD_PREVIEW` (services/dashboards.ts).
+ */
+export interface GridCard {
+  /** The card's own id -- what the SPA asks `/api/home/preview/:key` for. */
+  readonly key: string;
+  /** The REPORT it opens. Two cards may share this (see `DASHBOARD_GRID`). */
+  readonly id: string;
+  readonly kind: 'bar' | 'line' | 'donut';
+}
+
 export interface HomeSummary {
   readonly spec: ChartSpec;
   readonly academic_year: string | null;
@@ -306,14 +322,23 @@ export interface HomeSummary {
    */
   readonly dashboards: readonly DashboardCard[];
   /**
-   * Which of them the Dashboard GRID draws, in the order it draws them.
+   * Which of them the Dashboard GRID draws, in the order it draws them, each
+   * with the KIND of chart its card will hold.
    *
-   * Sent as ids rather than left for the SPA to filter, for the same reason the
-   * card statuses are: what the overview leads with is a decision this service
-   * makes, and a second copy of the rule in the browser is a second copy that
-   * can disagree. The SPA renders the order it is given.
+   * Sent by the server rather than left for the SPA to filter or infer, for the
+   * same reason the card statuses are: what the overview leads with is a
+   * decision this service makes, and a second copy of the rule in the browser is
+   * a second copy that can disagree. The SPA renders the order it is given.
+   *
+   * The `kind` travels because the grid is a BENTO: a trend takes a wider slot
+   * than a ring (tokens.css `.pgallery`), and the slot has to be sized before
+   * the chart is there to measure. Every card is its own request, so a grid that
+   * waited to find out would lay eight equal skeletons and then reflow the page
+   * under the reader as each one landed. It is still one decision in one place —
+   * `DASHBOARD_PREVIEW` names the chart and its kind together, so the card's
+   * width and the card's contents cannot disagree about what it is.
    */
-  readonly grid: readonly string[];
+  readonly grid: readonly GridCard[];
   /**
    * The Module Wise Analysis tiles, in the order the screen draws them, each
    * carrying the ids of the reports inside it (`servedModules`).
@@ -342,6 +367,12 @@ export interface HomeSummary {
  * card can say why rather than rendering empty.
  */
 export interface HomePreview {
+  /**
+   * The card this answers for. Equal to `id` for every card except a second
+   * view of a report already on the grid (`DASHBOARD_GRID`), which is exactly
+   * why the SPA keys its previews map by this and not by `id`.
+   */
+  readonly key: string;
   readonly id: DashboardId;
   readonly title: string;
   readonly icon: string;
@@ -374,16 +405,83 @@ export interface HomePreview {
  * drawing a chart nobody can click lies about what happens when you click it,
  * so a dashboard joins this list when it can be descended, not before.
  */
-const DASHBOARD_GRID: readonly DashboardId[] = [
-  'fee-collection',
-  'fee-defaulters',
-  'fee-by-student',
-  'attendance-analytics',
-  'staff-attendance',
-  'enrollment-overview',
-  'staff-overview',
-  'transport-analytics',
+export interface GridSlot {
+  /**
+   * What the SPA asks for, and what the previews map is keyed by. Equal to
+   * `report` for every card except the ones that draw a SECOND view of a report
+   * already on the grid.
+   */
+  readonly key: string;
+  readonly report: DashboardId;
+  /**
+   * `drill-entry` pins the card to the report's level-1 chart (one bar per
+   * school, `DASHBOARD_DRILL_QUERY`) instead of the chart `DASHBOARD_PREVIEW`
+   * names for it. Absent means the report's own default.
+   */
+  readonly chart?: 'drill-entry';
+}
+
+/**
+ * The cards the Dashboard grid draws, in the order it draws them.
+ *
+ * -- Why a curated list and not "everything available" -----------------------
+ * The grid used to be every `available` dashboard, which is nine cards and
+ * growing. Nine charts under four summary cards is not an overview; it is the
+ * sidebar again, drawn larger, and a screen that shows everything ranks nothing.
+ * This names what a reader is meant to scan first, and the rest stay one click
+ * away in the sidebar and in the strip below the grid.
+ *
+ * -- The order is the ranking -------------------------------------------------
+ * Money first, because it is what a Director and an Accountant both open the
+ * page for; then the two headcount-and-presence charts; then staff and
+ * transport, which are read less often. Catalog order would have led with
+ * Enrollment for no better reason than that it was built first.
+ *
+ * -- A report may appear TWICE (2026-09-03) -----------------------------------
+ * This was a list of report ids, one card each. It is a list of SLOTS now,
+ * because the two fee reports have two things worth seeing and the grid was
+ * being made to choose. Fee Collection's receipts curve answers "is the year on
+ * track"; its demand/collected/pending bars answer "which school is behind", and
+ * that second chart is also the one a reader DRILLS -- school, then quarter, then
+ * class, in place on the card (ADR-020). Showing one meant losing the other, and
+ * on the two reports this product is opened for most that is the wrong trade.
+ *
+ * A slot is not a new report and costs nothing extra beyond its own single
+ * scan: both fee slots name statements Fee Collection and Fee Defaulters
+ * already run for their own pages. The two cards share a title, because they
+ * are two views of ONE report and both open it -- what distinguishes them is
+ * the chart's own title under the head, which is the widget's, from the spec.
+ *
+ * [MANDATORY] `key` is unique across this list, and a `drill-entry` slot only
+ * names a report that HAS a drill path; test/home-previews.test.ts holds both.
+ * A duplicate key would collide in the SPA's previews map and silently draw one
+ * card's chart in the other's slot.
+ */
+export const DASHBOARD_GRID: readonly GridSlot[] = [
+  { key: 'fee-collection', report: 'fee-collection' },
+  { key: 'fee-collection--by-school', report: 'fee-collection', chart: 'drill-entry' },
+  { key: 'fee-defaulters', report: 'fee-defaulters' },
+  { key: 'fee-defaulters--by-school', report: 'fee-defaulters', chart: 'drill-entry' },
+  { key: 'fee-by-student', report: 'fee-by-student' },
+  { key: 'attendance-analytics', report: 'attendance-analytics' },
+  { key: 'staff-attendance', report: 'staff-attendance' },
+  { key: 'enrollment-overview', report: 'enrollment-overview' },
+  { key: 'staff-overview', report: 'staff-overview' },
+  { key: 'transport-analytics', report: 'transport-analytics' },
 ];
+
+/**
+ * The chart kind a slot's card will hold -- the declared one, or `bar` for a
+ * card drawing a drill entry, which is one bar per school by construction.
+ */
+export function slotKind(slot: GridSlot): 'bar' | 'line' | 'donut' {
+  return slot.chart === 'drill-entry' ? 'bar' : previewKindFor(slot.report);
+}
+
+/** A grid slot by its key, for the preview route. */
+export function gridSlot(key: string): GridSlot | undefined {
+  return DASHBOARD_GRID.find((slot) => slot.key === key);
+}
 
 /**
  * The grid's cards, in grid order, filtered to what this build can actually
@@ -395,12 +493,15 @@ const DASHBOARD_GRID: readonly DashboardId[] = [
  * dashboard demoted to `coming` or `blocked` must drop out of the grid without
  * anyone remembering to edit two places.
  */
-export function previewableDashboards(): readonly (DashboardCard & { id: DashboardId })[] {
+export function previewableDashboards(): readonly (DashboardCard & {
+  id: DashboardId;
+  slot: GridSlot;
+})[] {
   const byId = new Map(DASHBOARDS.map((card) => [card.id, card]));
-  return DASHBOARD_GRID.flatMap((id) => {
-    const card = byId.get(id);
+  return DASHBOARD_GRID.flatMap((slot) => {
+    const card = byId.get(slot.report);
     return card !== undefined && card.status === 'available' && isDashboardId(card.id)
-      ? [card as DashboardCard & { id: DashboardId }]
+      ? [{ ...(card as DashboardCard & { id: DashboardId }), slot }]
       : [];
   });
 }
@@ -499,7 +600,7 @@ export function servedModules(): readonly ModuleCard[] {
  * live links and dead labels into one list of places to go.
  */
 export function otherDashboards(): readonly DashboardCard[] {
-  const onGrid = new Set<string>(DASHBOARD_GRID);
+  const onGrid = new Set<string>(DASHBOARD_GRID.map((slot) => slot.report));
   return servedDashboards().filter((card) => !onGrid.has(card.id));
 }
 
@@ -535,11 +636,21 @@ export function otherDashboards(): readonly DashboardCard[] {
 export async function buildHomePreview(args: {
   session: SessionClaims;
   schoolIds: readonly string[];
-  reportId: DashboardId;
+  /**
+   * A grid SLOT key, or a bare dashboard id.
+   *
+   * The grid may hold two cards for one report (`DASHBOARD_GRID`), so the thing
+   * a caller asks for is a card rather than a report. A bare dashboard id is
+   * still valid and is what the Module screen sends: no slot matches, and the
+   * report's own default preview is built, exactly as before.
+   */
+  slotKey: string;
   academicYear: string;
   asOfDate: string;
   correlationId: string;
 }): Promise<HomePreview> {
+  const slot = gridSlot(args.slotKey);
+  const reportIdRaw = slot?.report ?? args.slotKey;
   /**
    * Any SERVED dashboard, not just the eight the Dashboard grid leads with
    * (widened 2026-09-01 for Module Wise Analysis).
@@ -564,7 +675,7 @@ export async function buildHomePreview(args: {
    * `coming` cards have no screen to preview, and asking for one is still a
    * caller bug rather than a state a card can describe.
    */
-  const card = servedDashboards().find((c) => c.id === args.reportId);
+  const card = servedDashboards().find((c) => c.id === reportIdRaw);
   if (card === undefined || !isDashboardId(card.id)) {
     throw new PlatformError({
       code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
@@ -591,9 +702,25 @@ export async function buildHomePreview(args: {
      * Transport have no curated path yet, and a card that drew a clickable
      * chart over a path that does not exist would refuse the click it invited.
      */
+    /**
+     * A `drill-entry` slot deliberately declines the report's declared preview:
+     * it exists to put the level-1 chart back on the grid BESIDE that preview
+     * (`DASHBOARD_GRID`), so taking the declared one would draw the same card
+     * twice.
+     */
+    const preview = slot?.chart === 'drill-entry' ? undefined : DASHBOARD_PREVIEW[reportId];
     const path = drillPathFor(reportId);
     let queryKey: string;
-    if (path === undefined) {
+    if (preview !== undefined) {
+      /**
+       * A card the grid gives a chart of its OWN (`DASHBOARD_PREVIEW`) — a
+       * trend, a ring, a bucket bar — rather than the by-school bars every
+       * drill path starts from. Wins over the drill entry deliberately: the
+       * table exists precisely to override it, and the report still drills on
+       * its own page.
+       */
+      queryKey = preview.query;
+    } else if (path === undefined) {
       queryKey = DASHBOARD_LEAD_QUERY[reportId];
     } else {
       const drillQuery = DASHBOARD_DRILL_QUERY[reportId];
@@ -636,12 +763,25 @@ export async function buildHomePreview(args: {
      * the summary strip above already carries the numbers and the card's job is
      * to be the thing the strip cannot be — a shape.
      */
+    /**
+     * By ID in both of the first two cases, because one statement can feed more
+     * than one widget — `by_component` builds Fee Collection's school bars AND
+     * its fee-head table — so "the first bar/line/donut" is not a reliable way
+     * to find a specific chart, and picking the wrong one hands the card a
+     * chart with no `drill_dim` or, worse, the wrong subject drawn convincingly.
+     *
+     * Without either, the old rule stands: prefer the chart over a KPI, because
+     * the summary strip above already carries the numbers and the card's job is
+     * to be the thing the strip cannot be — a shape.
+     */
+    const wanted = preview?.widget_id ?? path?.widget_id;
     const widget =
-      path === undefined
+      wanted === undefined
         ? result.spec.widgets.find((w) => w.type === 'bar' || w.type === 'line' || w.type === 'donut')
-        : result.spec.widgets.find((w) => w.id === path.widget_id);
+        : result.spec.widgets.find((w) => w.id === wanted);
 
     return {
+      key: args.slotKey,
       id: reportId,
       title: card.title,
       icon: card.icon,
@@ -657,6 +797,7 @@ export async function buildHomePreview(args: {
      * the SPA would render as a dead card.
      */
     return {
+      key: args.slotKey,
       id: reportId,
       title: card.title,
       icon: card.icon,
@@ -1460,7 +1601,11 @@ export async function buildHomeSummary(args: {
     blocked_metrics: blocked,
     partial_metrics: partial,
     dashboards: servedDashboards(),
-    grid: previewableDashboards().map((card) => card.id),
+    grid: previewableDashboards().map((card) => ({
+      key: card.slot.key,
+      id: card.id,
+      kind: slotKind(card.slot),
+    })),
     modules: servedModules(),
     degraded_schools: degradedFrom([students, staff, fees, attendance]),
   };

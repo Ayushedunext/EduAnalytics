@@ -38,6 +38,7 @@ const DASHBOARD_IDS = [
   'enrollment-overview',
   'fee-collection',
   'fee-defaulters',
+  'fee-by-student',
   'staff-overview',
   'admissions-funnel',
   'attendance-analytics',
@@ -50,6 +51,7 @@ const DASHBOARD_IDS = [
 const {
   DASHBOARD_LEAD_QUERY: REAL_LEAD_QUERY,
   DASHBOARD_DRILL_QUERY: REAL_DRILL_QUERY,
+  DASHBOARD_PREVIEW: REAL_PREVIEW,
   DASHBOARD_IDS: REAL_DASHBOARD_IDS,
   DRILL_PATHS: REAL_DRILL_PATHS,
 } = await import('../src/services/dashboards.js');
@@ -82,7 +84,12 @@ vi.mock('../src/services/dashboards.js', async (importOriginal) => {
   };
 });
 
-const { buildHomePreview, previewableDashboards } = await import('../src/services/home.js');
+const {
+  buildHomePreview,
+  previewableDashboards,
+  DASHBOARD_GRID: REAL_GRID,
+  slotKind: realSlotKind,
+} = await import('../src/services/home.js');
 
 const SESSION = {
   sub: 'erp-user-3001',
@@ -114,11 +121,12 @@ function specWith(widgets: ChartSpec['widgets']): {
   };
 }
 
-function build(reportId: string) {
+/** `slotKey` is a grid CARD key or a bare dashboard id -- both are accepted. */
+function build(slotKey: string) {
   return buildHomePreview({
     session: SESSION,
     schoolIds: ['stmarksmb'],
-    reportId: reportId as (typeof DASHBOARD_IDS)[number],
+    slotKey,
     academicYear: '2026-27',
     asOfDate: '2026-08-26',
     correlationId: 'corr-1',
@@ -157,26 +165,162 @@ describe('a preview costs one query, not a whole dashboard', () => {
     }
   });
 
-  it('asks for the DRILL-ENTRY query where the report drills', async () => {
+  it('asks for the DRILL-ENTRY query where the report drills and declares no preview', async () => {
     buildDashboard.mockResolvedValue(
       specWith([
         { id: 'bar-school', type: 'bar', title: 'By school', x: 's', y: 'n', data: [{ s: 'A', n: 1 }] },
       ]),
     );
 
-    await build('fee-collection');
+    await build('fee-by-student');
 
     /**
-     * NOT the lead query. Fee Collection's page opens with receipts by month,
-     * a line; the grid card must draw the chart a click descends from, which is
-     * demand by school and comes from a different statement.
+     * NOT the lead query. Fee by Student's page opens with outstanding by class;
+     * a card still drawing its drill entry must draw the chart a click descends
+     * from, which is outstanding by SCHOOL and comes from a different statement.
+     *
+     * The subject used to be Fee Collection, and moved here when Fee Collection
+     * gained a `DASHBOARD_PREVIEW` entry -- this branch is the one for a gridded
+     * report the preview table does not override, so it has to be tested with
+     * one. Fee by Student qualifies on both counts and, like Fee Collection,
+     * has a drill query that genuinely differs from its lead one, which is what
+     * makes the last assertion here worth making.
      */
     expect(buildDashboard).toHaveBeenCalledTimes(1);
+    expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
+      reportId: 'fee-by-student',
+      queryKeys: [REAL_DRILL_QUERY['fee-by-student']],
+    });
+    expect(REAL_PREVIEW['fee-by-student']).toBeUndefined();
+    expect(REAL_DRILL_QUERY['fee-by-student']).not.toBe(REAL_LEAD_QUERY['fee-by-student']);
+  });
+
+  /**
+   * A card the grid gives a chart of its own (`DASHBOARD_PREVIEW`).
+   *
+   * Two things are asserted together because they are one decision: the query
+   * it asks for, and the widget it takes out of the answer. Getting the first
+   * right and the second wrong is the failure mode that does not look like one
+   * -- the card renders a real chart built from real data, just not the chart
+   * the grid meant to show.
+   */
+  it('asks for the DECLARED preview query and takes that widget by id', async () => {
+    buildDashboard.mockResolvedValue(
+      specWith([
+        { id: 'bar-school', type: 'bar', title: 'By school', x: 's', y: 'n', data: [{ s: 'A', n: 1 }] },
+        {
+          id: 'line-month',
+          type: 'line',
+          title: 'Receipts by month',
+          x: 'm',
+          y: 'collected',
+          data: [{ m: 'April', collected: 1 }],
+        },
+      ]),
+    );
+
+    const preview = await build('fee-collection');
+
+    expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
+      reportId: 'fee-collection',
+      queryKeys: [REAL_PREVIEW['fee-collection']?.query],
+    });
+    // The declared widget wins over the drill entry, which is present and first.
+    expect(preview.widget?.id).toBe('line-month');
+    expect(preview.widget?.type).toBe('line');
+  });
+
+  /**
+   * [MANDATORY] The preview table describes the GRID and only the grid, and the
+   * kind it declares is the kind the SPA sizes the card's bento slot from
+   * (tokens.css `.pgallery`). An entry for a report the grid does not draw is
+   * dead configuration that reads as live.
+   */
+  it('[MANDATORY] declares previews only for gridded dashboards, with a kind', () => {
+    /**
+     * The REAL grid, not `previewableDashboards()`. That helper is filtered
+     * through this file's mocked `DASHBOARD_IDS`, which is right for the tests
+     * about the preview BUILDER and wrong here: this one is about a table that
+     * describes production, and against the mock it would report every card the
+     * mock leaves out as an entry for a dashboard that is not on the grid.
+     */
+    const onGrid = new Set<string>(REAL_GRID.map((slot) => slot.report));
+    for (const [id, entry] of Object.entries(REAL_PREVIEW)) {
+      expect(onGrid.has(id), id + ' declares a grid preview but is not on the grid').toBe(true);
+      expect(entry?.query, id + ' declares a preview with no query').toBeTruthy();
+      expect(entry?.widget_id, id + ' declares a preview with no widget id').toBeTruthy();
+      expect(['bar', 'line', 'donut']).toContain(entry?.kind);
+    }
+  });
+
+  /**
+   * Every gridded card can be SIZED, whether or not it declares a preview.
+   *
+   * `previewKindFor` is what `/api/home` puts on the wire, and the SPA has no
+   * fallback of its own: a card whose kind came back undefined would take the
+   * grid's neutral span while its chart drew something else, which is the
+   * reflow the kind exists to prevent.
+   */
+  it('[MANDATORY] every gridded card has a chart kind, matching any declared one', () => {
+    for (const slot of REAL_GRID) {
+      const kind = realSlotKind(slot);
+      expect(['bar', 'line', 'donut'], slot.key + ' has no usable preview kind').toContain(kind);
+      /**
+       * A `drill-entry` slot is a bar by construction (level 1 is one bar per
+       * school) and deliberately does NOT take the report's declared kind --
+       * that is the whole point of the slot, which exists to sit beside the
+       * declared chart rather than repeat it.
+       */
+      const declared = REAL_PREVIEW[slot.report]?.kind;
+      if (slot.chart === 'drill-entry') expect(kind).toBe('bar');
+      else if (declared !== undefined) expect(kind).toBe(declared);
+    }
+  });
+
+  /**
+   * [MANDATORY] A card key is unique, and a `drill-entry` slot names a report
+   * that actually drills.
+   *
+   * The first is what makes two cards of one report possible at all: the SPA
+   * keys its previews map by this, so a duplicate would silently draw one card's
+   * chart in the other's slot -- both cards rendering, both plausible, one
+   * wrong. The second is the older invariant applied to the new shape: a slot
+   * pinned to a drill entry whose report has no path would fetch a statement no
+   * builder emits and fall back to whatever else came back.
+   */
+  it('[MANDATORY] grid keys are unique and drill-entry slots really drill', () => {
+    const seen = new Set<string>();
+    for (const slot of REAL_GRID) {
+      expect(seen.has(slot.key), 'duplicate grid key ' + slot.key).toBe(false);
+      seen.add(slot.key);
+      if (slot.chart === 'drill-entry') {
+        expect(
+          REAL_DRILL_QUERY[slot.report],
+          slot.key + ' pins a drill entry but its report has no drill query',
+        ).toBeTruthy();
+      }
+    }
+  });
+
+  /**
+   * A slot pinned to the drill entry asks for the DRILL query even though its
+   * report declares a preview -- that is the entire reason the slot exists, and
+   * getting it wrong would draw Fee Collection's receipts curve twice.
+   */
+  it('a drill-entry slot declines the report’s declared preview', async () => {
+    buildDashboard.mockResolvedValue(
+      specWith([
+        { id: 'bar-school', type: 'bar', title: 'By school', x: 's', y: 'n', data: [{ s: 'A', n: 1 }] },
+      ]),
+    );
+
+    await build('fee-collection--by-school');
+
+    expect(REAL_PREVIEW['fee-collection']).toBeDefined();
     expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
       reportId: 'fee-collection',
       queryKeys: [REAL_DRILL_QUERY['fee-collection']],
     });
-    expect(REAL_DRILL_QUERY['fee-collection']).not.toBe(REAL_LEAD_QUERY['fee-collection']);
   });
 
   it('asks for the LEAD query where the report does not drill', async () => {
@@ -198,10 +342,20 @@ describe('a preview costs one query, not a whole dashboard', () => {
   });
 
   /**
-   * Every card on the grid drills. This is the actual goal of the curated six —
-   * a card that draws a chart nobody can click is a card that lies about what
-   * happens when you click it — and it is worth asserting rather than assuming,
-   * because adding a seventh card is exactly when it would stop being true.
+   * Every REPORT on the grid drills -- on its own page, at all three levels.
+   *
+   * This used to be justified as "a card that draws a chart nobody can click
+   * lies about what happens when you click it", which was the argument for
+   * every card drawing its drill ENTRY. That is no longer what the grid does
+   * (`DASHBOARD_PREVIEW`): five of the eight draw a trend, a ring or a bucket
+   * bar instead, and those cards are inert -- a click opens the report, which is
+   * what a click on any card does, so nothing lies.
+   *
+   * The invariant survives the change because it was never really about the
+   * card. It is about what earns a place on the overview: a report the grid
+   * leads with is one a reader is meant to descend into, and one that cannot be
+   * descended belongs in the strip below. Worth asserting rather than assuming,
+   * because adding a ninth card is exactly when it would stop being true.
    */
   it('[MANDATORY] every dashboard on the grid has a drill path', () => {
     for (const card of previewableDashboards()) {
@@ -230,22 +384,27 @@ describe('a preview costs one query, not a whole dashboard', () => {
 
 describe('what a card shows', () => {
   /**
-   * By ID, not by type, once a path exists. One statement can feed more than
-   * one widget — `by_component` builds Fee Collection's school bars AND its
-   * fee-head table — so "the first bar" is no longer a reliable way to find the
-   * drill entry, and the wrong pick hands the card a chart with no `drill_dim`.
+   * By ID, not by type, whichever branch chose the chart. One statement can feed
+   * more than one widget -- `by_component` builds Fee Collection's school bars
+   * AND its fee-head table -- so "the first bar" is not a reliable way to find a
+   * specific chart, and the wrong pick hands the card a chart with no
+   * `drill_dim` or, worse, the wrong subject drawn convincingly.
+   *
+   * The subject is Fee by Student rather than Fee Collection because this is the
+   * DRILL-ENTRY branch, and Fee Collection now takes the declared-preview branch
+   * instead (`DASHBOARD_PREVIEW`); that branch has its own by-id case above.
    */
   it('takes the drill-entry widget by id, not merely the first chart', async () => {
     buildDashboard.mockResolvedValue(
       specWith([
-        { id: 'table-component', type: 'table', title: 'By head', columns: [{ field: 'c', label: 'C' }], rows: [{ c: 'Tuition' }] },
+        { id: 'table-students', type: 'table', title: 'By student', columns: [{ field: 'c', label: 'C' }], rows: [{ c: 'Asha' }] },
         { id: 'bar-decoy', type: 'bar', title: 'Decoy', x: 'c', y: 'n', data: [{ c: 'I', n: 1 }] },
-        { id: 'bar-school', type: 'bar', title: 'By school', x: 's', y: 'n', data: [{ s: 'A', n: 1 }] },
+        { id: 'bar-school-fee-student', type: 'bar', title: 'By school', x: 's', y: 'n', data: [{ s: 'A', n: 1 }] },
       ]),
     );
 
-    const preview = await build('fee-collection');
-    expect((preview.widget as { id: string }).id).toBe('bar-school');
+    const preview = await build('fee-by-student');
+    expect((preview.widget as { id: string }).id).toBe('bar-school-fee-student');
     expect(preview.status).toBe('ok');
   });
 

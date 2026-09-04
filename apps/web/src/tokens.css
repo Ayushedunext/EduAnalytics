@@ -79,16 +79,18 @@
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
   --radius-sm: 5px;
-  /* 8px, down from 14px (2026-09-03, second pass).
+  /* 12px (2026-09-03, third pass).
 
-     The first pass took it 12 -> 14 arguing that a bigger panel wants a rounder
-     corner. That is true of a card that is meant to read as an OBJECT, and this
-     one is not: a reporting surface is a sheet ruled into panels, and the
-     rounder each panel gets the more it detaches from its neighbours and floats.
-     Eleven floating slabs is the generic admin-dashboard look this product is
-     explicitly not. 8px is also what docs/10 §1 said all along -- the 14 was
-     drift, and this is a return rather than a new value. */
-  --radius-card: 8px;
+     The second pass took this to 8 arguing that a reporting surface is a sheet
+     ruled into panels, and that the rounder a panel gets the more it detaches
+     from its neighbours and floats. The premise is right and the number was an
+     over-correction from the 14 before it: what actually makes eleven panels
+     read as floating slabs is the SHADOW under each one, not the corner on it,
+     and the shadow is where that argument is now applied (`--shadow-card`,
+     still a hairline). 12 is the radius the panel padding and the 12px grid gap
+     were already drawn for, and it is what lets a card read as a considered
+     object rather than a cropped rectangle. */
+  --radius-card: 12px;
   --radius-lg: 12px;
   --radius-pill: 999px;
 
@@ -111,9 +113,56 @@
      what makes a card look like it is hovering. Kept as a hairline rather than
      removed outright so a card sitting ON white (the print surface, a popover's
      interior) does not dissolve. */
-  --shadow-card: 0 1px 1px rgba(3, 46, 54, 0.03);
-  --shadow-card-hover: 0 1px 2px rgba(3, 46, 54, 0.06);
+  --shadow-card: 0 1px 1px rgba(3, 46, 54, 0.03), 0 10px 24px -18px rgba(3, 46, 54, 0.28);
+  --shadow-card-hover: 0 1px 2px rgba(3, 46, 54, 0.05), 0 16px 32px -18px rgba(3, 46, 54, 0.34);
   --shadow-float: 0 8px 28px -6px rgba(3, 46, 54, 0.22), 0 2px 8px rgba(3, 46, 54, 0.08);
+}
+
+/**
+ * ---------- gradients ("Meadow Lit", 2026-09-03) ----------
+ *
+ * The washes the platform paints with, one per palette hue plus two composites.
+ *
+ * -- Why these are tokens and not written inline ------------------------------
+ * Every one of them is three LIGHTNESS steps of a single audited hue, in the
+ * same order, at the same stops — the identical construction `MarkGradient` in
+ * packages/chart-spec builds for a bar, a wedge and a dial (widgets.tsx carries
+ * the full reasoning and the CVD argument). That is what lets a KPI tile's
+ * accent, the bar summarising the same measure, and the legend dot keying it
+ * all read as one colour rather than three near-misses. Written out at each use
+ * site they would drift apart within a screen or two, which is exactly how the
+ * tone colours drifted two palette generations behind `SERIES` before they were
+ * read from it by slot.
+ *
+ * The steps come from `RAMP` in widgets.tsx and must be changed with it. They
+ * are not new colours: `deep`/`base`/`light` for each hue are already the
+ * platform's, and nothing here introduces a hue outside the validated five.
+ *
+ * -- 135deg, always ----------------------------------------------------------
+ * One light source for the whole product. A page whose cards are each lit from
+ * a different corner reads as a collage; the direction matters far less than
+ * that every surface agrees on it.
+ */
+:root {
+  --grad-teal: linear-gradient(135deg, #68cdee 0%, #00a5cb 55%, #007da1 100%);
+  --grad-mint: linear-gradient(135deg, #a3e297 0%, #72ba63 55%, #4a913b 100%);
+  --grad-amber: linear-gradient(135deg, #c5a356 0%, #a17a00 55%, #795400 100%);
+  --grad-rose: linear-gradient(135deg, #f090a7 0%, #cd617e 55%, #a13959 100%);
+  --grad-violet: linear-gradient(135deg, #cfb3ff 0%, #a886e5 55%, #815fba 100%);
+
+  /* The AI surface, and the one place two hues are deliberately crossed: the
+     Ask bar is not reporting a measure, so it carries no measure's colour, and
+     the teal→violet sweep is what marks it as a different KIND of thing from
+     every panel around it (docs/10 §14). */
+  --grad-ai: linear-gradient(120deg, #007da1 0%, #00a5cb 42%, #7f9fe0 74%, #a886e5 100%);
+
+  /* The canvas itself: two very faint hue pools, so a page of white cards sits
+     on something rather than on flat grey. Kept under 4% so nothing on it has
+     to compete with a tint to be legible. */
+  --grad-canvas:
+    radial-gradient(1100px 620px at 12% -8%, rgba(0, 165, 203, 0.10), transparent 62%),
+    radial-gradient(900px 560px at 92% 4%, rgba(168, 134, 229, 0.09), transparent 60%),
+    radial-gradient(760px 520px at 68% 100%, rgba(114, 186, 99, 0.08), transparent 62%);
 }
 
 /**
@@ -134,7 +183,12 @@ html, body { overflow: hidden; }
 
 body {
   margin: 0;
-  background: var(--color-background);
+  /* Tinted canvas, not flat grey. The pools are `--grad-canvas`; the flat token
+     stays underneath as the fallback and as the colour the gradients resolve
+     toward, so a surface that samples `--color-background` (the print sheet,
+     a menu's backdrop) is unaffected. */
+  background: var(--grad-canvas), var(--color-background);
+  background-attachment: fixed;
   color: var(--color-text-secondary);
   font-family: var(--font-sans);
   font-size: 14px;                 /* docs/10: body/table 14 */
@@ -227,8 +281,13 @@ body {
 
 /* ---------- surfaces ---------- */
 
+/* A card is white at the top and settles a shade toward the canvas at the
+   bottom — about 1.5% of tint over the whole height. Not decoration: on a
+   tinted canvas a pure-white rectangle with a hairline border has no form, and
+   the faintest vertical fall is what gives the surface a top and a bottom
+   without adding a shadow that would make it float. */
 .card {
-  background: var(--color-surface);
+  background: linear-gradient(180deg, #ffffff 0%, #fdfeff 55%, #f8fbfd 100%);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
@@ -239,7 +298,16 @@ body {
 
 .sidebar {
   width: 216px;
-  background: var(--color-ink);
+  /* A long vertical fall through the ink, with the brand's own teal pooled
+     behind the mark at the top. A 216px column of one flat near-black beside a
+     tinted canvas is the flattest surface on screen, and the nav is the one
+     thing on the page that is present on every screen -- so it is worth the few
+     percent of tint it takes to give it depth. Nothing here changes the
+     contrast the nav text is read at: the pool sits at the top, behind the
+     brand, and the item rows below it are on the same ink they always were. */
+  background:
+    radial-gradient(340px 200px at 0% 0%, rgba(0, 165, 203, 0.22), transparent 70%),
+    linear-gradient(180deg, #103740 0%, var(--color-ink) 42%, #08222a 100%);
   color: var(--color-nav-text);
   padding: 18px 12px;
   flex-shrink: 0;
@@ -315,9 +383,13 @@ body {
    to be something that does not shift the box the cursor is being tested
    against. */
 .nav li.clickable:hover { background: var(--color-nav-hover); color: #fff; }
+/* The one row that is lit. It carried the same 90deg teal ramp before; what is
+   added is the glow under it, which is what separates "this row is selected"
+   from "this row is a different colour" at a glance down a dark column. */
 .nav li.active {
-  background: linear-gradient(90deg, var(--color-teal) 0%, var(--color-teal-dark) 100%);
-  color: #fff; font-weight: 600; box-shadow: var(--shadow-xs);
+  background: linear-gradient(100deg, var(--color-teal-light) 0%, var(--color-teal) 45%, var(--color-teal-dark) 100%);
+  color: #fff; font-weight: 600;
+  box-shadow: 0 6px 16px -8px rgba(0, 165, 203, 0.9);
 }
 .nav li.muted { color: var(--color-nav-faint); cursor: not-allowed; }
 .nav li .trail { margin-left: auto; font-size: 11px; }
@@ -332,20 +404,28 @@ body {
 
 /* ---------- topbar ---------- */
 
+/* Frosted rather than opaque white: the bar is sticky, so content scrolls
+   UNDER it, and a translucent blur says that where a solid fill just cuts the
+   page off. The white behind the blur keeps the crumb and the controls at full
+   contrast. */
 .topbar {
-  background: var(--color-surface); border-bottom: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  border-bottom: 1px solid var(--color-border);
   padding: 12px 28px; display: flex; align-items: center; gap: 14px;
   position: sticky; top: 0; z-index: 20;
 }
 .topbar .crumb { font-size: 15px; font-weight: 700; color: var(--color-text-primary); letter-spacing: -0.01em; }
 
 .picker-btn {
-  background: var(--color-primary); color: #fff; border-radius: var(--radius-sm); padding: 8px 14px;
+  background: var(--grad-teal); color: #fff; border-radius: var(--radius-pill); padding: 8px 15px;
   font-weight: 600; font-size: 13px; display: flex; gap: 8px; align-items: center;
   border: none; cursor: pointer; font-family: var(--font-sans);
-  transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+  box-shadow: 0 6px 16px -9px rgba(0, 125, 161, 0.9);
+  transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
 }
-.picker-btn:hover { background: var(--color-primary-dark); box-shadow: var(--shadow-xs); }
+.picker-btn:hover { filter: brightness(1.06); box-shadow: 0 8px 20px -9px rgba(0, 125, 161, 0.9); }
 .picker-btn:active { transform: translateY(1px); }
 
 /* Subtle glassmorphism -- reserved for floating, transient controls (§12):
@@ -425,6 +505,14 @@ body {
   margin: 16px 0 8px; text-transform: uppercase;
   display: flex; align-items: center; gap: 8px;
 }
+/* A short gradient tick before a section name. A section rule is a horizontal
+   line of grey text on a grey canvas, which is the least findable thing on the
+   page; four coloured pixels in front of it give the eye something to catch
+   when it is scanning for where a band of cards begins. */
+.sect::before {
+  content: ''; flex: none; width: 3px; height: 12px; border-radius: 2px;
+  background: var(--grad-teal);
+}
 
 /* ---------- labelled group (docs/10 §2, Dashboard) ---------- */
 
@@ -437,20 +525,33 @@ body {
    their own 1px borders, so the group reads as a container and its contents
    still read as separate readings. */
 .group {
-  /* Faintly sunken, not white. A KPI tile paints only its 3px tone edge -- the
-     other three sides are zeroed by the `border-image` that draws it -- so on a
-     white group the tiles vanished into the background and the strip read as
-     four numbers floating in a box. One step down from the card colour is
-     enough for them to reappear as tiles, and still reads as a container
-     rather than as a second surface. */
-  background: var(--color-surface-sunken);
+  /* Faintly sunken, not white, so the tiles inside read as tiles rather than as
+     numbers floating in a box. (The original reason was that a KPI tile painted
+     only its 3px tone edge and had no other border to show; the tone edge is a
+     pseudo-element now and the tiles carry `.card`'s full hairline again -- but
+     the sunken well is still what separates a container from its contents, and
+     it is what keeps the strip reading as one answer instead of five.)
+
+     The tint is the canvas's own hues at a few percent rather than flat grey:
+     the well is the top of the page, and a neutral band across it was the one
+     place the tinted canvas stopped. */
+  background:
+    linear-gradient(135deg, rgba(0, 165, 203, 0.05), rgba(168, 134, 229, 0.05)),
+    var(--color-surface-sunken);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
   padding: 9px 11px 11px;
 }
+/* Same gradient tick as `.sect`, for the same reason -- these two label the same
+   kind of thing (a band of the page) and should be found the same way. */
 .groupLabel {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--color-text-muted); margin: 0 0 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.groupLabel::before {
+  content: ''; flex: none; width: 3px; height: 12px; border-radius: 2px;
+  background: var(--grad-teal);
 }
 .sect::after {
   content: ''; flex: 1; height: 1px; background: var(--color-border);
@@ -501,7 +602,9 @@ body {
      was providing moved into the padding, where it separates the tile's content
      from the tile's edge instead of splitting the content. */
   gap: 2px;
-  border-left: 3px solid var(--color-border-strong);
+  /* The accent rail is a pseudo-element now (see below), so the tile's own left
+     padding has to make room for it. */
+  padding-left: 18px;
   overflow: hidden;
 }
 /* No lift on hover. A KPI tile is not a control -- nothing happens when you
@@ -510,22 +613,49 @@ body {
    is the floating-component look this surface is meant to avoid. */
 .kpi:hover { box-shadow: var(--shadow-card-hover); }
 
-/* Semantic left-edge accent, set by the tone the server assigned the metric —
-   never invented client-side (§11: colour communicates meaning, not decoration).
+/* Semantic accent, set by the tone the server assigned the metric — never
+   invented client-side (§11: colour communicates meaning, not decoration).
 
-   The edge is a 3px GRADIENT rather than a flat rule (2026-09-01), running the
-   hue's deep step into its lit one — the same ramp the bars are painted with,
-   so a tile and the chart it summarises are visibly the same measure. It stays
-   a border-box edge, not a pseudo-element, so nothing new can catch a click. */
-.kpi { border-left-color: transparent; background-clip: padding-box; }
-.kpi--positive { border-image: linear-gradient(180deg, var(--color-mint), #a3e297) 1; }
-.kpi--warning  { border-image: linear-gradient(180deg, var(--color-amber), #c5a356) 1; }
-.kpi--negative { border-image: linear-gradient(180deg, var(--color-red), #f090a7) 1; }
-.kpi--neutral  { border-image: linear-gradient(180deg, var(--color-teal), var(--color-teal-light)) 1; }
-/* `border-image` paints all four edges, so the other three are widthless. */
-.kpi--positive, .kpi--warning, .kpi--negative, .kpi--neutral {
-  border-style: solid; border-width: 0 0 0 3px;
+   -- Why the rail moved off the border (2026-09-03) --------------------------
+   It was a 3px `border-image` on the left edge, which was correct while the
+   card radius was 8px and merely tolerable at 4. `border-image` is not clipped
+   by `border-radius`: it paints the full straight edge, so at a 12px corner the
+   rail ran past the curve and each tile grew two small square ears. A
+   pseudo-element inside a tile that already clips (`overflow: hidden`) follows
+   the corner exactly. It is `pointer-events: none` and sits under the content,
+   so the reason the border version was chosen — nothing new that can catch a
+   click — still holds.
+
+   Each tone names ONE gradient token, and that token is the same wash the
+   chart-spec renderer paints the corresponding bar with, so a tile and the
+   chart summarising the same measure are visibly the same measure. */
+.kpi { --kpi-grad: var(--grad-teal); --kpi-tint: rgba(0, 165, 203, 0.07); }
+.kpi--positive { --kpi-grad: var(--grad-mint); --kpi-tint: rgba(114, 186, 99, 0.08); }
+.kpi--warning  { --kpi-grad: var(--grad-amber); --kpi-tint: rgba(161, 122, 0, 0.08); }
+.kpi--negative { --kpi-grad: var(--grad-rose); --kpi-tint: rgba(205, 97, 126, 0.08); }
+.kpi--neutral  { --kpi-grad: var(--grad-teal); --kpi-tint: rgba(0, 165, 203, 0.07); }
+
+.kpi::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--kpi-grad);
+  pointer-events: none;
 }
+/* A pool of the metric's own hue in the corner the figure does not occupy.
+   Under a tenth opacity: enough that five tiles in a row are five colours at a
+   glance rather than five white boxes with coloured edges, nowhere near enough
+   to tint the digits sitting on it. */
+.kpi::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 100% at 100% 0%, var(--kpi-tint), transparent 68%);
+  pointer-events: none;
+}
+/* Everything the tile actually says sits above both washes. */
+.kpi > * { position: relative; z-index: 1; }
 
 /* A kicker, not a sentence: smaller and tracked out, so it reads as the NAME of
    the figure below rather than as a line of text the figure interrupts. This is
@@ -545,6 +675,18 @@ body {
   display: block; font-size: 24px; font-weight: 650; letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums; color: var(--color-text-primary); line-height: 1.2;
 }
+/* The figure, its dial and its delta on ONE baseline row.
+   The delta used to sit on a line of its own under the number, which cost the
+   whole strip a row of height to say "▲ 2.4%". Beside the figure it reads as an
+   annotation ON the figure, which is what it is, and the strip gets shorter --
+   the same trade the greeting and the scope line made on the page header. */
+.kpiFigure { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.kpiFigure .kpiValue { flex: 0 1 auto; min-width: 0; }
+/* The dial a rate metric carries (chart-spec `MeterRing`). `flex: none` so a
+   long figure never squeezes the ring out of round, and the negative margin
+   pulls it back over the tile's left padding so the numbers on a strip of mixed
+   rate and count tiles still start on one vertical line. */
+.kpiRing { flex: none; display: block; margin-left: -2px; }
 /* The one-off legacy shape (`<b>` direct child, no wrapper spans) still used by
    the unavailable-metric tile below keeps its own rule so both read the same
    without every caller needing the new markup. Its figure tracks `.kpiValue`
@@ -556,7 +698,9 @@ body {
    size nobody can name. */
 .kpi > b:first-child { display: block; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 1px; font-variant-numeric: tabular-nums; }
 .kpi > span { font-size: 12px; color: var(--color-text-muted); }
-.kpi.unavailable { border-left-color: var(--color-border); }
+/* A metric with no source carries no hue: a grey rail and no corner pool, so it
+   reads as absent rather than as a fifth measure in a fifth colour. */
+.kpi.unavailable { --kpi-grad: linear-gradient(180deg, var(--color-line), var(--color-border)); --kpi-tint: transparent; }
 .kpi.unavailable b { color: var(--color-border-strong); }
 
 .kpiDelta {
@@ -613,34 +757,50 @@ body {
 /* The AI capability, styled as a distinct product surface (§14) — a soft glow
    border rather than a loud fill, so it reads as premium without competing
    with the KPI row for attention. */
-/* Slimmer and flat (2026-09-03). It carried a vertical gradient wash and a
-   16px-tall glyph in a 34px tile, which together took ~70px of the first fold to
-   offer a text box. The AI is still a distinct surface -- it keeps the teal
-   border and the teal kicker -- but a decorative fill on a reporting page is
-   exactly the chrome the rest of this pass removed. */
+/* Slimmer, and lit rather than filled (2026-09-03).
+   It once carried a full vertical gradient wash and a 16px glyph in a 34px
+   tile, which together took ~70px of the first fold to offer a text box; that
+   was cut to a flat white bar with a teal hairline. Flat went too far in the
+   other direction -- the one surface on the page that is NOT a reading of
+   school data ended up looking like the quietest thing on it.
+
+   The height stays where the slim version put it. What comes back is colour,
+   and only where it identifies: a teal→violet wash on the glyph tile and on the
+   button, a barely-there tint across the bar itself, and a glow in the AI hue
+   under the whole thing. Nothing here is a measure, so the crossed hues cannot
+   be mistaken for one (docs/10 §14, and `--grad-ai`). */
 .askbar {
   display: flex; align-items: center; gap: 10px;
-  background: var(--color-surface);
+  background:
+    linear-gradient(100deg, rgba(0, 165, 203, 0.07) 0%, rgba(168, 134, 229, 0.07) 100%),
+    var(--color-surface);
   border: 1px solid rgba(0, 165, 203, 0.30); border-radius: var(--radius-card); padding: 8px 12px;
   cursor: pointer;
+  box-shadow: 0 8px 22px -16px rgba(0, 120, 165, 0.55);
   transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
-.askbar:hover { box-shadow: var(--shadow-card-hover); border-color: var(--color-primary); }
+.askbar:hover {
+  border-color: rgba(0, 165, 203, 0.6);
+  box-shadow: 0 12px 28px -14px rgba(0, 120, 165, 0.55);
+}
 .askbar.locked {
   border-color: var(--color-border); background: var(--color-locked-bg); cursor: default; box-shadow: none;
 }
 .askbar .bot {
-  width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
-  background: var(--color-teal);
+  width: 26px; height: 26px; border-radius: 8px; flex-shrink: 0;
+  background: var(--grad-ai);
+  color: #fff;
+  box-shadow: 0 4px 10px -4px rgba(0, 120, 165, 0.7);
   display: flex; align-items: center; justify-content: center; font-size: 13px;
 }
 .askbar.locked .bot { background: var(--color-disabled); box-shadow: none; }
 .askbar .ph { flex: 1; color: var(--color-text-muted); font-style: italic; font-size: 12.5px; }
 .askbar .go {
-  background: var(--color-primary); color: #fff; border-radius: var(--radius-sm); padding: 8px 16px;
+  background: var(--grad-ai); color: #fff; border-radius: var(--radius-pill); padding: 8px 18px;
   font-weight: 600; font-size: 13px; white-space: nowrap;
+  box-shadow: 0 6px 16px -8px rgba(0, 120, 165, 0.8);
 }
-.askbar.locked .go { background: var(--color-disabled); }
+.askbar.locked .go { background: var(--color-disabled); box-shadow: none; }
 
 /* ---------- Home: dashboard preview cards ---------- */
 
@@ -663,8 +823,54 @@ body {
    its report costs the click. Two breakpoints, not a bare auto-fit, because
    auto-fit would silently go back to 3+ columns the moment the viewport is wide
    enough -- 980px matches docs/10 §4's own single-column floor. */
-.pgallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-@media (max-width: 980px) { .pgallery { grid-template-columns: 1fr; } }
+/* A BENTO on a 12-column track, not a 2-up of equal boxes (2026-09-03).
+
+   The note above is about how WIDE a preview card has to be to draw a chart,
+   and it still binds: a 460px card renders three bars as three hairlines, which
+   is what killed the 3-and-4-column versions. What it never distinguished is
+   that not every chart wants the same width. A twelve-month trend is read left
+   to right and gets better the longer it is; a ring is a fixed-size object with
+   a key beside it and gains nothing past about 420px — given half a page it
+   just sits in the middle of a lake of white, which is the dead space this pass
+   was asked to remove.
+
+   So the track is 12 columns and each card takes the span its CHART wants
+   (`kind`, from `/api/home` -- the server names the chart and its shape in one
+   place, `DASHBOARD_PREVIEW`). A trend is 8, a ring is 4, a bar chart is 6, and
+   the smallest slot the grid can produce is 4/12 of ~1650px, comfortably past
+   the floor the two-column note established.
+
+   `dense` is what makes it tile. The server's order is a RANKING (money first)
+   and must not be bent to suit arithmetic, so the spans as ranked do not fall
+   into neat rows on their own -- 8, 6, 6, 4, 8, 4, 6, 6. Dense packing pulls the
+   next card that FITS into the 4 columns left beside a trend, which fills every
+   row exactly and leaves the DOM order, and therefore the reading and tab order,
+   untouched. `.specPanels` carries the same reasoning for the same reason.
+
+   Below 1400px there is no longer room to be clever: two equal halves, which is
+   the layout this grid had before and which is still right when the page has
+   ~1100px to give. Below 980px, one card per row (docs/10 §4's floor). */
+.pgallery {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-flow: dense;
+  gap: 12px;
+}
+/* Six is the neutral span -- a bar chart comparing schools, and the fallback for
+   a card whose kind the server did not name (a module screen's cards). */
+.pcard { grid-column: span 6; }
+/* A trend. Width is the axis it is read along, so it takes the larger share. */
+.pcard--line { grid-column: span 8; }
+/* A ring plus its key. Compact by nature -- see above. */
+.pcard--donut { grid-column: span 4; }
+.pcard--bar { grid-column: span 6; }
+
+@media (max-width: 1400px) {
+  .pcard, .pcard--line, .pcard--donut, .pcard--bar { grid-column: span 6; }
+}
+@media (max-width: 980px) {
+  .pcard, .pcard--line, .pcard--donut, .pcard--bar { grid-column: span 12; }
+}
 .pcard {
   padding: 11px 14px 12px;
   cursor: pointer;
@@ -687,16 +893,48 @@ body {
    only thing on the page that moved, and it read as the card detaching from the
    sheet rather than as it being ready to click. */
 .pcard:hover { box-shadow: var(--shadow-card-hover); border-color: rgba(0, 165, 203, 0.35); }
-.pcardHead { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
-.pcardIc { font-size: 14px; flex-shrink: 0; }
+/* A hairline of the brand wash along the card's top edge, revealed on hover.
+   The card is a control and has to answer the pointer with something; a rule
+   that lights up costs no layout, moves nothing, and is legible on a grid where
+   eight cards are otherwise identical. `border-radius` inherited from the card
+   so the rule stops where the corner starts rather than crossing it. */
+.pcard::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--grad-ai);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+}
+.pcard { position: relative; }
+.pcard:hover::before, .pcard:focus-visible::before { opacity: 1; }
+.pcardHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+/* The dashboard's glyph in a tinted tile, not loose on the card.
+   A bare emoji beside a bold title reads as punctuation; the same emoji on a
+   soft brand-washed square reads as the card's mark, which is what gives a grid
+   of eight cards a scannable left column. */
+.pcardIc {
+  font-size: 13px; flex-shrink: 0;
+  width: 24px; height: 24px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(140deg, rgba(0, 165, 203, 0.16), rgba(168, 134, 229, 0.14));
+}
 .pcardHead b { font-size: 12.5px; font-weight: 600; color: var(--color-text-primary); flex: 1; min-width: 0; }
-.pcardGo { font-size: 12px; color: var(--color-text-muted); opacity: 0; transition: opacity 0.15s ease; }
+.pcardGo { font-size: 12px; color: var(--color-primary); opacity: 0; transition: opacity 0.15s ease; }
 .pcard:hover .pcardGo { opacity: 1; }
 /* The live widget renders through the same `.kpi` styling used everywhere
    else (WidgetSpecView -> KpiTile), so a card-sized KPI reads identically to
    its full-dashboard counterpart -- just smaller, never restyled. */
 .pcardBody { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-.pcardBody .kpi { padding: 0; border-left: none; box-shadow: none; background: transparent; }
+/* The tile's own chrome comes off inside a preview card: the card already IS
+   the surface, and the accent rail and corner pool would be a second frame
+   drawn inside the first. Both are pseudo-elements now, so both are suppressed
+   here rather than by unsetting a border. */
+.pcardBody .kpi { padding: 0; box-shadow: none; background: transparent; }
+.pcardBody .kpi::before, .pcardBody .kpi::after { display: none; }
 .pcardBody .kpiValue { font-size: 22px; }
 /* `auto` vertical margins centre the message in the card's flex column. A
    preview card is stretched to its row-mate's height, so a card that has only a
@@ -1204,6 +1442,17 @@ body {
   white-space: nowrap;
 }
 .specDonutCenter--compact .value { font-size: 20px; }
+.specDonutCenter--compact .label { font-size: 8.5px; max-width: 13ch; }
+/* The key, at card size. It renders on a preview card now (a donut is a chart
+   the Dashboard grid CHOOSES -- widgets.tsx carries the reasoning), so it is
+   tightened rather than dropped: a slightly smaller row, a slightly tighter
+   column gap, and the ring above gives up the vertical space it costs. */
+.specPanelCompact .specDonutLegend {
+  gap: 3px 12px;
+  font-size: 11px;
+  margin-top: 8px;
+}
+.specPanelCompact .specDonutLegend .share { font-size: 11px; }
 
 /* Wide tables scroll inside the panel rather than stretching the page. */
 .specTableWrap { overflow-x: auto; max-height: 420px; overflow-y: auto; border-radius: var(--radius-sm); }
@@ -1408,10 +1657,13 @@ body {
 /* "Ask AI" stays the one saturated affordance — a premium capability gets to
    look different, per §13, without outshining the analytics beneath it. */
 .chipbtn--ai {
-  background: linear-gradient(135deg, var(--color-teal) 0%, var(--color-teal-dark) 100%);
-  border-color: transparent; color: #fff; box-shadow: 0 3px 10px rgba(0, 165, 203, 0.28);
+  /* The same teal-into-violet sweep the Ask bar wears (`--grad-ai`): both are
+     the AI capability, and until now they were two different gradients saying
+     so. One token, one surface identity. */
+  background: var(--grad-ai);
+  border-color: transparent; color: #fff; box-shadow: 0 4px 12px -3px rgba(0, 125, 161, 0.45);
 }
-.chipbtn--ai:hover:not(.disabled) { box-shadow: 0 5px 16px rgba(0, 165, 203, 0.36); background: linear-gradient(135deg, var(--color-teal) 0%, var(--color-teal-dark) 100%); }
+.chipbtn--ai:hover:not(.disabled) { box-shadow: 0 6px 18px -4px rgba(0, 125, 161, 0.55); background: var(--grad-ai); filter: brightness(1.05); }
 .chipbtn--ai.disabled { background: var(--color-disabled); color: #fff; opacity: 0.7; }
 
 /* A chip that IS a filter rather than an action (DashboardPage's "Compare
@@ -1561,3 +1813,126 @@ body {
 .channelBody { flex: 1; min-width: 0; }
 .channelBody b { font-size: 13.5px; color: var(--color-text-primary); }
 .channelDetail { font-size: 11.5px; color: var(--color-text-muted); margin: 2px 0 0; line-height: 1.5; }
+
+/* ---------- Custom report: the split edit screen (docs/06 §3, §4) ----------
+ *
+ * "Visual editor … with the SQL regenerating live BESIDE it". The controls and
+ * the logic panel share the left column; the report itself holds the right,
+ * where it stays clickable through its drill levels while a reader edits.
+ *
+ * The left column is clamped rather than proportional: a form of labelled
+ * selects stops being easier to read past about 460px, and every pixel beyond
+ * that is taken from the chart — which is the half that actually needs room.
+ */
+
+.editorGrid {
+  display: grid;
+  grid-template-columns: clamp(340px, 32%, 460px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* One column, editor first: on a narrow screen the controls are what the
+   reader came to this screen for, and a preview above them would push them
+   below the fold. Same 1024px the `.specPanels` grid collapses at. */
+@media (max-width: 1024px) {
+  .editorGrid { grid-template-columns: 1fr; }
+}
+
+.editorCol { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* The preview column is about half the page, narrower than the breakpoint
+   `.specPanels` already collapses at, so every widget span is forced to the
+   full 12 columns here too — the same override the Ask AI panel uses. */
+.editorCol .specPanel,
+.editorCol .specPanel--hero,
+.editorCol .specPanel--side,
+.editorCol .specPanel--medium,
+.editorCol .specPanel--wide {
+  grid-column: span 12;
+}
+
+.editorPreviewHead {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 2px;
+}
+.editorPreviewNote { font-size: 11.5px; color: var(--color-text-muted); }
+
+.editorCard { display: flex; flex-direction: column; gap: 10px; }
+
+.editorHint { font-size: 11.5px; color: var(--color-text-muted); line-height: 1.5; margin: 0; }
+
+.editorLabel {
+  font-size: 11px; font-weight: 600; color: var(--color-text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+.editorField { display: flex; flex-direction: column; gap: 4px; }
+
+.editorInput {
+  font-family: var(--font-sans); font-size: 13px;
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  padding: 7px 10px; background: var(--color-surface); color: var(--color-text-primary);
+  width: 100%;
+}
+.editorInput:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+
+/* Shown, not chosen — see `VisualEditor`'s header for which fields are which
+   and why. Deliberately NOT styled as a disabled input: a greyed-out control
+   reads as "temporarily unavailable", where a plain value reads as a fact. */
+.editorReadonly {
+  font-size: 13px; color: var(--color-text-secondary);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+
+.editorRadios { display: flex; gap: 8px; flex-wrap: wrap; }
+.editorRadio {
+  display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+  color: var(--color-text-primary); cursor: pointer;
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+.editorRadio.disabled { color: var(--color-text-muted); cursor: not-allowed; opacity: 0.65; }
+
+/* ---------- Drill path (docs/06 §4.1's L1/L2/L3 rows) ---------- */
+
+.drillPath { display: flex; flex-direction: column; gap: 6px; }
+
+.drillPathRow { display: flex; align-items: center; gap: 8px; }
+
+/* High / Mid / Low, in the three-step ramp docs/10 §1 already uses for depth,
+   so the rank reads as a descent rather than as three unrelated labels. */
+.drillPathRank {
+  flex: 0 0 84px; font-size: 11.5px; font-weight: 700; letter-spacing: -0.01em;
+}
+.drillPathRank--1 { color: #067a5b; }
+.drillPathRank--2 { color: var(--color-primary); }
+.drillPathRank--3 { color: #8a5a0b; }
+
+/* The catalog's dimension: the one thing on this panel a reader may not
+   change (ADR-020), so it is presented as a value and not as a dead control. */
+.drillPathDim {
+  flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--color-text-secondary);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 6px 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.drillPathChart { flex: 0 0 96px; width: 96px; padding: 6px 8px; }
+
+.editorLocked {
+  display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px;
+  color: var(--color-text-muted); line-height: 1.5;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.editorLocked input { margin-top: 2px; }
+
+.editorActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* Said, not implied. The preview beside this panel re-runs against real school
+   databases, so it shows the SAVED version — a reader who changed a level's
+   chart and saw nothing move would otherwise conclude the control is broken. */
+.editorDirty { font-size: 11.5px; color: #7a5b06; }

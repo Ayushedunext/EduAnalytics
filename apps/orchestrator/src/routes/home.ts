@@ -18,7 +18,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
-import { buildHomePreview, buildHomeSummary } from '../services/home.js';
+import { buildHomePreview, buildHomeSummary, gridSlot } from '../services/home.js';
 import { isDashboardId } from '../services/dashboards.js';
 import { ACADEMIC_YEAR, AS_OF_DATE, isRealDate, today } from './report.js';
 
@@ -102,7 +102,7 @@ homeRouter.get('/api/home', (req: Request, res: Response, next: NextFunction): v
  * unavailable dashboard is not a failed request (ADR-011). An id that is not a
  * previewable dashboard at all IS an error — that is a caller bug, not a state.
  */
-homeRouter.get('/api/home/preview/:id', (req: Request, res: Response, next: NextFunction): void => {
+homeRouter.get('/api/home/preview/:key', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     const session = req.session;
     if (session === undefined) {
@@ -113,9 +113,20 @@ homeRouter.get('/api/home/preview/:id', (req: Request, res: Response, next: Next
       });
     }
 
-    const rawId = req.params['id'];
-    const reportId = typeof rawId === 'string' ? rawId : '';
-    if (!isDashboardId(reportId)) {
+    /**
+     * A grid SLOT key, or a bare dashboard id.
+     *
+     * The grid can hold two cards for one report -- Fee Collection's receipts
+     * curve and its drillable by-school bars are one report seen twice
+     * (`DASHBOARD_GRID`) -- so what a card asks for is a card, not a report.
+     * Both forms are accepted and both are checked against a server-side list
+     * before anything is built: an unknown key is a caller bug, not a state a
+     * card can describe, and answering it with a guess is how a typo becomes a
+     * chart of the wrong report.
+     */
+    const rawKey = req.params['key'];
+    const slotKey = typeof rawKey === 'string' ? rawKey : '';
+    if (gridSlot(slotKey) === undefined && !isDashboardId(slotKey)) {
       throw new PlatformError({
         code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
         message: 'That dashboard does not exist.',
@@ -148,7 +159,7 @@ homeRouter.get('/api/home/preview/:id', (req: Request, res: Response, next: Next
     const preview = await buildHomePreview({
       session,
       schoolIds,
-      reportId,
+      slotKey,
       academicYear,
       asOfDate,
       correlationId: req.correlationId,

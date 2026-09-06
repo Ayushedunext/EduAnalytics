@@ -960,3 +960,27 @@ export async function askAI(
   }
   if (buffer.trim() !== '') onEvent(JSON.parse(buffer) as AskAiEvent);
 }
+
+// -- The Dashboard's cards (docs/10 §1.5) --------------------------------------
+
+/** One card of the Dashboard — services/overview.ts. Widgets validate in the renderer (§10). */
+export interface OverviewSlot {
+  key: string;
+  widgets: unknown[];
+  status: 'ok' | 'blocked';
+  reason?: string;
+  notes: string[];
+  queries: { key: string; description: string; sql: string }[];
+  degraded_schools: { school_id: string; message: string }[];
+  as_of: string;
+}
+
+export function getOverviewSlot(
+  schoolIds: readonly string[],
+  academicYear: string,
+  slot: string,
+): Promise<OverviewSlot> {
+  const query = new URLSearchParams({ academic_year: academicYear });
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  return request<OverviewSlot>(`/api/home/overview/${encodeURIComponent(slot)}?${query.toString()}`);
+}

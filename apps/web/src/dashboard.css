@@ -1,0 +1,131 @@
+/**
+ * Dashboard cards — the artifact's card internals (docs/10 §1.5). Loaded after
+ * skins.css (main.tsx) and scoped under `.skin` like it, so nothing here reaches
+ * the print surface.
+ */
+
+.skin .ovCard { display: flex; flex-direction: column; min-width: 0; padding: 16px 18px; position: relative; }
+.skin .ovHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.skin .ovHead h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.skin .ovHead .sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.skin .ovHead .tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.skin .ovNote { font-size: 10.5px; color: var(--ink-3); margin: 8px 0 0; line-height: 1.4; }
+.skin .ovMuted { font-size: 11.5px; color: var(--ink-3); margin: auto 0; line-height: 1.45; }
+.skin .ovCard .skeleton { flex: 1 1 auto; min-height: 120px; }
+.skin .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; color: #fff; letter-spacing: .02em; white-space: nowrap; }
+
+/* Format A grid: the artifact's 24 columns */
+.skin .gridA { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); grid-auto-rows: minmax(150px, auto); gap: 14px; }
+.skin .gridA .slotTiles { grid-column: span 12; }
+.skin .gridA .slotRings { grid-column: span 12; }
+.skin .gridA .slotBars { grid-column: span 8; grid-row: span 2; }
+.skin .gridA .slotSpark { grid-column: span 5; min-height: 150px; }
+.skin .gridA .slotDonut { grid-column: span 10; }
+.skin .gridA .slotUsers { grid-column: span 6; grid-row: span 2; }
+
+.skin .tiles6 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; flex: 1; align-content: start; }
+.skin .tile { border-radius: 10px; padding: 10px 12px; color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 8px 16px -8px rgba(0,0,0,.35); min-width: 0; }
+.skin .tile small { display: block; font-size: 10px; font-weight: 600; opacity: .95; line-height: 1.3; }
+.skin .tile b { display: block; font-size: 20px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skin .tile .parts { font-size: 9.5px; opacity: .92; margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+.skin .ringrow { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 18px; flex: 1; align-items: center; }
+.skin .ringrow .chart { height: 150px; position: relative; }
+.skin .ringval { text-align: center; font-weight: 700; font-size: 16px; color: var(--ink); margin-top: 6px; }
+.skin .bars-list { display: flex; flex-direction: column; gap: 14px; }
+.skin .bars-list .row { font-size: 11px; color: var(--ink); font-weight: 500; }
+.skin .bars-list .track { margin-top: 6px; height: 7px; border-radius: 99px; background: var(--soft); overflow: hidden; }
+.skin .bars-list .fill { height: 100%; border-radius: 99px; transition: width 1.2s cubic-bezier(.2,.8,.2,1); box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 0 8px -1px currentColor; background: currentColor; }
+
+.skin .spark .val { font-size: 15px; font-weight: 700; margin-top: -4px; color: var(--ink); }
+.skin .spark .chart { margin-top: 4px; }
+.skin .sparkChart .specPanelCompact { flex: none; }
+
+.skin .donutrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; flex: 1; align-items: center; }
+.skin .actsTitle { font-size: 11px; font-weight: 600; margin-bottom: 8px; color: var(--ink); }
+.skin .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.skin .acts .a { font-size: 10px; color: var(--ink-2); font-weight: 500; }
+
+.skin .userrow { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 11px; }
+.skin .userrow:last-child { border-bottom: 0; }
+.skin .userrow .skAvatar { width: 28px; height: 28px; font-size: 10px; }
+.skin .userrow b { display: block; font-size: 11px; font-weight: 600; color: var(--ink); }
+.skin .userrow small { color: var(--ink-3); font-size: 9.5px; }
+.skin .userrow .pill { margin-left: auto; padding: 2px 7px; font-size: 8.5px; }
+
+/* Format B */
+.skin .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.skin .row4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.skin .row21 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
+.skin .h2B { font-size: 15px; font-weight: 700; margin: 22px 0 12px; color: var(--ink); }
+.skin .kebab { color: var(--ink-3); font-size: 16px; line-height: 1; letter-spacing: 1px; cursor: pointer; background: none; border: 0; padding: 0 2px; }
+.skin .member { flex-direction: row; align-items: center; gap: 12px; padding: 14px; }
+.skin .member .skAvatar { width: 48px; height: 48px; font-size: 15px; }
+.skin .member b { display: block; font-size: 13px; font-weight: 700; color: var(--ink); }
+.skin .member small { display: block; color: var(--ink-3); font-size: 10.5px; }
+.skin .member em { display: block; font-style: normal; font-size: 10.5px; font-weight: 700; margin-top: 3px; }
+.skin .gaugeCard .body { display: flex; align-items: center; gap: 12px; }
+.skin .gaugeCard .gaugeBox { width: 70px; height: 70px; flex: none; position: relative; }
+.skin .gaugeCard .v { margin-left: auto; text-align: right; min-width: 0; }
+.skin .gaugeCard .v b { display: block; font-size: 24px; font-weight: 700; line-height: 1.1; color: var(--ink); }
+.skin .gaugeCard .v small { color: var(--ink-3); font-size: 10.5px; }
+.skin .gaugeRing { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 700; color: var(--ink); pointer-events: none; }
+.skin .tablewrap { overflow-x: auto; }
+.skin .ovTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.skin .ovTable th { text-align: left; font-weight: 700; color: var(--ink-2); padding: 8px; border-bottom: 1px solid var(--line); font-size: 11.5px; white-space: nowrap; }
+.skin .ovTable td { padding: 10px 8px; border-bottom: 1px solid var(--line); color: var(--ink-2); }
+.skin .ovTable td:nth-child(2) { color: var(--ink); font-weight: 600; }
+.skin .ovTable tr:last-child td { border-bottom: 0; }
+.skin .actionBtn { border: 0; background: var(--c0); color: #fff; font: inherit; font-size: 10.5px; font-weight: 600; padding: 5px 10px; border-radius: 7px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.skin .msg { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.skin .msg:last-child { border-bottom: 0; }
+.skin .msg .skAvatar { width: 32px; height: 32px; font-size: 11px; }
+.skin .msg b { display: block; font-size: 12px; font-weight: 700; color: var(--ink); }
+.skin .msg small { color: var(--ink-3); font-size: 11px; }
+.skin .msg time { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+
+/* Format C main */
+.skin .mainC { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; align-content: start; }
+.skin .mainC .slotProfile { grid-column: span 4; }
+.skin .mainC .slotCompany { grid-column: span 8; }
+.skin .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 6px; }
+.skin .tiles .tile b { font-size: 22px; }
+.skin .mainC .slotArea { grid-column: span 8; }
+.skin .mainC .slotPcompany { grid-column: span 4; }
+.skin .dgh { grid-column: span 12; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.skin .dgh h3 { font-size: 14px; font-weight: 600; margin: 0; color: var(--ink); }
+.skin .dgh .sub { font-size: 10.5px; color: var(--ink-3); }
+.skin .life { border: 0; background: var(--c0); color: #fff; font: inherit; font-size: 11px; font-weight: 600; padding: 7px 16px; border-radius: 99px; display: inline-flex; gap: 8px; align-items: center; }
+.skin .mainC .slotGauges { grid-column: span 8; flex-direction: row; gap: 22px; align-items: center; justify-content: space-around; flex-wrap: wrap; }
+.skin .gauge { display: flex; align-items: center; gap: 14px; }
+.skin .gauge .gaugeBox { width: 82px; height: 82px; flex: none; position: relative; }
+.skin .gauge b { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.skin .gauge .amt { font-size: 17px; font-weight: 700; margin: 2px 0 6px; color: var(--ink); }
+.skin .delta { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; }
+.skin .delta i { width: 20px; height: 16px; border-radius: 4px; display: inline-grid; place-items: center; font-style: normal; font-size: 10px; color: #fff; }
+.skin .mainC .slotCust { grid-column: span 4; }
+.skin .cust .v { font-size: 20px; font-weight: 700; color: var(--ink); }
+.skin .legendBtns { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--ink-2); }
+.skin .legendBtns button { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 0; }
+.skin .legendBtns button.dim { opacity: .4; }
+.skin .legendBtns i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+@media (max-width: 900px) {
+  .skin .gridA .slotTiles, .skin .gridA .slotRings, .skin .gridA .slotBars, .skin .gridA .slotDonut { grid-column: span 24; }
+  .skin .gridA .slotSpark { grid-column: span 12; }
+  .skin .gridA .slotUsers { grid-column: span 24; grid-row: auto; }
+  .skin .gridA .slotBars { grid-row: auto; }
+  .skin .row3, .skin .row4 { grid-template-columns: 1fr 1fr; }
+  .skin .row21 { grid-template-columns: 1fr; }
+  .skin .mainC .slotProfile, .skin .mainC .slotCompany, .skin .mainC .slotArea, .skin .mainC .slotPcompany, .skin .mainC .slotGauges, .skin .mainC .slotCust { grid-column: span 12; }
+  .skin .tiles6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .skin .row3, .skin .row4 { grid-template-columns: 1fr; }
+  .skin .gridA .slotSpark { grid-column: span 24; }
+  .skin .donutrow, .skin .ringrow { grid-template-columns: 1fr; }
+}
+
+/* A chart that fills a tall card (the artifact's two-row Monthly Revenue). */
+.skin .ovCard.fillChart .specPanelCompact { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.skin .ovCard.fillChart .recharts-responsive-container { flex: 1 1 auto; min-height: 230px; }

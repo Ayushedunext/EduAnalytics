@@ -46,6 +46,17 @@ import {
   YAxis,
 } from 'recharts';
 import { CHART_MOTION_MS, useChartMotion } from './ChartMotion.js';
+import {
+  ChartTypeSelect,
+  VividChart,
+  defaultChartType,
+  modelOf,
+  paletteColour,
+  toneSlot,
+  useChartPalette,
+  type ChartPalette,
+  type ChartType,
+} from './vivid.js';
 import { widgetSchema } from '../spec.js';
 import type {
   BarSeries,
@@ -678,6 +689,7 @@ function MeterRing({
 export function KpiTile({
   widget,
   accent,
+  slot,
 }: {
   widget: KpiWidget;
   /**
@@ -688,9 +700,21 @@ export function KpiTile({
    * arrangement second. A caller passing one can never repaint a warning tile.
    */
   accent?: ChartAccent | undefined;
+  /** A palette slot, where the page provides a palette (vivid mode) — see `WidgetView`. */
+  slot?: number | undefined;
 }): ReactElement {
   const tone = widget.tone ?? 'neutral';
-  const hue = kpiColour(widget.tone, accent);
+  const palette = useChartPalette();
+  /**
+   * Under a page palette the tile takes its hue from a SLOT rather than from the
+   * audited series: the tone's slot where the server claimed a meaning, the
+   * page's slot otherwise — the same precedence as before, on a different
+   * palette. `accent` is still honoured for callers that never learned slots.
+   */
+  const hue =
+    palette !== null
+      ? paletteColour(palette, toneSlot(widget.tone) ?? slot ?? accentSlot(accent))
+      : kpiColour(widget.tone, accent);
   const direction = widget.delta !== undefined ? deltaDirection(widget.delta) : null;
   const ringId = useGradientId('ring');
   /**
@@ -716,7 +740,7 @@ export function KpiTile({
     <div
       className={`card kpi kpi--${tone}`}
       style={
-        tone === 'neutral' && accent !== undefined
+        palette !== null || (tone === 'neutral' && accent !== undefined)
           ? ({
               '--kpi-grad': gradientCss(hue),
               '--kpi-tint': tintOf(hue, 0.09),
@@ -2698,15 +2722,146 @@ function toneColour(tone: KpiWidget['tone']): string {
  * 2026-09-01, naming the headline tile in a KPI row; every tile is one size
  * now, so the strip needs no per-tile prop at all — see `KpiTile`.)
  */
+/**
+ * An accent's palette slot, for the vivid presentation (vivid.tsx). The four
+ * meaning-bearing accents land on the slots that mean the same thing; the five
+ * identity accents spread over the rest.
+ */
+function accentSlot(accent: ChartAccent | undefined): number {
+  switch (accent) {
+    case 'secondary':
+      return 1;
+    case 'negative':
+    case 'coral':
+      return 2;
+    case 'warning':
+      return 3;
+    case 'violet':
+    case 'plum':
+      return 4;
+    case 'aqua':
+    case 'indigo':
+      return 5;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * A data-bound widget under a page palette: the same `Panel` chrome, the chart
+ * drawn by `VividChart` in the form the reader chose (vivid.tsx explains the
+ * projection and why it is presentation, not contract).
+ */
+function VividPanel({
+  widget,
+  palette,
+  compact,
+  spark,
+  fill,
+  slot,
+  chartType,
+  onChartTypeChange,
+  actions,
+  onDrill,
+}: {
+  widget: BarWidget | LineWidget | DonutWidget;
+  palette: ChartPalette;
+  compact: boolean | undefined;
+  spark: boolean | undefined;
+  fill: boolean | undefined;
+  slot: number;
+  chartType: ChartType | undefined;
+  onChartTypeChange: ((type: ChartType) => void) | undefined;
+  actions: ReactNode | undefined;
+  onDrill: DrillHandler | undefined;
+}): ReactElement {
+  /* A donut carries no `tone` (spec.ts): composition has no good or bad side. */
+  const baseSlot = toneSlot('tone' in widget ? widget.tone : undefined) ?? slot;
+  const model = modelOf(widget, baseSlot);
+  const type = chartType ?? defaultChartType(widget);
+  const drillable =
+    widget.drillable === true && widget.drill_dim !== undefined && onDrill !== undefined;
+  /**
+   * The menu sits in the panel head on a report page. A compact card owns its
+   * own head (PreviewCard) and renders the menu there, so nothing is drawn here
+   * for it — two menus for one chart would be the affordance twice.
+   */
+  const menu =
+    onChartTypeChange !== undefined && compact !== true ? (
+      <ChartTypeSelect value={type} onChange={onChartTypeChange} />
+    ) : null;
+  const composed =
+    menu === null && actions === undefined ? undefined : (
+      <>
+        {actions}
+        {menu}
+      </>
+    );
+  const longest = model.labels.reduce((most, label) => Math.max(most, label.length), 0);
+  const variant: PanelVariant =
+    type === 'hbar' ? (longest > 16 ? 'wide' : 'medium')
+    : type === 'bar' || type === 'line' || type === 'area' ? (longest > 16 || model.labels.length > 14 ? 'wide' : 'medium')
+    : 'medium';
+  return (
+    <Panel title={widget.title} variant={variant} compact={compact} actions={composed}>
+      <VividChart
+        model={model}
+        type={type}
+        palette={palette}
+        compact={compact}
+        spark={spark}
+        fill={fill}
+        onCategoryClick={
+          drillable && widget.type !== 'donut'
+            ? (index) => {
+                const target = drillTargetAt(widget, index);
+                if (target !== null) onDrill?.(target);
+              }
+            : undefined
+        }
+      />
+      {drillable && compact !== true && (
+        <p className="specDrillHint">Click a value to see this {widget.drill_dim} broken down.</p>
+      )}
+    </Panel>
+  );
+}
+
 export function WidgetView({
   widget,
   compact,
+  spark,
+  fill,
   accent,
+  slot,
+  chartType,
+  onChartTypeChange,
   actions,
   onDrill,
 }: {
   widget: Widget;
   compact?: boolean | undefined;
+  /** A sparkline under a figure (vivid.tsx `spark`). Needs a palette; inert otherwise. */
+  spark?: boolean | undefined;
+  /** Take the container's height (vivid.tsx `fill`). Needs a palette; inert otherwise. */
+  fill?: boolean | undefined;
+  /**
+   * The palette slot this widget draws in, where the page provides a palette
+   * (`ChartPaletteProvider`, vivid.tsx). Presentation, like `accent`, and under
+   * the same precedence: a widget's own `tone` wins. Ignored without a palette.
+   */
+  slot?: number | undefined;
+  /**
+   * The form to draw a bar/line/donut in, where the page provides a palette.
+   * Absent means the widget's natural form (`defaultChartType`). Never read
+   * from the spec and never written to it — a reader's choice for this render.
+   */
+  chartType?: ChartType | undefined;
+  /**
+   * Offered to a bar/line/donut panel as a type menu in its head. Absent (and
+   * always on the PDF surface, which mounts no palette) means no menu.
+   */
+  onChartTypeChange?: ((type: ChartType) => void) | undefined;
   /**
    * Single-series colour for a bar/line widget, and a NEUTRAL KPI tile's hue —
    * see `ChartAccent` and `kpiColour`. Still ignored by donut and table: a donut
@@ -2732,9 +2887,26 @@ export function WidgetView({
    */
   onDrill?: DrillHandler | undefined;
 }): ReactElement {
+  const palette = useChartPalette();
+  if (palette !== null && (widget.type === 'bar' || widget.type === 'line' || widget.type === 'donut')) {
+    return (
+      <VividPanel
+        widget={widget}
+        palette={palette}
+        compact={compact}
+        spark={spark}
+        fill={fill}
+        slot={slot ?? accentSlot(accent)}
+        chartType={chartType}
+        onChartTypeChange={onChartTypeChange}
+        actions={actions}
+        onDrill={onDrill}
+      />
+    );
+  }
   switch (widget.type) {
     case 'kpi':
-      return <KpiTile widget={widget} accent={accent} />;
+      return <KpiTile widget={widget} accent={accent} slot={slot} />;
     case 'bar':
       return (
         <BarPanel
@@ -2773,12 +2945,23 @@ export function WidgetView({
 export function WidgetSpecView({
   widget,
   compact,
+  spark,
+  fill,
   accent,
+  slot,
+  chartType,
+  onChartTypeChange,
   onDrill,
 }: {
   widget: unknown;
   compact?: boolean | undefined;
+  spark?: boolean | undefined;
+  fill?: boolean | undefined;
   accent?: ChartAccent | undefined;
+  /** See `WidgetView` — the vivid presentation's slot, form and menu. */
+  slot?: number | undefined;
+  chartType?: ChartType | undefined;
+  onChartTypeChange?: ((type: ChartType) => void) | undefined;
   /**
    * Drill clicks (ADR-020), forwarded to `WidgetView` exactly as `ChartSpecView`
    * forwards them for a whole spec. Added for the Dashboard grid, whose cards
@@ -2800,8 +2983,25 @@ export function WidgetSpecView({
     <WidgetView
       widget={parsed.data}
       compact={compact}
+      spark={spark}
+      fill={fill}
       accent={accent}
+      slot={slot}
+      chartType={chartType}
+      onChartTypeChange={onChartTypeChange}
       onDrill={onDrill}
     />
   );
+}
+
+/**
+ * The form a validated-or-not widget would open in, for a caller that holds
+ * the menu state itself (the Dashboard's cards). `'bar'` for anything that is
+ * not a drawable widget, which the renderer will refuse anyway.
+ */
+export function defaultChartTypeOf(widget: unknown): ChartType {
+  const parsed = widgetSchema.safeParse(widget);
+  if (!parsed.success) return 'bar';
+  const w = parsed.data;
+  return w.type === 'bar' || w.type === 'line' || w.type === 'donut' ? defaultChartType(w) : 'bar';
 }

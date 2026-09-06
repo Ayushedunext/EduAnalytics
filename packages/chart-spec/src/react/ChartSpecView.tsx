@@ -23,8 +23,10 @@
  */
 
 import type { ReactElement, ReactNode } from 'react';
+import { useState } from 'react';
 import { chartSpecSchema, type ChartSpec, type Widget } from '../spec.js';
 import { WidgetView, type DrillTarget } from './widgets.js';
+import type { ChartType } from './vivid.js';
 
 export interface ChartSpecViewProps {
   /** Unknown on purpose — see the validation note above. */
@@ -57,6 +59,16 @@ export function ChartSpecView({
   renderWidgetActions,
   onDrill,
 }: ChartSpecViewProps): ReactElement {
+  /**
+   * Which form each panel is currently drawn in, by widget id (vivid.tsx).
+   *
+   * Component state on purpose: a reader flipping "Receipts by month" to a
+   * donut is looking at THIS render, and the choice must not outlive it into a
+   * saved report or a PDF (ADR-021 — the print surface mounts no palette, so it
+   * never reads this and never draws a menu). The hook runs before the early
+   * return below, as React requires.
+   */
+  const [chartTypes, setChartTypes] = useState<Record<string, ChartType>>({});
   const parsed = chartSpecSchema.safeParse(spec);
 
   if (!parsed.success) {
@@ -96,17 +108,25 @@ export function ChartSpecView({
             * reads as the set of measures it is (docs/10 §3, amended
             * 2026-09-01).
             */}
-          {kpis.map((widget) => (
-            <WidgetView key={widget.id} widget={widget} />
+          {kpis.map((widget, index) => (
+            /* `slot` cycles by POSITION so a strip of neutral tiles reads as
+               several subjects under a page palette; a toned tile ignores it
+               (KpiTile). Without a palette the prop is inert. */
+            <WidgetView key={widget.id} widget={widget} slot={index % 6} />
           ))}
         </div>
       )}
 
       <div className="specPanels">
-        {panels.map((widget) => (
+        {panels.map((widget, index) => (
           <WidgetView
             key={widget.id}
             widget={widget}
+            slot={index % 6}
+            chartType={chartTypes[widget.id]}
+            onChartTypeChange={(type) => {
+              setChartTypes((current) => ({ ...current, [widget.id]: type }));
+            }}
             actions={renderWidgetActions?.(widget)}
             onDrill={
               onDrill === undefined ? undefined : (target) => { onDrill(widget, target); }

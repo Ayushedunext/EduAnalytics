@@ -195,10 +195,11 @@ export function ModulePage({
           </div>
         ) : (
           <div className="pgallery">
-            {cards.map((card) => (
+            {cards.map((card, index) => (
               <PreviewCard
                 key={card.id}
                 card={card}
+                slot={index}
                 preview={previews[card.id]}
                 schoolIds={schoolIds}
                 academicYear={academicYear}

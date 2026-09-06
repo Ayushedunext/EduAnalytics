@@ -655,6 +655,21 @@ export const openApiDocument: OpenApiDocument = {
           },
         },
       },
+      OverviewSlot: {
+        type: 'object',
+        required: ['key', 'widgets', 'status', 'notes', 'queries', 'degraded_schools', 'as_of'],
+        description: 'One card of the Dashboard (docs/10 §1.5), as chart-spec widgets plus its provenance.',
+        properties: {
+          key: { type: 'string', description: 'The slot: tiles, rings, monthly, weekly_receipts, weekly_attendance, top_schools, fee_heads, years, students_by_year, att_status, top_students, gauges, late_payers, pending_top, area, modes, late_weekly.' },
+          widgets: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Validated by the renderer before they are drawn.' },
+          status: { type: 'string', enum: ['ok', 'blocked'] },
+          reason: { type: 'string' },
+          notes: { type: 'array', items: { type: 'string' } },
+          queries: { type: 'array', items: ref('NamedQuery') },
+          degraded_schools: { type: 'array', items: ref('DegradedSchool') },
+          as_of: { type: 'string', format: 'date-time' },
+        },
+      },
       DashboardResponse: {
         type: 'object',
         required: ['spec', 'logic', 'degraded', 'degraded_schools'],
@@ -1178,6 +1193,32 @@ export const openApiDocument: OpenApiDocument = {
           },
           ...COMMON_ERRORS,
           '404': errorResponse('REPORT_DEFINITION_NOT_FOUND — not a previewable dashboard.'),
+        },
+      },
+    },
+    '/api/home/overview/{slot}': {
+      get: {
+        tags: ['Home'],
+        summary: 'ONE card of the Dashboard.',
+        description: [
+          'The Dashboard (docs/10 §1.5) is a fixed set of cards, each a SLOT built from the vetted',
+          '`dashboard-overview` report. One slot per request, for the reason `/api/home/preview/{key}`',
+          'gives: the page fills as each card lands instead of waiting for the slowest fee scan.',
+          'A slot that cannot be built answers 200 with `status: "blocked"` and a reason.',
+        ].join('\n'),
+        parameters: [
+          { name: 'slot', in: 'path', required: true, schema: { type: 'string' } },
+          academicYearParam(true),
+          asOfParam,
+          schoolIdsParam,
+        ],
+        responses: {
+          '200': {
+            description: 'The card, ready or blocked with a reason.',
+            content: { 'application/json': { schema: ref('OverviewSlot') } },
+          },
+          ...COMMON_ERRORS,
+          '404': errorResponse('REPORT_DEFINITION_NOT_FOUND — not a Dashboard slot.'),
         },
       },
     },

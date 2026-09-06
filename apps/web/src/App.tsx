@@ -21,14 +21,15 @@ import {
   getHome,
   getHomePreview,
   getSession,
-  type DashboardCard,
   type HomePreview,
   type HomeResponse,
   type SessionResponse,
 } from './api/client';
-import { Sidebar } from './components/Sidebar';
-import { Topbar } from './components/Topbar';
-import { Home } from './components/Home';
+import { ChartPaletteProvider } from '@sap/chart-spec/react';
+import { Shell } from './components/Shell';
+import { Dashboard } from './components/Dashboard';
+import { ThemeControls } from './components/ThemeControls';
+import { useDashboardTheme } from './theme/dashboardTheme';
 import { DashboardPage } from './components/DashboardPage';
 import { Settings } from './components/Settings';
 import { AskAI } from './components/AskAI';
@@ -47,6 +48,13 @@ export function App(): JSX.Element {
   const [selected, setSelected] = useState<string[]>([]);
   const [home, setHome] = useState<HomeResponse | null>(null);
   const [homeLoading, setHomeLoading] = useState(false);
+  /**
+   * The reader's layout and theme colour (theme/dashboardTheme.ts). Held here
+   * because the SHELL is what changes with the layout, and every screen renders
+   * inside it — a palette that only the Dashboard knew about would repaint its
+   * cards and leave the report a click away in last season's colours.
+   */
+  const theme = useDashboardTheme();
   const [homeError, setHomeError] = useState<string | null>(null);
   /**
    * The dashboard-preview cards, keyed by dashboard id and filled in one at a
@@ -254,23 +262,6 @@ export function App(): JSX.Element {
         : home.academic_year;
 
   /**
-   * Dashboard's grid. Fires once the KPI strip's fetch has told us the academic
-   * year -- the previews endpoint needs it (services/home.ts) and this way it is
-   * never re-derived a second time client-side. A session that can read neither
-   * students nor fees gets `academic_year: null` (home.ts); there is nothing to
-   * preview then, so this is skipped rather than sent with a made-up year.
-   *
-   * The ids are the ones the SERVER puts on the grid, in ITS order, read off the
-   * `/api/home` response rather than listed here -- so the SPA never asks for a
-   * dashboard the catalog considers `coming` or `blocked`.
-   */
-  useEffect(() => {
-    if (home === null || effectiveYear === null || selected.length === 0) return;
-    if (home.grid.length === 0) return;
-    return fetchPreviews(home.grid.map((entry) => entry.key), selected, effectiveYear);
-  }, [home, effectiveYear, selected, fetchPreviews]);
-
-  /**
    * A module's own cards, fetched when the module is OPENED rather than with
    * Home.
    *
@@ -340,18 +331,23 @@ export function App(): JSX.Element {
 
   return (
     /**
-     * The shell is exactly the viewport and clips; each pane scrolls itself.
-     * `min-h-0` on the content column is what lets `<main className="flex-1
-     * overflow-y-auto">` actually scroll — a flex child defaults to
-     * `min-height: auto` and would otherwise grow to fit its charts and push
-     * the whole layout past the bottom of the window.
+     * The skin is the viewport and is the one thing that scrolls: the framed
+     * layouts (docs/10 §1.5) draw their chrome INSIDE a rounded frame on the
+     * page, as the reference does, so the page scrolls as a whole rather than
+     * pane by pane. The palette provider sits outside the shell so the chrome
+     * and every chart read one value.
      */
-    <div className="h-full flex overflow-hidden">
-      <Sidebar
-        orgName={orgLabel(state.session)}
-        role={titleCase(state.session.user.role)}
+    <ChartPaletteProvider palette={theme.palette}>
+      <div className={`skin skin--${theme.layout}`}>
+      <Shell
+        layout={theme.layout}
+        session={state.session}
+        selected={selected}
+        onSelect={setSelected}
+        academicYear={effectiveYear}
+        academicYears={home?.academic_years ?? []}
+        onSelectYear={setChosenYear}
         dashboards={home?.dashboards ?? []}
-        aiStatus={state.session.ai_status}
         /**
          * A report opened FROM a module keeps the module row lit, not a row of
          * its own — the report has no row any more, and the reader's place in
@@ -384,32 +380,11 @@ export function App(): JSX.Element {
                       : { kind: 'report', id },
           );
         }}
-      />
-      <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <Topbar
-          session={state.session}
-          selected={selected}
-          onSelect={setSelected}
-          academicYear={effectiveYear}
-          academicYears={home?.academic_years ?? []}
-          onSelectYear={setChosenYear}
-          crumb={
-            route.kind === 'home'
-              ? 'Dashboard'
-              : route.kind === 'settings'
-                ? 'Settings'
-                : route.kind === 'ask'
-                  ? 'Ask AI'
-                  : route.kind === 'my-reports' || route.kind === 'report-edit'
-                    ? 'My Reports'
-                    : route.kind === 'modules'
-                      ? 'Module Wise Analysis'
-                      : route.kind === 'module'
-                        ? moduleCrumb(route.id, home?.modules ?? [])
-                        : titleOf(route.id, home?.dashboards ?? [])
-          }
-        />
-
+        /* The layout and colour controls are the Dashboard's; the choice they
+           make applies everywhere, but the bar itself sits where the reference
+           puts it — above the dashboard frame. */
+        controls={route.kind === 'home' ? <ThemeControls theme={theme} /> : undefined}
+      >
         {homeError !== null && (
           <div className="px-7 pt-5">
             <div className="notice">{homeError}</div>
@@ -526,61 +501,19 @@ export function App(): JSX.Element {
             </div>
           </div>
         ) : (
-          <Home
+          <Dashboard
             session={state.session}
             home={home}
             loading={homeLoading}
-            previews={previews}
-            previewsLoading={previewsLoading}
             schoolIds={selected}
+            academicYear={effectiveYear}
+            layout={theme.layout}
             onOpen={(id) => { setRoute({ kind: 'report', id }); }}
-            onAskAI={() => { setRoute({ kind: 'ask' }); }}
           />
         )}
+      </Shell>
       </div>
-    </div>
+    </ChartPaletteProvider>
   );
 }
 
-/**
- * The org's display name, as the REGISTRY holds it (the session route resolves
- * it server-side). Still never invented here: if the registry has no name, the
- * server sends the id back and the sidebar shows that -- a worse label and a
- * true one (CODING_GUIDELINES §8).
- */
-function orgLabel(session: SessionResponse): string {
-  return session.org_name;
-}
-
-/**
- * The crumb for a report route, before its spec has loaded.
- *
- * Read out of the CATALOG the server already sent, so the breadcrumb says what
- * the sidebar item the reader just clicked says. Title-casing the id is only the
- * fallback, and it is a poor one: `fee-comparative` becomes "Fee Comparative"
- * where the report is called "Comparative Analysis", and `fee-by-student`
- * becomes "Fee By Student". A crumb that renames the page a reader arrived on is
- * a small lie about where they are.
- */
-function titleOf(id: string, dashboards: readonly DashboardCard[]): string {
-  const card = dashboards.find((d) => d.id === id);
-  if (card !== undefined) return card.title;
-  return id
-    .split('-')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-/**
- * The crumb for an open module. Read out of the served catalog for the same
- * reason `titleOf` reads a report's: the tile the reader just clicked said
- * "Fees", and a breadcrumb that title-cased the id into something else would
- * rename the page they arrived on.
- */
-function moduleCrumb(id: string, modules: readonly { id: string; title: string }[]): string {
-  return modules.find((m) => m.id === id)?.title ?? 'Module Wise Analysis';
-}
-
-function titleCase(value: string): string {
-  return value.charAt(0) + value.slice(1).toLowerCase();
-}

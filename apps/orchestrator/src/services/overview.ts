@@ -659,11 +659,39 @@ function buildAttStatus(merged: Merged): Built {
   return { widgets: [{ id: 'donut-status', type: 'donut', title: 'What the register recorded', label_field: 'status', value_field: 'days', data: rows }] };
 }
 
+/**
+ * What the card says about the floor under its rates.
+ *
+ * The floor is NOT a constant this service knows; it is computed per school
+ * from that school's own register and returned as a column (mcp-server
+ * reports/catalog.ts). So the sentence is built from the floors that actually
+ * came back: one number when the scope agrees, a range when it does not. A
+ * card that named a floor it had assumed would be wrong for every school that
+ * had applied a different one -- and wrong quietly, which §10 treats as the
+ * worse failure.
+ *
+ * Silent when no school reported a floor. That is the no-rows case, where the
+ * SPA draws its own empty state and never reaches these notes.
+ */
+function floorNote(floors: readonly number[]): string[] {
+  const low = floors[0];
+  const high = floors[floors.length - 1];
+  if (low === undefined || high === undefined) return [];
+  const days = low === high ? String(low) : `${String(low)}–${String(high)}`;
+  return [
+    `Only students with at least ${days} marked days are ranked, so a rate is never a handful of days.`,
+    "That floor comes from each school's own register, so a school that has only just started marking ranks the students it has rather than showing nothing.",
+  ];
+}
+
 function buildTopStudents(merged: Merged): Built {
   if (!merged.succeeded('top_attendance')) return { widgets: [] };
   const masked = merged.maskedColumns('top_attendance');
-  const rows = merged
-    .concatRows('top_attendance')
+  const answers = merged.concatRows('top_attendance');
+  const floors = [...new Set(answers.map(({ row }) => num(row['min_marked_days'])).filter((n) => n > 0))].sort(
+    (a, b) => a - b,
+  );
+  const rows = answers
     .map(({ row }) => {
       const marked = num(row['marked_days']);
       const present = num(row['present_days']);
@@ -694,7 +722,7 @@ function buildTopStudents(merged: Merged): Built {
         rows,
       },
     ],
-    notes: ['Only students with at least 20 marked days are ranked, so a rate is never a handful of days.'],
+    notes: floorNote(floors),
   };
 }
 

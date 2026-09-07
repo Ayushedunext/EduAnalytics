@@ -2825,22 +2825,55 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
     },
     {
       /**
-       * Twenty marked days is the floor: a child marked twice and present twice
-       * is at 100% and tells a Director nothing. The floor is stated on the
-       * card, and `marked_days` is a column so the basis of every rate is
+       * The floor under a rate, read off the register instead of fixed at 20.
+       *
+       * Twenty marked days was that floor and the reason for it still holds: a
+       * child marked twice and present twice is at 100% and tells a Director
+       * nothing. What a fixed 20 could not do is fail gracefully. On the
+       * delivered extract it ranked nobody at all -- 2026-27 holds 16 register
+       * dates and no student was marked on more than 12 of them, so every
+       * student failed the floor and the card drew its empty state beside a
+       * donut reporting 82,706 marked days from the same window. Two cards told
+       * one reader opposite things, and the card that was technically correct
+       * was the one that looked broken. A school four weeks into a term, or one
+       * still onboarding, meets that every time.
+       *
+       * So the floor is now the best-covered student's days halved, capped at
+       * 20 and never below 5. The cap is what keeps this from being a
+       * loosening: a full year is 200-odd marked days, half of which is far
+       * past 20, so a school with a real register still ranks on 20 exactly as
+       * before -- the adaptive half only ever binds where 20 was unreachable.
+       * The 5 is where the bending stops. A register holding four days ranks
+       * nobody, which was the original point.
+       *
+       * The applied floor is returned as a COLUMN rather than left for the
+       * orchestrator to assume, because it is computed per school: three
+       * schools marking at three rates carry three floors, and a card naming
+       * one number would be wrong about two of them. `marked_days` stays a
+       * column for the same reason it always was -- the basis of every rate is
        * visible beside it.
        */
       key: 'top_attendance',
-      description: 'Students with the highest attendance over the window (at least 20 marked days)',
+      description:
+        "Students with the highest attendance over the window, above a floor set from the school's own register (half the best-covered student's marked days, capped at 20, never below 5)",
       sql:
-        'SELECT a.studentname, a.enrollmentno, a.classname, a.sectionname, ' +
+        'SELECT studentname, enrollmentno, classname, sectionname, marked_days, present_days, min_marked_days FROM ' +
+        '(SELECT s.studentname, s.enrollmentno, s.classname, s.sectionname, s.marked_days, s.present_days, ' +
+        'LEAST(20, GREATEST(5, FLOOR(MAX(s.marked_days) OVER () / 2))) AS min_marked_days FROM ' +
+        '(SELECT a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname, ' +
         'COUNT(*) AS marked_days, ' +
         "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
         ' FROM ' + STUDENT_DAYS +
-        ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname ' +
-        'HAVING COUNT(*) >= 20 ' +
-        "ORDER BY SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) / COUNT(*) DESC, " +
-        'marked_days DESC LIMIT 4',
+        ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname) s) t ' +
+        'WHERE marked_days >= min_marked_days ' +
+        /**
+         * Enrolment breaks the tie last. Without it a window this thin -- where
+         * a thousand students share 12 of 12 -- returns whichever four rows the
+         * server happened to produce first, so the same card could name four
+         * different children on two consecutive loads and the result cache
+         * would freeze one of those answers for ten minutes.
+         */
+        'ORDER BY present_days / marked_days DESC, marked_days DESC, enrollmentno LIMIT 4',
     },
     {
       key: 'late_payers',

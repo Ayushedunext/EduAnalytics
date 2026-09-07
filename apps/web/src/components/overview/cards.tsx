@@ -499,7 +499,7 @@ export function TeamCards({ state }: { state: SlotState | undefined }): ReactEle
   const table = tableOf(validWidgets(state.slot.widgets), 'table-top-attendance');
   const rows = table?.rows ?? [];
   if (rows.length === 0) {
-    return <div className="card ovCard"><span className="ovMuted">No student has 20 marked days yet this year, so no ranking is shown.</span></div>;
+    return <div className="card ovCard"><span className="ovMuted">Too few days have been marked this year to rank anyone yet.</span></div>;
   }
   return (
     <>

@@ -54,6 +54,7 @@ import {
   type DashboardId,
 } from './dashboards.js';
 import { MODULES, type ModuleCard, type ModuleId } from './modules.js';
+import { splitStaffTypes } from './staff-types.js';
 
 /**
  * Vetted SQL. Read-only, catalog tables only, no placeholders, no tenant filter
@@ -1893,61 +1894,26 @@ function mixParts(
 }
 
 /**
- * Employment types this ERP spells out in words, and what they mean.
- *
- * Matched as substrings of the upper-cased value because the extract is not
- * consistent about form — "CONFIRMATION", "CONTRACTUAL", "PROBATION" and
- * "PART TIME" all appear, and a school is free to add another tomorrow.
- */
-const PERMANENT_TYPE = /CONFIRM|PERMANENT|REGULAR/;
-const IMPERMANENT_TYPE = /CONTRACT|PROBATION|TEMPORARY|TEMP\b|ADHOC|AD[ -]HOC|GUEST|PART[ -]?TIME|TRAINEE|INTERN|PROVISION/;
-
-/**
  * Staff split into permanent, not permanent, and the ones the ERP will not say.
  *
- * -- Why this is not a two-way split -----------------------------------------
- * `employees_data_set.stafftype` holds CONFIRMATION / CONTRACTUAL / PROBATION
- * alongside opaque codes — S0011, S004AD — 19 distinct values across three
- * schools (mcp-server/src/reports/catalog.ts, `by_stafftype`). The words
- * classify themselves. The codes do not, and no mapping for them has been
- * confirmed by anyone.
- *
- * Forcing the codes into one bucket or the other would produce two numbers that
- * look authoritative and are guesses, which is the exact failure this file keeps
- * warning about: a wrong answer wearing the shape of a right one. Dropping them
- * is no better — the parts would then quietly fail to account for the headcount
- * printed directly above them.
- *
- * So they get named. "Unclassified" is a third part, visible on the tile, and a
- * school whose codes dominate can SEE that its employment split is unknown
- * rather than being told a confident fiction. If a mapping is ever confirmed,
- * this is the one place that changes and the part disappears on its own.
+ * The classification itself lives in `services/staff-types.ts`, which explains
+ * why the third bucket exists and why it is named rather than guessed away. It
+ * moved out of this file on 2026-09-07, when the Dashboard's "At a glance" tiles
+ * card started printing the same split: two copies of those regexes would be two
+ * definitions of "permanent" over the same schools under the same labels, and
+ * the day one of them learns what S0011 means is the day the two screens
+ * disagree in front of the same reader. What is left here is the FORMATTING —
+ * which labels, in which order, and when to show nothing at all.
  */
 function staffParts(rows: readonly Record<string, unknown>[]): KpiPart[] {
-  let permanent = 0;
-  let impermanent = 0;
-  let unclassified = 0;
-
-  for (const row of rows) {
-    const type = String(row['stafftype'] ?? '').trim().toUpperCase();
-    const count = toNumber(row['n']);
-    if (PERMANENT_TYPE.test(type)) permanent += count;
-    else if (IMPERMANENT_TYPE.test(type)) impermanent += count;
-    else unclassified += count;
-  }
-
-  /**
-   * Nothing self-described: the column is entirely codes for these schools, so
-   * there is no split to report and the tile shows the headcount alone. Three
-   * parts reading 0 / 0 / everything is not information.
-   */
-  if (permanent === 0 && impermanent === 0) return [];
+  const split = splitStaffTypes(rows, 'n');
+  if (!split.classified) return [];
 
   return [
-    { label: 'Permanent', value: formatCount(permanent) },
-    { label: 'Not permanent', value: formatCount(impermanent) },
-    ...(unclassified > 0
-      ? [{ label: 'Unclassified', value: formatCount(unclassified) }]
+    { label: 'Permanent', value: formatCount(split.permanent) },
+    { label: 'Not permanent', value: formatCount(split.impermanent) },
+    ...(split.unclassified > 0
+      ? [{ label: 'Unclassified', value: formatCount(split.unclassified) }]
       : []),
   ];
 }

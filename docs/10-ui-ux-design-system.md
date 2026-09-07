@@ -85,7 +85,7 @@ The Dashboard, and the shell every screen sits in, follow the signed-off **"AI D
 
 | Artifact card | Format A · Gradient nav | Format B · Clean grid | Format C · Sidebar frame |
 |---|---|---|---|
-| Buyer Location (map) | **Six coloured tiles** (the owner replaced the map): students, staff, today's student attendance %, today's staff attendance %, new admissions this year, fee defaulter amount | — | — |
+| Buyer Location (map) | **Six coloured tiles** (the owner replaced the map): students, staff, today's student attendance %, today's staff attendance %, new admissions this year, fee defaulter amount. **Every tile carries its parts beneath its figure (amended 2026-09-07).** Staff was the last one standing on a bare number while its five neighbours each showed a split, which reads as a tile whose detail failed to load rather than as one with no detail to give. It now carries the same permanent / not permanent / unclassified split the KPI strip prints, from the same classification — `services/staff-types.ts`, the one place that decides what `stafftype` means, so the two screens cannot disagree about what "permanent" counts. Where a school spells that column entirely in the ERP's opaque codes the tile shows the headcount alone: three parts reading 0 / 0 / everything reports the column's shape, not the school's staffing. The statement gained a `GROUP BY`, not a second scan (Invariant 1) | — | — |
 | Revenue Split (rings + bars + figure) | Student attendance %, fee realisation %, staff attendance %; figure = total fees billed | — | — |
 | Monthly Revenue | Fee receipts by month | — | — |
 | Weekly Sales / Weekly Orders | Receipts by week / student attendance % by week | — | — |

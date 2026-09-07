@@ -605,10 +605,32 @@ export const openApiDocument: OpenApiDocument = {
           dashboards: { type: 'array', items: ref('DashboardCard') },
           grid: {
             type: 'array',
-            items: { type: 'string' },
+            items: {
+              type: 'object',
+              required: ['key', 'id', 'kind'],
+              properties: {
+                key: {
+                  type: 'string',
+                  example: 'fee-collection--by-school',
+                  description:
+                    "This CARD's id, and the path segment /api/home/preview/{key} takes. Equal to " +
+                    '`id` except where the grid draws two views of one report (DASHBOARD_GRID), which ' +
+                    'is why a client keys its previews by this rather than by the report.',
+                },
+                id: { type: 'string', example: 'fee-collection' },
+                kind: {
+                  type: 'string',
+                  enum: ['bar', 'line', 'donut'],
+                  description:
+                    "The kind of chart this card's preview will draw (DASHBOARD_PREVIEW). Sent so the " +
+                    'grid can size a bento slot before the chart arrives — each card is its own request, ' +
+                    'and a grid that waited would reflow under the reader as they landed.',
+                },
+              },
+            },
             description:
-              'Which dashboards the overview grid draws, in order. A product decision the server makes; ' +
-              'the SPA must not re-derive it.',
+              'Which dashboards the overview grid draws, in order, and what shape each one is. A product ' +
+              'decision the server makes; the SPA must not re-derive it.',
           },
           modules: { type: 'array', items: ref('ModuleCard') },
           degraded_schools: { type: 'array', items: ref('DegradedSchool') },
@@ -1133,7 +1155,7 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
-    '/api/home/preview/{id}': {
+    '/api/home/preview/{key}': {
       get: {
         tags: ['Home'],
         summary: 'ONE live dashboard-preview card.',
@@ -1430,12 +1452,58 @@ export const openApiDocument: OpenApiDocument = {
                     type: 'object',
                     additionalProperties: { type: 'string', enum: ['bar', 'line'] },
                   },
+                  drill: {
+                    type: 'object',
+                    description:
+                      'docs/06 §4.3 — a clone may change or disable its drill path. Only the ' +
+                      'switch and the per-level chart: the dimensions are the curated hierarchy ' +
+                      'catalog’s and are never accepted from a client (ADR-020). Omitting the ' +
+                      'key leaves the report’s saved drill configuration untouched.',
+                    required: ['enabled'],
+                    properties: {
+                      enabled: { type: 'boolean' },
+                      charts: {
+                        type: 'object',
+                        description: 'Level number to chart. Sparse — only levels changed from the catalog’s own.',
+                        additionalProperties: { type: 'string', enum: ['bar', 'line', 'donut'] },
+                        example: { '3': 'donut' },
+                      },
+                    },
+                  },
                 },
               },
             },
           },
         },
         responses: customReportResponses,
+      },
+    },
+    '/api/reports/{id}/drill': {
+      post: {
+        tags: ['Custom reports'],
+        summary: 'One level of a custom report’s drill path.',
+        description:
+          'The same `{widget_id, level, context[]}` body as `POST /api/report/{id}/drill` — ' +
+          'CODING_GUIDELINES §6 fixes that shape — addressed to a report_definitions row instead ' +
+          'of a predefined dashboard. No filters travel with it: a clone drills under the filter ' +
+          'values it SAVED (ADR-018), read server-side from its own definition, so a year supplied ' +
+          'by the caller cannot change the question a saved report answers. The level itself is ' +
+          'built by the same code the predefined route uses — same curated catalog, same click ' +
+          'validation, same caps, same scope double-check.',
+        parameters: [customIdParam, schoolIdsParam],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: ref('DrillRequest') } },
+        },
+        responses: {
+          '200': {
+            description: 'The level.',
+            content: { 'application/json': { schema: ref('DrillResponse') } },
+          },
+          ...COMMON_ERRORS,
+          '403': errorResponse('REPORT_DEFINITION_FORBIDDEN.'),
+          '404': errorResponse('REPORT_DEFINITION_NOT_FOUND.'),
+        },
       },
     },
     '/api/reports/{id}/sql': {

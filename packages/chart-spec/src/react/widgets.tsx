@@ -124,6 +124,20 @@ const RAMP: Record<string, { deep: string; soft: string; light: string }> = {
   '#a886e5': { deep: '#815fba', soft: '#ba9af6', light: '#cfb3ff' },
   '#64748b': { deep: '#404f65', soft: '#76869c', light: '#8c9baf' },
   '#cbd5e1': { deep: '#a2acb7', soft: '#dce6f1', light: '#e3ecf7' },
+  /* The accent-only hues (`ACCENT_COLOUR`). Same construction as the series
+     ramps above -- lightness moved, hue and chroma held -- so a card accent and
+     a series mark are painted by identical machinery. */
+  '#5f8fe0': { deep: '#3f6ab8', soft: '#84a9ea', light: '#a6c1f2' },
+  '#2fb3aa': { deep: '#1b8a83', soft: '#5ac7c0', light: '#85dad4' },
+  '#e8896b': { deep: '#bf6349', soft: '#f2a48b', light: '#f8bfae' },
+  '#bd77d2': { deep: '#9553ab', soft: '#d095e1', light: '#e0b4ec' },
+  /* The deep step is held DELIBERATELY high for this hue. Amber loses chroma
+     into brown faster than any other colour here, and the magnitude ramp on a
+     single-series chart paints its tallest bar in `deep` -- at `#a3760e` Fee
+     Defaulters' ageing chart rendered as four olive bars. `#b8862a` keeps the
+     top of the range recognisably gold while still leaving a visible fall to
+     `soft` for the smallest bucket. */
+  '#d09a2c': { deep: '#b8862a', soft: '#deb057', light: '#eac67f' },
 };
 
 /**
@@ -150,10 +164,42 @@ function tintOf(hex: string, strength: number): string {
  */
 const RAIL_STRENGTH = 0.1;
 
-/** The ramp for a colour, falling back to the flat colour at every step. */
+/**
+ * The ramp for a colour: the measured steps where the colour is one of the
+ * palette's, and steps derived by moving lightness where it is not.
+ *
+ * -- Why there is a derivation at all (2026-09-03) ---------------------------
+ * `RAMP` is keyed by the five `SERIES` hues plus the two neutrals, and for a
+ * long time every caller passed one of those, so falling back to the FLAT
+ * colour at every step was a fallback that never fired. It fires now. A
+ * single-series bar chart shades each bar along the series ramp by magnitude
+ * (`cellColours`), which produces intermediate hexes — `#0f97bd`, not `#00a5cb`
+ * — and every one of them missed the table and came back as four copies of
+ * itself. The visible result was a chart whose bars were painted with a
+ * gradient of one colour, i.e. flat, on exactly the charts this product draws
+ * most.
+ *
+ * The derivation moves toward white and toward the platform ink rather than
+ * toward black: a step mixed with black loses chroma fast and turns muddy,
+ * where `INK` is the same near-black the rest of the surface is drawn in and
+ * keeps the family. The fractions are picked to land the derived steps of a
+ * PALETTE colour close to that colour's measured ones, so a magnitude-shaded
+ * bar and an unshaded one look like the same treatment.
+ *
+ * This changes nothing about which colour a mark IS: `base` is returned
+ * untouched in both branches, and every stop sits on the lightness axis through
+ * it. The audited hues, and the CVD separations measured between them, are the
+ * `SERIES` entries — none of which take this branch.
+ */
 function rampOf(base: string): { deep: string; base: string; soft: string; light: string } {
   const r = RAMP[base];
-  return { deep: r?.deep ?? base, base, soft: r?.soft ?? base, light: r?.light ?? base };
+  if (r !== undefined) return { deep: r.deep, base, soft: r.soft, light: r.light };
+  return {
+    deep: mixHex(base, INK, 0.3),
+    base,
+    soft: mixHex(base, '#ffffff', 0.22),
+    light: mixHex(base, '#ffffff', 0.42),
+  };
 }
 
 /**
@@ -219,12 +265,70 @@ function seriesColourAt(index: number): string {
  * defaulter counts) -- callers only reach for them when that meaning
  * actually applies.
  */
-export type ChartAccent = 'primary' | 'secondary' | 'warning' | 'negative';
+export type ChartAccent =
+  /* The four that carry MEANING. Reach for these only when the meaning applies. */
+  | 'primary'
+  | 'secondary'
+  | 'warning'
+  | 'negative'
+  /* The five that carry only IDENTITY -- "this card is not that card". */
+  | 'violet'
+  | 'indigo'
+  | 'aqua'
+  | 'coral'
+  | 'plum';
+
+/**
+ * The accent hues, widened from four to nine (2026-09-03).
+ *
+ * -- Why widen, and why it is safe -------------------------------------------
+ * Four accents over eight preview cards meant most of them fell back to
+ * `primary`, and the Dashboard read as one blue page: a grid whose whole job is
+ * to hold eight DIFFERENT subjects side by side was painting six of them the
+ * same colour, which is the one thing that makes a set of cards hard to tell
+ * apart at a glance.
+ *
+ * This does NOT touch `SERIES`. That palette orders five hues semantically and
+ * is audited for the separation between ADJACENT MARKS INSIDE ONE CHART, which
+ * is the hard constraint (deuteranopia collapses green and ochre to one hue, and
+ * only their lightness gap survives). An accent is a different job: it colours a
+ * chart that has ONE series, so there is nothing inside the chart for it to be
+ * confused with, and the only separation that matters is between one card and
+ * the card beside it -- a much weaker requirement, met here by simply spreading
+ * the hues around the wheel. `measureColour` still lets `tone` outrank `accent`,
+ * so a caller cycling colours across a grid can never repaint overdue money in
+ * the teal it uses for headcounts.
+ *
+ * -- The blue-led family ------------------------------------------------------
+ * The product's lead is teal and stays the lead. `indigo` and `aqua` sit either
+ * side of it so the page still reads as blue overall; `coral` and `plum` are the
+ * warm and purple counterweights that stop eight cards blurring together. Every
+ * one is a lighter, lower-chroma choice than the equivalent hue in `SERIES`,
+ * because an accent fills a whole chart rather than competing with four
+ * neighbours inside one.
+ *
+ * -- `warning` is the one accent that differs from its series slot ------------
+ * `SERIES[2]` is `#a17a00`, and it is that dark on purpose: it is the only thing
+ * separating "pending" from "collected" for a red-green colour-blind reader
+ * looking at a grouped bar. A SINGLE-series chart has no green beside it, so the
+ * lightness gap is buying nothing there and the cost is real -- Fee Defaulters'
+ * ageing chart rendered as four brown bars. The accent is therefore the lighter
+ * `#d09a2c`, and it applies only where the constraint does not: `SERIES[2]`
+ * itself is untouched, so every grouped bar in the product is exactly as it was.
+ * At 2.4:1 against the card it sits under the 3:1 line, the same accepted
+ * deviation `#72ba63` already carries, with the same relief -- axis values, a
+ * title, and a wash that deepens toward the axis.
+ */
 const ACCENT_COLOUR: Record<ChartAccent, string> = {
   primary: SERIES[0],
   secondary: SERIES[1] ?? SERIES[0],
-  warning: SERIES[2] ?? SERIES[0],
+  warning: '#d09a2c',
   negative: SERIES[3] ?? SERIES[0],
+  violet: SERIES[4] ?? SERIES[0],
+  indigo: '#5f8fe0',
+  aqua: '#2fb3aa',
+  coral: '#e8896b',
+  plum: '#bd77d2',
 };
 const AXIS: CSSProperties = { fontSize: 11 };
 /**
@@ -303,6 +407,117 @@ function useGradientId(prefix: string): string {
   return `${prefix}-${useId().replace(/:/g, '')}`;
 }
 
+/**
+ * A mark's wash: one hue lit at the far end, deepened at the foot.
+ *
+ * -- Why gradients are back on the marks (2026-09-03, "Meadow Lit") ----------
+ * Meadow took every gradient off the bars and the wedges and put the tonal
+ * interest in the rail behind them, on the argument that a reader matching a
+ * bar to its legend dot should be matching a colour to itself rather than to
+ * the midpoint of a wash. The argument was right about the failure mode and
+ * wrong about the fix: what it produced was a page of flat blocks on flat
+ * rails, and "the charts look bland" is the complaint it came back as.
+ *
+ * The wash is reinstated with the matching problem answered rather than
+ * ignored. Three things make it safe where the old five-stop cylinder was not:
+ *
+ *  1. Every stop is a LIGHTNESS step of the same audited hue (`RAMP`) — hue and
+ *     chroma are held, so the whole mark is unmistakably one palette colour and
+ *     the CVD separations `scripts/validate_palette.js` checks are untouched.
+ *  2. The BASE sits at the 50% stop, so the mark's midpoint — the part of a bar
+ *     the eye actually samples — is exactly the colour in `SERIES`.
+ *  3. The legend dot is painted with the SAME ramp (`legendDotStyle`), so a
+ *     reader matches a wash to a wash. That is the piece the earlier attempts
+ *     never had, and it is why this one does not reintroduce their defect.
+ *
+ * The direction is always axis → tip: a bar is deepest where it is measured
+ * from and lightest where it ends, so the wash reinforces the direction the
+ * length is read in instead of running across it.
+ */
+/**
+ * The three stops every washed mark is painted from, in one place.
+ *
+ * The lit end stops SHORT of the ramp's `light` step, at about six tenths of
+ * the way to it. `light` is a cap sized for a donut wedge, which has area and a
+ * card-coloured hairline around it; the top of a 38px column has neither, and
+ * painted in the full lit step it dissolves into the white behind it — a reader
+ * looking for where the bar ends ends up reading the axis instead of the mark.
+ * Six tenths keeps the mark unmistakably its own hue for its whole length while
+ * still leaving a visible fall from foot to tip.
+ *
+ * Shared by the SVG gradient and the CSS legend swatch so the two cannot drift:
+ * the swatch matching the mark is the entire argument for washing marks at all
+ * (see `MarkGradient`), and it would stop being true the first time one of them
+ * was tuned alone.
+ */
+function markStops(colour: string): { deep: string; base: string; lit: string } {
+  const ramp = rampOf(colour);
+  return { deep: ramp.deep, base: ramp.base, lit: mixHex(ramp.base, ramp.light, 0.6) };
+}
+
+function MarkGradient({
+  id,
+  colour,
+  horizontal,
+}: {
+  id: string;
+  colour: string;
+  /** Bars running left-to-right wash along x; columns and wedges wash down y. */
+  horizontal: boolean;
+}): ReactElement {
+  const ramp = markStops(colour);
+  return (
+    <linearGradient
+      id={id}
+      x1="0"
+      y1={horizontal ? '0' : '1'}
+      x2={horizontal ? '1' : '0'}
+      y2="0"
+    >
+      <stop offset="0%" stopColor={ramp.deep} />
+      <stop offset="52%" stopColor={ramp.base} />
+      <stop offset="100%" stopColor={ramp.lit} />
+    </linearGradient>
+  );
+}
+
+/**
+ * The legend swatch for a series, washed exactly as its mark is.
+ *
+ * A flat dot beside a gradient bar is the mismatch that got gradients removed
+ * the last two times; drawn from the same three ramp steps in the same order,
+ * the swatch is a miniature of the mark and the match is direct again. CSS
+ * rather than SVG because these legends are plain HTML (see the `content`
+ * renderer below), and Chromium paints a CSS gradient into the PDF as
+ * faithfully as an SVG one.
+ */
+function legendDotStyle(colour: string): CSSProperties {
+  const ramp = markStops(colour);
+  return { background: `linear-gradient(135deg, ${ramp.lit}, ${ramp.base} 55%, ${ramp.deep})` };
+}
+
+/**
+ * The soft coloured shadow under a trend line.
+ *
+ * A line is one 2–3px stroke on a white card, which is why a chart made only of
+ * lines reads as thin however saturated the stroke is. A drop shadow in the
+ * line's OWN hue gives it depth without adding a second mark or a second
+ * colour — the reference surfaces this product is measured against all do it,
+ * and it is the cheapest possible way to stop a curve looking like a hairline.
+ *
+ * `feDropShadow` is a static filter, not a timed effect, so ADR-021 holds: the
+ * PDF capture renders it identically at whatever instant Puppeteer shoots.
+ * Deliberately weak (0.28) — past about a third it stops being depth and starts
+ * being a second, blurred copy of the trend sitting under the real one.
+ */
+function LineGlow({ id, colour }: { id: string; colour: string }): ReactElement {
+  return (
+    <filter id={id} x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor={colour} floodOpacity={0.28} />
+    </filter>
+  );
+}
+
 interface TooltipPayloadEntry {
   readonly name?: string | number;
   readonly value?: number | string;
@@ -363,6 +578,86 @@ function deltaDirection(delta: string): 'up' | 'down' | 'flat' {
 const DELTA_ARROW: Record<'up' | 'down' | 'flat', string> = { up: '▲', down: '▼', flat: '•' };
 
 /**
+ * A KPI's value as a 0–1 share, when — and only when — the value IS a share.
+ *
+ * The pattern is deliberately strict: a bare number with a trailing percent
+ * sign and nothing else. "86.1%" is a rate and has a dial; "₹92.0Cr", "9,628"
+ * and "53% of 41 schools" are not, and each returns null rather than a share
+ * guessed out of a string that happens to contain a digit and a sign.
+ *
+ * Reading the formatted string is the point rather than a shortcut. Values reach
+ * this renderer pre-formatted precisely so the screen and the PDF cannot format
+ * the same number differently (ADR-015), and there is no parallel numeric field
+ * on the widget to read instead — so the choice is between deriving the dial
+ * from the printed figure or asking the server for a second representation of a
+ * number it already sent. Derived here, the dial and the digits cannot disagree:
+ * they are the same value drawn twice.
+ *
+ * Clamped, because a percentage over 100 is a real thing this product can print
+ * (a collection rate against a revised demand) and a dial that wrapped past its
+ * own start would read as a small number rather than a large one.
+ */
+function rateShare(value: string): number | null {
+  const match = /^(\d+(?:\.\d+)?)\s*%$/.exec(value.trim());
+  if (match === null) return null;
+  const percent = Number(match[1]);
+  return Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : null;
+}
+
+/**
+ * A rate drawn as a dial: an arc of the metric's own hue on a rail of the same
+ * hue at rail strength, the same pairing every bar on the platform uses.
+ *
+ * Rounded cap and a gradient sweep, so it belongs to the same family as the
+ * marks in the charts below it rather than looking like a borrowed component.
+ * `aria-hidden` throughout: the figure beside it is the accessible reading, and
+ * a screen reader announcing "86.1%" twice is worse than one that says it once.
+ */
+function MeterRing({
+  id,
+  share,
+  colour,
+}: {
+  id: string;
+  share: number;
+  colour: string;
+}): ReactElement {
+  const ramp = rampOf(colour);
+  const radius = 16.5;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <svg className="kpiRing" viewBox="0 0 42 42" width={42} height={42} aria-hidden="true">
+      <defs>
+        <linearGradient id={id} x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0%" stopColor={ramp.deep} />
+          <stop offset="100%" stopColor={ramp.light} />
+        </linearGradient>
+      </defs>
+      <circle
+        cx="21"
+        cy="21"
+        r={radius}
+        fill="none"
+        stroke={tintOf(colour, RAIL_STRENGTH * 1.8)}
+        strokeWidth="5"
+      />
+      {/* From twelve o'clock, clockwise — the direction a dial is read. */}
+      <circle
+        cx="21"
+        cy="21"
+        r={radius}
+        fill="none"
+        stroke={`url(#${id})`}
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeDasharray={`${String(circumference * share)} ${String(circumference)}`}
+        transform="rotate(-90 21 21)"
+      />
+    </svg>
+  );
+}
+
+/**
  * One metric, one tile — the same tile everywhere, at the same size (§22).
  *
  * -- Why there is no headline tile any more (2026-09-01) ---------------------
@@ -380,21 +675,68 @@ const DELTA_ARROW: Record<'up' | 'down' | 'flat', string> = { up: '▲', down: '
  * 2× span does not survive the strip growing by one card, which is what the old
  * "hero up to five tiles, none at six" rule was already conceding.
  */
-export function KpiTile({ widget }: { widget: KpiWidget }): ReactElement {
+export function KpiTile({
+  widget,
+  accent,
+}: {
+  widget: KpiWidget;
+  /**
+   * A hue for a tile whose `tone` is neutral -- see `kpiColour`.
+   *
+   * Presentation chosen by the strip showing the tile, exactly as `accent` is on
+   * a chart, and honoured under exactly the same precedence: meaning first,
+   * arrangement second. A caller passing one can never repaint a warning tile.
+   */
+  accent?: ChartAccent | undefined;
+}): ReactElement {
   const tone = widget.tone ?? 'neutral';
+  const hue = kpiColour(widget.tone, accent);
   const direction = widget.delta !== undefined ? deltaDirection(widget.delta) : null;
+  const ringId = useGradientId('ring');
+  /**
+   * A rate metric gets its own dial; a count does not.
+   *
+   * `rateShare` reads the share back out of the SERVER'S OWN formatted value
+   * rather than taking a second number from anywhere — the tile draws exactly
+   * the figure it prints, in a second channel. Attendance at 86% and fee
+   * realisation at 53% are the two the strip carries today, and the difference
+   * between them is visible before either number is read, which is the whole
+   * argument for the dial. Anything that is not a bare percentage returns null
+   * and the tile is laid out exactly as it was.
+   */
+  const share = rateShare(widget.value);
   return (
-    <div className={`card kpi kpi--${tone}`}>
+    /**
+     * The tone still names the CLASS -- the tile's rail and corner pool are
+     * keyed off it in CSS (tokens.css `.kpi--*`) and must keep saying what the
+     * server said. `--kpi-grad` is overridden inline only for a NEUTRAL tile
+     * carrying an accent, so a warning tile's amber edge cannot be repainted by
+     * a caller cycling colours.
+     */
+    <div
+      className={`card kpi kpi--${tone}`}
+      style={
+        tone === 'neutral' && accent !== undefined
+          ? ({
+              '--kpi-grad': gradientCss(hue),
+              '--kpi-tint': tintOf(hue, 0.09),
+            } as CSSProperties)
+          : undefined
+      }
+    >
       <span className="kpiLabel">{widget.label}</span>
-      <b className="kpiValue" style={{ color: toneColour(widget.tone) }}>
-        {widget.value}
-      </b>
-      {widget.delta !== undefined && direction !== null && (
-        <span className={`kpiDelta ${direction}`}>
-          <span aria-hidden="true">{DELTA_ARROW[direction]}</span>
-          {widget.delta}
-        </span>
-      )}
+      <div className="kpiFigure">
+        {share !== null && <MeterRing id={ringId} share={share} colour={hue} />}
+        <b className="kpiValue" style={{ color: hue }}>
+          {widget.value}
+        </b>
+        {widget.delta !== undefined && direction !== null && (
+          <span className={`kpiDelta ${direction}`}>
+            <span aria-hidden="true">{DELTA_ARROW[direction]}</span>
+            {widget.delta}
+          </span>
+        )}
+      </div>
       {/**
         * The parts of the figure above, on one row beneath it.
         *
@@ -855,6 +1197,8 @@ export function BarPanel({
   const stacked = grouped && widget.stacked === true;
   const seriesColour = measureColour(widget.tone, accent);
   const animation = useAnimation();
+  /** One `<defs>` namespace per chart instance — see `MarkGradient`. */
+  const gradId = useGradientId('bar');
 
   /**
    * The hook runs before the empty check, unconditionally. React requires the
@@ -935,6 +1279,27 @@ export function BarPanel({
   const singleRamp = rampOf(seriesColour);
 
   /**
+   * Each single-series bar's own base colour, shaded by magnitude — computed
+   * ONCE here because two things now consume it: the `<Cell>` that paints the
+   * bar, and the `<linearGradient>` in `<defs>` that the cell points at. Derived
+   * twice they could disagree, and a bar whose wash was built from a different
+   * step than its own would be a shading scale that lies about magnitude.
+   *
+   * Empty for a grouped chart, where colour carries series identity instead and
+   * magnitude shading would fight it (see `barMax`).
+   */
+  const cellColours = grouped
+    ? []
+    : widget.data.map((row) => {
+        const value = row[widget.y];
+        const share =
+          typeof value === 'number' && Number.isFinite(value) && barMax > 0
+            ? Math.max(0, value) / barMax
+            : null;
+        return share === null ? singleRamp.base : mixHex(singleRamp.soft, singleRamp.deep, share);
+      });
+
+  /**
    * Whether the marks are thick enough for a rail to read as a CONTAINER rather
    * than as background texture.
    *
@@ -972,20 +1337,20 @@ export function BarPanel({
          * eye has to guess where the measurement begins.
          */
         const rounded: [number, number, number, number] = axis.horizontal
-          ? [0, 4, 4, 0]
-          : [4, 4, 0, 0];
+          ? [0, 6, 6, 0]
+          : [6, 6, 0, 0];
         return (
           <Bar
             key={entry.field}
             dataKey={entry.field}
             name={entry.label}
             /**
-             * Solid, since 2026-09-03. Meadow paints a mark in its palette hue
-             * and puts the shading in the RAIL behind it instead — so a reader
-             * matching a bar to its legend dot is matching one colour to itself
-             * rather than to the midpoint of a gradient.
+             * Washed along the bar in the series' own hue (`MarkGradient`). The
+             * legend swatch beside it is painted from the same three stops, so
+             * identity still matches colour-for-colour — which is the condition
+             * the two earlier gradient attempts failed and this one meets.
              */
-            fill={seriesColourAt(index)}
+            fill={`url(#${gradId}-s${String(index)})`}
             /**
              * A rail per bar, in that bar's hue — the same device the
              * single-series chart uses, applied to each member of the group.
@@ -996,7 +1361,7 @@ export function BarPanel({
              */
             {...(stacked || !rails
               ? {}
-              : { background: { fill: tintOf(seriesColourAt(index), RAIL_STRENGTH), radius: 4 } })}
+              : { background: { fill: tintOf(seriesColourAt(index), RAIL_STRENGTH), radius: 6 } })}
             {...(stacked ? { stackId: 'a' } : {})}
             radius={stacked ? (last ? rounded : square) : rounded}
             /**
@@ -1039,7 +1404,7 @@ export function BarPanel({
         <Bar
           key={widget.y}
           dataKey={widget.y}
-          radius={axis.horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]}
+          radius={axis.horizontal ? [0, 6, 6, 0] : [6, 6, 0, 0]}
           maxBarSize={axis.horizontal ? BAR_PX.single : BAR_PX.singleV}
           /**
            * The rail is back, and this time it is the mark's OWN hue at 10%
@@ -1058,7 +1423,7 @@ export function BarPanel({
            * two scales drawn over each other.
            */
           {...(rails
-            ? { background: { fill: tintOf(seriesColour, RAIL_STRENGTH), radius: 4 } }
+            ? { background: { fill: tintOf(seriesColour, RAIL_STRENGTH), radius: 6 } }
             : {})}
           animationEasing="ease-out"
           {...animation}
@@ -1099,40 +1464,42 @@ export function BarPanel({
             * takes it too, and the chart is then one flat hue — which is honest:
             * there is no magnitude to shade by.
             */}
-          {widget.data.map((row, index) => {
-            const value = row[widget.y];
-            const share =
-              typeof value === 'number' && Number.isFinite(value) && barMax > 0
-                ? Math.max(0, value) / barMax
-                : null;
-            return (
-              <Cell
-                key={String(row[widget.x] ?? index)}
-                fill={
-                  share === null
-                    ? singleRamp.base
-                    : mixHex(singleRamp.soft, singleRamp.deep, share)
-                }
-              />
-            );
-          })}
+          {widget.data.map((row, index) => (
+            <Cell key={String(row[widget.x] ?? index)} fill={`url(#${gradId}-c${String(index)})`} />
+          ))}
         </Bar>,
       ];
 
   /**
-   * Bars carry no gradient at all since the Meadow pass (docs/10 §1).
+   * One `<linearGradient>` per paintable mark — per SERIES when colour carries
+   * identity, per BAR when it carries magnitude.
    *
-   * They have been through three treatments now, and the reasoning ran out in a
-   * useful direction. A five-stop cylinder read as plumbing; a two-stop sheen
-   * still meant a reader matching a bar to its legend dot was matching a colour
-   * to the midpoint of a wash. Meadow puts the tonal interest in the RAIL behind
-   * the mark instead, which leaves the mark free to be exactly one colour — the
-   * one in the legend, the one in `SERIES`, the one docs/10 §1 names.
-   *
-   * Nothing replaces `gradientDefs`; there is simply no `<defs>` on a bar chart
-   * any more. The area gradient under a LINE stays, because that one is a
-   * shadow of the trend rather than the paint on a mark.
+   * Both branches wash along the same axis the bars run on, so a horizontal
+   * chart's marks all deepen toward the value axis on the left and a column
+   * chart's all deepen toward the baseline. See `MarkGradient` for why the wash
+   * came back and what keeps it honest against the legend.
    */
+  const gradientDefs = (
+    <defs>
+      {grouped
+        ? series.map((entry, index) => (
+            <MarkGradient
+              key={entry.field}
+              id={`${gradId}-s${String(index)}`}
+              colour={seriesColourAt(index)}
+              horizontal={axis.horizontal}
+            />
+          ))
+        : cellColours.map((colour, index) => (
+            <MarkGradient
+              key={`${gradId}-c${String(index)}`}
+              id={`${gradId}-c${String(index)}`}
+              colour={colour}
+              horizontal={axis.horizontal}
+            />
+          ))}
+    </defs>
+  );
 
   /**
    * [MANDATORY for two or more series] identity is never colour alone, so a
@@ -1207,14 +1574,15 @@ export function BarPanel({
         >
           {series.map((entry, index) => (
             <li key={entry.field} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {/* Washed like the bars it keys — see `legendDotStyle`. */}
               <span
                 aria-hidden="true"
                 style={{
                   width: 9,
                   height: 9,
                   borderRadius: '50%',
-                  background: seriesColourAt(index),
                   display: 'inline-block',
+                  ...legendDotStyle(seriesColourAt(index)),
                 }}
               />
               {entry.label}
@@ -1296,6 +1664,7 @@ export function BarPanel({
             barGap={2}
             {...chartProps}
           >
+            {gradientDefs}
             {/* Grid lines run along the value axis only -- the category axis has
                 no scale to read against. */}
             {/* Exactly ONE scale device, always. Where each bar has a rail, the
@@ -1383,6 +1752,7 @@ export function BarPanel({
           barGap={2}
           {...chartProps}
         >
+          {gradientDefs}
           {/* One scale device, always — the rails, or the grid when they were
               suppressed for density. See the horizontal branch. */}
           {!rails && <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />}
@@ -1485,6 +1855,7 @@ export function LinePanel({
   compact,
   accent,
   actions,
+  onDrill,
 }: {
   widget: LineWidget;
   /** Card-sized: shorter than the full dashboard panel, real axes (Home preview cards). */
@@ -1492,10 +1863,28 @@ export function LinePanel({
   /** Single-series colour, Home preview cards only -- see `ChartAccent`. */
   accent?: ChartAccent | undefined;
   actions?: ReactNode | undefined;
+  /**
+   * Drill clicks (ADR-020), for a level a report chose to draw as a line rather
+   * than a bar (docs/06 §4.1's per-level `chart`).
+   *
+   * A line takes these because it is the same Recharts cartesian chart a bar
+   * is: `activeTooltipIndex` names the same category, and `drillTargetAt` reads
+   * the same row of `widget.data`. Without this a reader who set level 1 to a
+   * line would get a chart that looks drillable, says it drills, and does
+   * nothing on click -- exactly the success-shaped failure §10 names.
+   *
+   * Honoured only on the SINGLE-series branch below. A multi-series line is
+   * drawn from `pivotSeries`' rows, which are not `widget.data` and do not
+   * share its indices, so a click there cannot be turned into a bound value
+   * without inventing a mapping -- and a drill that guesses which slice was
+   * clicked is worse than one that does not offer itself.
+   */
+  onDrill?: DrillHandler | undefined;
 }): ReactElement {
   const gradId = useGradientId('area');
   const animation = useAnimation();
   const seriesColor = measureColour(widget.tone, accent);
+  const seriesRamp = rampOf(seriesColor);
 
   // Empty and single-point series read as a broken chart if forced through
   // the same axes a real trend uses — an honest small state instead (§18/19).
@@ -1560,6 +1949,24 @@ export function LinePanel({
         >
           <ChartFrame compact={compact} naturalHeight={compact === true ? 200 : 280}>
             <ComposedChart data={pivoted.rows} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+              {/**
+                * A glow per line, in that line's own hue.
+                *
+                * The shadow is the one depth device a comparison chart can take:
+                * the AREA fill is still refused here (two washes under two
+                * crossing lines is mud, which is why this branch exists), but a
+                * blurred copy of a stroke sits under the stroke rather than
+                * across the plot, so two of them never pool into a third shape.
+                */}
+              <defs>
+                {pivoted.names.map((name, index) => (
+                  <LineGlow
+                    key={name}
+                    id={`${gradId}-glow${String(index)}`}
+                    colour={SERIES[index] ?? SERIES_OTHER}
+                  />
+                ))}
+              </defs>
               <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
               <XAxis
                 dataKey={widget.x}
@@ -1590,7 +1997,9 @@ export function LinePanel({
                   dataKey={name}
                   name={name}
                   stroke={SERIES[index] ?? SERIES_OTHER}
-                  strokeWidth={2.25}
+                  strokeWidth={2.75}
+                  strokeLinecap="round"
+                  filter={`url(#${gradId}-glow${String(index)})`}
                   /**
                    * Dotted from the second line on. A comparison line is a
                    * REFERENCE, and dash pattern separates it from this year's
@@ -1621,6 +2030,31 @@ export function LinePanel({
       );
     }
   }
+
+  /**
+   * Live only when the spec says drillable AND the caller wants the clicks --
+   * the same pair `BarPanel` requires, so a line drills on exactly the
+   * conditions a bar does and the PDF (which passes no handler) stays inert.
+   *
+   * Below the single-point branch on purpose: one point is drawn as a figure
+   * rather than a chart, and there is no category there to click.
+   */
+  const drillable =
+    widget.drillable === true && widget.drill_dim !== undefined && onDrill !== undefined;
+  const chartProps = drillable
+    ? {
+        onClick: (state: ChartClickState): void => {
+          const target = drillTargetAt(widget, state.activeTooltipIndex);
+          if (target !== null) onDrill?.(target);
+        },
+        style: { cursor: 'pointer' } as CSSProperties,
+      }
+    : {};
+  /** docs/06 §4.4's hover hint, at the size that has room for it (see BarPanel). */
+  const hint =
+    drillable && compact !== true ? (
+      <p className="specDrillHint">Click a point to see this {widget.drill_dim} broken down.</p>
+    ) : null;
 
   if (widget.data.length === 1) {
     const row = widget.data[0] as Record<string, unknown>;
@@ -1657,21 +2091,44 @@ export function LinePanel({
       actions={actions}
     >
       <ChartFrame compact={compact} naturalHeight={compact === true ? 200 : 260}>
-        <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <ComposedChart data={[...widget.data]} margin={{ top: 8, right: 8, bottom: 4, left: 0 }} {...chartProps}>
           <defs>
             {/* A static fade to transparent — fixed SVG stops, not a timed
                 effect, so the PDF capture (ADR-021) still matches the screen
                 exactly at whatever instant Puppeteer takes the shot. */}
-            {/* 0.18 at the top, not 0.30 (2026-09-03). The fill is there to say
-                which side of the line is "under" it; past about a fifth it stops
-                being a shadow of the trend and becomes a filled REGION, and the
-                eye starts reading its area — which on a monthly receipts chart
-                is a quantity nobody measured. The line is the finding; the wash
-                is punctuation. */}
+            {/* 0.26 at the top, three stops rather than two (2026-09-03).
+                The ceiling argument still holds — past about a third the wash
+                stops being a shadow of the trend and becomes a filled REGION
+                whose AREA the eye starts reading, which on a monthly receipts
+                chart is a quantity nobody measured. What changed is the floor:
+                at 0.18 fading linearly to nothing, the wash was gone by the
+                middle of the plot and the chart was a hairline over white for
+                its bottom half. The middle stop holds a trace of colour to the
+                foot of the plot, so the line reads as sitting ON something.
+                The line is still the finding; the wash is still punctuation. */}
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={seriesColor} stopOpacity={0.18} />
-              <stop offset="100%" stopColor={seriesColor} stopOpacity={0} />
+              <stop offset="0%" stopColor={seriesRamp.base} stopOpacity={0.26} />
+              <stop offset="55%" stopColor={seriesRamp.base} stopOpacity={0.09} />
+              <stop offset="100%" stopColor={seriesRamp.base} stopOpacity={0} />
             </linearGradient>
+            {/**
+              * The stroke is washed along the trend, deep at the start and lit
+              * at the latest reading.
+              *
+              * Same rule as a bar's (`MarkGradient`): lightness steps of one
+              * audited hue, so the line is unmistakably one colour, and the wash
+              * runs in the direction the chart is READ — left to right, arriving
+              * lightest at the most recent point, which is the one the filled
+              * dot already singles out. A single-series line carries no legend
+              * to match against, so there is nothing here for the wash to
+              * mismatch.
+              */}
+            <linearGradient id={`${gradId}-stroke`} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor={seriesRamp.deep} />
+              <stop offset="60%" stopColor={seriesRamp.base} />
+              <stop offset="100%" stopColor={seriesRamp.soft} />
+            </linearGradient>
+            <LineGlow id={`${gradId}-glow`} colour={seriesColor} />
           </defs>
           <CartesianGrid stroke={GRID} strokeDasharray={GRID_DASH} vertical={false} />
           {/* A line's x is a sequence — months, terms — so it stays horizontal
@@ -1701,14 +2158,17 @@ export function LinePanel({
           <Line
             type="monotone"
             dataKey={widget.y}
-            stroke={seriesColor}
-            strokeWidth={2.25}
+            stroke={`url(#${gradId}-stroke)`}
+            strokeWidth={3}
+            strokeLinecap="round"
+            filter={`url(#${gradId}-glow)`}
             dot={makeLineDot(widget.data.length - 1, seriesColor)}
             activeDot={{ r: 5.5, fill: seriesColor, stroke: '#fff', strokeWidth: 2 }}
             {...animation}
           />
         </ComposedChart>
       </ChartFrame>
+      {hint}
     </Panel>
   );
 }
@@ -1737,6 +2197,8 @@ export function DonutPanel({
    * before it and threw.
    */
   const animation = useAnimation();
+  /** One `<defs>` namespace per ring — see `MarkGradient`. */
+  const gradId = useGradientId('slice');
 
   if (widget.data.length === 0) {
     return (
@@ -1771,6 +2233,22 @@ export function DonutPanel({
   const dominantShare = dominant !== null && total > 0 ? dominant.value / total : 0;
   const showDominant = widget.data.length > 1 && dominant !== null && dominantShare >= 0.5;
 
+  /**
+   * Whether any slice is too thin to survive a rounded cap and a padding gap.
+   *
+   * 1.5% of the circle is 5.4 degrees, comfortably wider than the ~3 degrees the
+   * padding takes and than the arc a 6px corner needs at this radius. Below it
+   * the wedge is drawn as a spike (see the `cornerRadius` note on the Pie).
+   * A zero-value slice counts: it is exactly the case that degenerates, and it
+   * is one this product shows rather than hides.
+   */
+  const hasSliver =
+    total > 0 &&
+    widget.data.some((row) => {
+      const value = row[widget.value_field];
+      return typeof value !== 'number' || value / total < 0.015;
+    });
+
   return (
     <Panel title={widget.title} variant="side" compact={compact} actions={actions}>
       {/**
@@ -1784,17 +2262,69 @@ export function DonutPanel({
       <div className="specDonutWrap">
         <ResponsiveContainer width="100%" height={compact === true ? 210 : 220}>
           <PieChart>
-            {/* No gradient on a slice either (docs/10 §1, Meadow). A wedge is
-                one category and takes one colour, the same rule the bars now
-                follow — the ring's legibility comes from the card-coloured
-                hairline between neighbours, below, not from shading. */}
+            {/* A wash per wedge, in that wedge's own hue (`MarkGradient`), all
+                running the same way down the ring — so the donut reads as one
+                lit object rather than as five flat cut-outs, and no wedge picks
+                up a hue that is not its own. The legend below keys it with the
+                same three stops (`legendDotStyle`), which is the condition that
+                makes a washed mark safe here as on the bars. */}
+            <defs>
+              {widget.data.map((row, index) => (
+                <MarkGradient
+                  key={String(row[widget.label_field] ?? index)}
+                  id={`${gradId}-${String(index)}`}
+                  colour={index < SERIES.length ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
+                  horizontal={false}
+                />
+              ))}
+            </defs>
             <Pie
               data={[...widget.data]}
               dataKey={widget.value_field}
               nameKey={widget.label_field}
-              innerRadius={58}
-              outerRadius={compact === true ? 90 : 88}
-              paddingAngle={2}
+              /**
+               * A thicker band than the ring carried before (34px → 40px), and
+               * rounded at both ends of every wedge.
+               *
+               * The band is where the colour lives, and at 30-odd pixels inside
+               * a 220px plot the ring was a hoop with a lot of card showing
+               * through the middle of a panel that had nothing else in it. The
+               * `cornerRadius` is the other half: a wedge squared off against
+               * its neighbours reads as a slice cut out of a disc, where a
+               * rounded one reads as a segment of a track — which is the shape
+               * a proportion should have when the centre is a readout rather
+               * than part of the chart.
+               */
+              innerRadius={compact === true ? 54 : 52}
+              outerRadius={92}
+              /**
+               * Rounded ends and the gap between wedges are both DROPPED once
+               * the ring carries a sliver.
+               *
+               * Neither is defined for a wedge narrower than it is: a 3 degree
+               * padding taken out of a 0.4 degree slice leaves a negative arc,
+               * and a 6px corner radius on a wedge 2px across is a corner with
+               * no straight edge to sit on. Recharts draws the degenerate path
+               * rather than refusing it, and what appears is a thin spike
+               * shooting out of the ring — which a reader reads as a data point,
+               * because on every other chart in this product a mark that size
+               * means a value that size.
+               *
+               * `hasSliver` is measured off the real shares rather than the
+               * category count: a six-slice ring whose smallest slice is 8% is
+               * perfectly safe and keeps the treatment. Attendance is the case
+               * that forced this — Present, Absent, Leave, NIWD, NA, Half Day,
+               * where the last three round to 0% and are still, correctly, shown.
+               *
+               * Dropping both for the WHOLE ring rather than per wedge is
+               * deliberate: `cornerRadius` and `paddingAngle` are Pie-level
+               * props, and a ring with some wedges rounded and others not would
+               * read as two kinds of thing in one chart. The card-coloured
+               * hairline still separates neighbours, which is what was doing the
+               * real work anyway.
+               */
+              cornerRadius={hasSliver ? 0 : 6}
+              paddingAngle={hasSliver ? 0 : 3}
               {...animation}
             >
               {widget.data.map((row, index) => {
@@ -1805,7 +2335,7 @@ export function DonutPanel({
                 return (
                   <Cell
                     key={String(row[widget.label_field] ?? index)}
-                    fill={inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER}
+                    fill={`url(#${gradId}-${String(index)})`}
                     fillOpacity={inPalette ? 1 : 0.55}
                     /* The surface ring the dataviz spec asks for: slices touch
                        around the circle, and a hairline of card colour is what
@@ -1826,12 +2356,12 @@ export function DonutPanel({
           {showDominant && dominant !== null ? (
             <>
               <span className="value">{Math.round(dominantShare * 100)}%</span>
-              {compact !== true && <span className="label">{centerLabel(dominant.label)}</span>}
+              <span className="label">{centerLabel(dominant.label)}</span>
             </>
           ) : (
             <>
               <span className="value">{compactNum.format(total)}</span>
-              {compact !== true && <span className="label">TOTAL</span>}
+              <span className="label">TOTAL</span>
             </>
           )}
         </div>
@@ -1840,10 +2370,23 @@ export function DonutPanel({
           area with a legend row pushed the ring's true centre away from the
           container's geometric centre, which is what the HTML overlay above
           centres against. Keeping the legend outside that area keeps both
-          simple. Dropped entirely at card size: the ring's colour split is the
-          glance, and the full legend is a click away on the real dashboard. */}
-      {compact !== true && (
-        <ul className="specDonutLegend">
+          simple.
+
+          -- It renders at card size too now (2026-09-03) ---------------------
+          It used to be dropped in `compact`, on the argument that the ring's
+          colour split is the glance and the full key is a click away on the real
+          dashboard. That held while a donut appeared on a preview card only by
+          accident. It is now a chart the Dashboard grid CHOOSES — the gender mix
+          of the roll, what attendance actually recorded (`DASHBOARD_PREVIEW`) —
+          and a ring with no key is four coloured arcs a reader cannot name. The
+          shares are the whole finding, so a card that omits them shows a
+          decoration where a chart was meant to be. It is set tighter at card
+          size rather than dropped (tokens.css `.specPanelCompact`).
+
+          The centre readout follows for the same reason: `label` used to be
+          `compact`-only-hidden, which left a bare number floating in a ring with
+          nothing saying what it counted. */}
+      <ul className="specDonutLegend">
           {widget.data.map((row, index) => {
             const inPalette = index < SERIES.length;
             /**
@@ -1869,17 +2412,19 @@ export function DonutPanel({
             const share = typeof value === 'number' && total > 0 ? value / total : null;
             return (
               <li key={String(row[widget.label_field] ?? index)}>
+                {/* Washed like the wedge it keys — see `legendDotStyle`. */}
                 <span
                   className="dot"
-                  style={{ background: inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER }}
+                  style={legendDotStyle(
+                    inPalette ? (SERIES[index] ?? SERIES_OTHER) : SERIES_OTHER,
+                  )}
                 />
                 <span className="name">{String(row[widget.label_field] ?? '')}</span>
                 {share !== null && <span className="share">{Math.round(share * 100)}%</span>}
               </li>
             );
-          })}
-        </ul>
-      )}
+        })}
+      </ul>
     </Panel>
   );
 }
@@ -2105,6 +2650,33 @@ function formatCell(value: unknown): string {
  * measure were painted in visibly different colours. Read from `SERIES` by slot
  * so the next palette change cannot leave them behind again.
  */
+/**
+ * A KPI figure's colour: what the measure MEANS, or -- only where it means
+ * nothing in particular -- what the strip chose.
+ *
+ * The precedence is `measureColour`'s, applied to a tile instead of a mark, and
+ * for the same reason: `tone` is a claim the server made about the number
+ * ("this is a warning"), `accent` is how the page arranged its cards. A strip
+ * cycling hues so that five tiles read as five subjects must never be able to
+ * paint fees-outstanding in the teal it used for headcount.
+ *
+ * `neutral` is the one tone with nothing to lose. It is not a judgement the
+ * server made; it is the absence of one -- services/home.ts sets it on every
+ * tile in the Dashboard strip precisely because there is no threshold at which
+ * a student count is good or bad news. Colouring those by subject adds a
+ * distinction where there was none, and removes none.
+ */
+function kpiColour(tone: KpiWidget['tone'], accent: ChartAccent | undefined): string {
+  if (tone !== undefined && tone !== 'neutral') return toneColour(tone);
+  return accent === undefined ? toneColour(tone) : ACCENT_COLOUR[accent];
+}
+
+/** A hue's three mark stops as a CSS gradient — the SVG wash, for a DOM element. */
+function gradientCss(colour: string): string {
+  const ramp = markStops(colour);
+  return `linear-gradient(180deg, ${ramp.lit}, ${ramp.base} 55%, ${ramp.deep})`;
+}
+
 function toneColour(tone: KpiWidget['tone']): string {
   switch (tone) {
     case 'warning':
@@ -2135,21 +2707,34 @@ export function WidgetView({
 }: {
   widget: Widget;
   compact?: boolean | undefined;
-  /** Single-series colour for a bar/line widget — see `ChartAccent`. Ignored by kpi/donut/table: a donut is already multi-colour by category, and tone-colouring a KPI already goes through its own `tone` field. */
+  /**
+   * Single-series colour for a bar/line widget, and a NEUTRAL KPI tile's hue —
+   * see `ChartAccent` and `kpiColour`. Still ignored by donut and table: a donut
+   * is already multi-colour by category, and a table has no mark to paint.
+   *
+   * A KPI honours it only where `tone` is neutral, i.e. where the server made no
+   * claim about the number; a warning or negative tile keeps the colour its
+   * meaning earned. That is the same precedence `measureColour` applies to a
+   * chart, and it is what lets a strip read as five subjects without any tile
+   * being able to lie about whether its figure is good news.
+   */
   accent?: ChartAccent | undefined;
   /** Platform chrome beside the panel title — see `Panel`'s doc comment. Never offered to a KPI tile, which has no panel head to hold it. */
   actions?: ReactNode | undefined;
   /**
-   * Drill clicks (ADR-020). Only the `bar` branch takes it today, because
-   * `bar-school` is the only drillable widget the catalog ships; the prop is
-   * declared on the dispatcher rather than plumbed report-by-report so a
-   * drillable donut is a one-line change here and nothing at the call sites.
+   * Drill clicks (ADR-020). Taken by the `bar` and `line` branches, which are
+   * the two cartesian charts a drill LEVEL may be drawn as (docs/06 §4.1's
+   * per-level `chart`, and the orchestrator's `DrillChart`).
+   *
+   * `donut` deliberately does not take it: a pie has no category axis to click,
+   * which is exactly why a donut is only ever offered for a LEAF level, where
+   * there is nothing below to drill into. `table` and `kpi` are not levels.
    */
   onDrill?: DrillHandler | undefined;
 }): ReactElement {
   switch (widget.type) {
     case 'kpi':
-      return <KpiTile widget={widget} />;
+      return <KpiTile widget={widget} accent={accent} />;
     case 'bar':
       return (
         <BarPanel
@@ -2161,7 +2746,15 @@ export function WidgetView({
         />
       );
     case 'line':
-      return <LinePanel widget={widget} compact={compact} accent={accent} actions={actions} />;
+      return (
+        <LinePanel
+          widget={widget}
+          compact={compact}
+          accent={accent}
+          actions={actions}
+          onDrill={onDrill}
+        />
+      );
     case 'donut':
       return <DonutPanel widget={widget} compact={compact} actions={actions} />;
     case 'table':

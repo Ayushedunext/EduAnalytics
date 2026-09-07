@@ -490,3 +490,241 @@ function numberOr(value: unknown, fallback: number): number {
   }
   return fallback;
 }
+
+// -- The editor's view of a drill path (docs/06 §4.1/§4.2, ADR-020) ----------
+
+/**
+ * The chart types a drill LEVEL may be drawn as.
+ *
+ * Not the full widget vocabulary, and the gap is not an oversight:
+ *
+ *   `bar` and `line` are both Recharts cartesian charts over the level's own
+ *   rows, so a click on category N means the same thing on either and
+ *   `drillTargetAt` reads the identical row (react/widgets.tsx). A level that
+ *   drills can therefore be either.
+ *
+ *   `donut` is a Pie. It carries no category axis to click, and its subject is
+ *   proportion — parts of one whole. So it is offered ONLY at a leaf level
+ *   (nothing to click) whose path draws ONE measure (there is a whole for the
+ *   slices to be parts of). A donut of Fee Collection's demand/collected/
+ *   pending would draw three overlapping totals as if they summed to something.
+ *
+ * `table` is absent because a drilled level's rows already print under every
+ * chart, and `kpi` because a level is a breakdown, not a single figure.
+ */
+export type DrillChart = 'bar' | 'line' | 'donut';
+
+/** One row of the editor's "Drill path" control (docs/06 §4.1). */
+export interface DrillLevelView {
+  /** 1-based, as docs/06 §4.1's definition model numbers them. */
+  readonly n: number;
+  /** What this level GROUPS BY — the catalog's `group_by`, shown read-only. */
+  readonly dim: string;
+  /** The dimension a click at this level pushes; `null` at the leaf. */
+  readonly drills_on: string | null;
+  /** The dimensions already bound by the time this level is reached. */
+  readonly inherit: readonly string[];
+  readonly chart: DrillChart;
+  /** What this level may be switched to — see `DrillChart`. */
+  readonly chart_options: readonly DrillChart[];
+}
+
+/**
+ * A report's drill path as the report EDITOR needs it (docs/06 §3's visual
+ * editor, §4.2's "editor level-pickers offer only valid children of the level
+ * above").
+ *
+ * The dimensions are read-only on purpose, and that is the enforcement half of
+ * ADR-020's curated catalog rather than a simplification of it: `DRILL_PATHS`
+ * is the only source of a legal path, `resolveDrill` refuses anything else, and
+ * an editor that let a reader type a dimension would be offering a choice the
+ * server exists to reject. What a clone genuinely owns is docs/06 §4.3's
+ * "clones may change or disable the path": the `enabled` switch, and how each
+ * level is DRAWN.
+ */
+export interface DrillView {
+  /** The one widget of the report that drills. */
+  readonly widget_id: string;
+  /** Does the base report have a curated path at all? */
+  readonly available: boolean;
+  /** Is it switched on for this clone? Always false when `available` is false. */
+  readonly enabled: boolean;
+  /** Empty when `available` is false. */
+  readonly levels: readonly DrillLevelView[];
+}
+
+/**
+ * A level's stored chart choice, keyed by level number as a string.
+ *
+ * A record and not an array because it is a SPARSE statement of divergence: a
+ * clone that changed only its leaf stores only its leaf, and every level the
+ * reader left alone keeps whatever the catalog draws rather than a stored copy
+ * of it that would freeze on the day the catalog changed.
+ */
+export type DrillCharts = Readonly<Partial<Record<string, DrillChart>>>;
+
+/** The request shape for a stored block, before it is checked against the catalog. */
+export interface DrillSelection {
+  readonly enabled: boolean;
+  readonly charts?: DrillCharts | undefined;
+}
+
+/**
+ * What a level is drawn as, absent a stored choice.
+ *
+ * `bar` at every level, because that is what `buildDrill` actually emits — read
+ * off the emitter's behaviour rather than declared beside it, so the editor
+ * cannot show a reader a default the server does not draw.
+ */
+const DEFAULT_LEVEL_CHART: DrillChart = 'bar';
+
+function chartOptionsFor(level: DrillLevel, measures: number): readonly DrillChart[] {
+  /** A level that drills must stay clickable, and only cartesian charts are. */
+  if (level.drill_dim !== undefined) return ['bar', 'line'];
+  return measures === 1 ? ['bar', 'line', 'donut'] : ['bar', 'line'];
+}
+
+/**
+ * Resolve the catalog's path plus a clone's stored choices into the block the
+ * editor renders and the client sends back.
+ *
+ * Returns a view with `available: false` — never `null` — when the base report
+ * has no curated path, so the editor can say WHY the drill-down option is off
+ * instead of silently omitting the control and leaving a reader to conclude the
+ * feature is broken (CODING_GUIDELINES §18).
+ */
+export function describeDrillPath(args: {
+  reportId: DashboardId;
+  /** A widget-scoped clone drills only if it kept the widget that drills. */
+  widgetScope?: string | undefined;
+  enabled: boolean;
+  charts?: DrillCharts | undefined;
+}): DrillView {
+  const path = drillPathFor(args.reportId);
+  if (path === undefined || (args.widgetScope !== undefined && args.widgetScope !== path.widget_id)) {
+    return { widget_id: path?.widget_id ?? '', available: false, enabled: false, levels: [] };
+  }
+
+  const measures = path.measures.length;
+  const levels: DrillLevelView[] = path.levels.map((level, index) => {
+    const options = chartOptionsFor(level, measures);
+    const stored = args.charts?.[String(index + 1)];
+    return {
+      n: index + 1,
+      dim: level.group_by,
+      drills_on: level.drill_dim ?? null,
+      /**
+       * The dimensions bound on the way here — every level above this one that
+       * pushes a value. docs/06 §4.1 prints these as `inherit` beside the
+       * level, and the editor shows them so a reader can see that a click
+       * narrows the same query rather than starting a different one.
+       */
+      inherit: path.levels
+        .slice(0, index)
+        .map((above) => above.drill_dim)
+        .filter((dim): dim is string => dim !== undefined),
+      /**
+       * A stored choice this level cannot honour is DROPPED rather than shown.
+       * The catalog can change under a saved report — a level that gains a
+       * second measure stops being a legal donut — and echoing the stored value
+       * back would put an option in the select that the server would refuse on
+       * the next save.
+       */
+      chart: stored !== undefined && options.includes(stored) ? stored : DEFAULT_LEVEL_CHART,
+      chart_options: options,
+    };
+  });
+
+  return { widget_id: path.widget_id, available: true, enabled: args.enabled, levels };
+}
+
+/**
+ * Draw a produced level as something other than the bar `buildDrill` emits.
+ *
+ * Applied to the level's finished widget rather than threaded into its
+ * construction because the choice is presentation and nothing else: the same
+ * rows, the same GROUP BY, the same statement in the logic panel (ADR-015).
+ *
+ * The drill fields travel across the swap, for the reason `applyChartOverride`
+ * in services/custom-reports.ts carries them: `drillable` without `drill_dim`
+ * is an invalid widget, so dropping half the pair would turn a chart-type
+ * choice into an unrenderable report.
+ *
+ * An unhonourable request returns the widget UNCHANGED rather than throwing. A
+ * reader who saved a donut leaf before the catalog grew a second measure should
+ * get their level drawn as a bar, not an error where a chart was — and
+ * `describeDrillPath` is already showing them a bar in the editor.
+ */
+export function applyLevelChart(args: {
+  widget: Widget;
+  chart: DrillChart | undefined;
+  measures: number;
+  correlationId: string;
+}): Widget {
+  const { widget, chart, measures } = args;
+  if (chart === undefined || widget.type !== 'bar' || widget.type === chart) return widget;
+
+  const swapped = swap(widget, chart, measures);
+  if (swapped === widget) return widget;
+
+  /**
+   * [MANDATORY] CODING_GUIDELINES §10, for the same reason `buildDrill`
+   * validates the widget it assembled: this one is assembled too, and
+   * "assembled by our own code" is not a substitute for a check. Validating
+   * here rather than at the call site means no caller can skip it.
+   */
+  const parsed = widgetSchema.safeParse(swapped);
+  if (!parsed.success) {
+    throw new PlatformError({
+      code: ERROR_CODES.INVALID_CHART_SPEC,
+      message: 'That level could not be drawn as the chart this report asks for.',
+      diagnostics: { chart, issues: parsed.error.issues.map((i) => i.path.join('.')) },
+      correlationId: args.correlationId,
+    });
+  }
+  return parsed.data;
+}
+
+function swap(widget: Widget, chart: DrillChart, measures: number): Widget {
+  if (widget.type !== 'bar') return widget;
+
+  if (chart === 'donut') {
+    /** Parts of a whole, or nothing: see `DrillChart`. */
+    if (measures !== 1 || widget.drillable === true) return widget;
+    return {
+      id: widget.id,
+      type: 'donut',
+      ...(widget.title === undefined ? {} : { title: widget.title }),
+      label_field: widget.x,
+      value_field: widget.y,
+      data: widget.data,
+      ...(widget.drill_context === undefined ? {} : { drill_context: widget.drill_context }),
+    };
+  }
+
+  return {
+    id: widget.id,
+    type: 'line',
+    ...(widget.title === undefined ? {} : { title: widget.title }),
+    x: widget.x,
+    y: widget.y,
+    data: widget.data,
+    /**
+     * `series` is deliberately not carried: `bar.series` is a list of measures
+     * drawn side by side and `line.series` is a field name that splits one
+     * measure into several lines — the same word for two different things
+     * (services/custom-reports.ts says the same where it swaps a whole widget).
+     * A multi-measure level drawn as a line therefore draws its FIRST measure,
+     * which is `y`.
+     */
+    ...(widget.drillable === undefined ? {} : { drillable: widget.drillable }),
+    ...(widget.drill_context === undefined ? {} : { drill_context: widget.drill_context }),
+    ...(widget.drill_dim === undefined ? {} : { drill_dim: widget.drill_dim }),
+    ...(widget.drill_value_field === undefined ? {} : { drill_value_field: widget.drill_value_field }),
+  };
+}
+
+/** The measure count of a report's path — what `applyLevelChart` needs to judge a donut. */
+export function drillMeasureCount(reportId: DashboardId): number {
+  return drillPathFor(reportId)?.measures.length ?? 0;
+}

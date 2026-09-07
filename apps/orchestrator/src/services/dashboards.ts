@@ -462,6 +462,105 @@ export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
   'transport-analytics': 'by_pickup_route',
 };
 
+/** One grid card's chart: which vetted statement feeds it, and which widget it draws. */
+export interface DashboardPreview {
+  /** A query key the report already vets — never a new statement. */
+  readonly query: string;
+  /** The widget that query produces, by id. */
+  readonly widget_id: string;
+  /**
+   * What that widget IS, declared rather than discovered.
+   *
+   * The Dashboard grid sizes a card's slot from this, and it has to do so
+   * BEFORE the chart arrives — every card is its own request now, so a grid
+   * that waited for the widget to learn its own shape would lay out eight
+   * skeletons at one size and then reflow the page underneath the reader as
+   * each one landed. Declared here it travels with `/api/home`, which is
+   * already on the wire before the first preview request is made.
+   */
+  readonly kind: 'bar' | 'line' | 'donut';
+}
+
+/**
+ * The chart each Dashboard grid card draws, where it is NOT the drill entry.
+ *
+ * -- What this changes, and why ----------------------------------------------
+ * Every gridded card used to draw its drill-ENTRY chart, so that a reader could
+ * descend from the card in place (ADR-020). That rule produced a correct grid
+ * and a redundant one: level 1 of every curated path is "one bar per school",
+ * so eight cards drew the same three horizontal bars eight times over, and the
+ * only thing separating them was the axis. A page of one chart repeated is not
+ * an overview — the reader has nothing to compare because every card is making
+ * the same kind of statement.
+ *
+ * So a card now draws the chart that best answers ITS OWN question, and the
+ * grid gets a shape per card: a trend where the subject is movement over time,
+ * a ring where it is composition, bars where it is comparison between schools.
+ * That is what the summary strip above cannot do and what makes the grid worth
+ * scrolling rather than a picture of the sidebar.
+ *
+ * -- What it costs, stated plainly -------------------------------------------
+ * A card listed here is INERT: its chart is not the drill entry, so it carries
+ * no `drill_dim` and clicking it opens the full report instead of descending in
+ * place. That is a real loss and it is the accepted price. It is also not a new
+ * state — Staff Overview and Transport rendered exactly this way before they
+ * grew paths — and nothing about it lies: `PreviewCard` only lets a chart take
+ * a click when the widget says `drillable`, so an inert card silently does the
+ * one thing every card does, which is open its report. The drill itself is
+ * untouched; it lives on the report page, at all three levels, as before.
+ *
+ * A dashboard NOT listed here keeps the drill entry and keeps drilling in place.
+ * Three do, and they are the three whose by-school bars are genuinely the most
+ * useful reading they have: outstanding per school, headcount per department,
+ * riders per route.
+ *
+ * -- Cost is unchanged --------------------------------------------------------
+ * Each entry names ONE statement the report already vets and already runs for
+ * its own page (`run_predefined`, one `query_keys` entry), so a card still costs
+ * exactly one scan. This is a different mapping, not a second serving path, and
+ * not a query anyone had to write.
+ *
+ * [MANDATORY] Every key here is on `DASHBOARD_GRID` and every `widget_id` is one
+ * its builder actually pushes for that `query`; test/home-previews.test.ts holds
+ * both, because a widget id that has drifted produces the success-shaped failure
+ * §10 names — the card falls back to whatever else that query emitted and looks
+ * fine while showing the wrong chart.
+ */
+export const DASHBOARD_PREVIEW: Partial<Record<DashboardId, DashboardPreview>> = {
+  /* Money over the year. What a Director opens the page for is not which school
+     collected most — the strip above already totals that — it is whether the
+     curve is where it should be by September. */
+  'fee-collection': { query: 'by_month', widget_id: 'line-month', kind: 'line' },
+  /* Overdue by AGE of the debt, not by school. A defaulters card's question is
+     "how bad", and 90-days-plus money is a different problem from last month's;
+     the buckets say that and a school ranking does not. */
+  'fee-defaulters': { query: 'aging', widget_id: 'bar-aging', kind: 'bar' },
+  /* What was actually recorded — present, absent, leave — as a composition.
+     Attendance is a proportion before it is a count, and a ring is the one mark
+     that reads as a proportion without the reader doing arithmetic. */
+  'attendance-analytics': { query: 'by_status', widget_id: 'donut-status', kind: 'donut' },
+  /* Presence over the year. Same reasoning as Fee Collection: staff presence is
+     a seasonal shape, and a monthly line is where a bad month is visible. */
+  'staff-attendance': { query: 'by_month', widget_id: 'line-month', kind: 'line' },
+  /* The gender mix of the roll. A split of a whole, which is a ring; the
+     headcount itself is already the first tile in the strip above. */
+  'enrollment-overview': { query: 'by_gender', widget_id: 'donut-gender', kind: 'donut' },
+};
+
+/**
+ * The chart kind a grid card will draw — the declared one, or `bar` for a card
+ * still drawing its drill entry.
+ *
+ * `bar` is not a default in the "when in doubt" sense; it is a fact about what a
+ * drill entry IS. Level 1 of every curated path is one bar per school
+ * (`DRILL_PATHS`), so a card with no entry above draws a bar by construction,
+ * and the day that stops being true is the day a path grows a level-1 `chart`
+ * of its own — at which point this reads it from there instead.
+ */
+export function previewKindFor(id: DashboardId): 'bar' | 'line' | 'donut' {
+  return DASHBOARD_PREVIEW[id]?.kind ?? 'bar';
+}
+
 /**
  * Which of a report's widgets accept a `bucket` override, and which values —
  * a widget's own SQL declares its bucket variants (mcp-server/src/reports/
@@ -3883,8 +3982,15 @@ function buildStaffAttendance(merged: Merged, { scope }: BuildContext): Dashboar
       title: 'Present staff-days by month',
       x: 'month',
       y: 'present_days',
+      /**
+       * `monthLabel`, not the raw `2026-04` key — the same formatting Student
+       * Attendance's identical chart already applied, and the two are read side
+       * by side on the Dashboard grid now (`DASHBOARD_PREVIEW`), where one axis
+       * saying "April" beside another saying "2026-04" reads as two different
+       * products. The rows are unchanged; only the label a reader sees is.
+       */
       data: byMonth.map((r) => ({
-        month: label(r['month']),
+        month: monthLabel(label(r['month'])),
         present_days: num(r['present_days']),
       })),
     });

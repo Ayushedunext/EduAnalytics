@@ -61,6 +61,17 @@ import {
   type PredefinedResult,
   type ReportLogic,
 } from './dashboards.js';
+import {
+  applyLevelChart,
+  buildDrill,
+  describeDrillPath,
+  drillMeasureCount,
+  type DrillChart,
+  type DrillResult,
+  type DrillSelection,
+  type DrillStep,
+  type DrillView,
+} from './drill.js';
 import { DASHBOARDS } from './home.js';
 import { hydrate, buildAskAiLogic } from './ai-chat.js';
 import type { CachedResult } from './ai-tools.js';
@@ -96,6 +107,32 @@ const templateDefSchema = z
     widget_scope: z.string().min(1).optional(),
     /** Time-grouping override for `widget_scope`'s query (see catalog.ts's `variants`). Meaningless without `widget_scope`, validated together. */
     bucket: z.enum(['week', 'month', 'quarter', 'year']).optional(),
+    /**
+     * docs/06 §4.3's "clones may change or disable the path" — the drill block
+     * of docs/06 §4.1's definition model, reduced to the part a CLONE owns.
+     *
+     * The catalog's `dim` and `inherit` are deliberately NOT stored. They are
+     * facts about `DRILL_PATHS` (services/drill.ts), the single source of a
+     * legal path, and a copy of them inside a saved definition would be a
+     * second source that freezes on the day the path changes — the drift
+     * CODING_GUIDELINES §1 names. What is genuinely this clone's is the switch
+     * and the per-level chart type, so that is all that is here; the API
+     * resolves the two together into the `{n, dim, chart, inherit}` block the
+     * editor renders (`describeDrillPath`).
+     *
+     * Absent means "as the catalog ships it" — ON where a path exists, which is
+     * docs/06 §4.3's "predefined dashboards ship with curated paths ON". A
+     * clone taken before this field existed therefore keeps drilling, rather
+     * than silently losing a feature its original had.
+     */
+    drill: z
+      .object({
+        enabled: z.boolean(),
+        /** Level number (as a string) -> chart. Sparse: only levels the reader actually changed. */
+        charts: z.record(z.enum(['1', '2', '3']), z.enum(['bar', 'line', 'donut'])).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -257,6 +294,17 @@ export interface CustomReportView {
   readonly logic: ReportLogic;
   readonly degraded: readonly { key: string; message: string }[];
   readonly degraded_schools: readonly { school_id: string; message: string }[];
+  /**
+   * This report's drill path (docs/06 §4) — what the visual editor's "Report
+   * type" and "Drill path" controls render, and what tells the viewer whether
+   * its chart is clickable.
+   *
+   * `null` for a raw_sql report. An AI-saved report has no curated path to
+   * offer: docs/06 §4.4 closes with drill being a property of a vetted catalog
+   * entry, and `chartSpecDraftSchema` refuses `drillable` outright for exactly
+   * that reason (packages/chart-spec/src/spec.ts).
+   */
+  readonly drill: DrillView | null;
 }
 
 // -- Execution: template mode -----------------------------------------------
@@ -267,6 +315,8 @@ interface TemplateRunOutcome {
   readonly degraded: { key: string; message: string }[];
   readonly degraded_schools: { school_id: string; message: string }[];
   readonly sqlText: string;
+  /** The drill path as this clone has it — the editor's control, and null in raw_sql mode. */
+  readonly drill: DrillView;
 }
 
 async function runTemplateMode(args: {
@@ -350,9 +400,40 @@ async function runTemplateMode(args: {
     });
   }
 
+  /**
+   * The drill path this clone actually has (docs/06 §4.3, "clones may change or
+   * disable the path"). Resolved from the catalog plus the stored block, so a
+   * report whose base path was withdrawn reports `available: false` rather than
+   * offering a control that would fail on click.
+   */
+  const drill = describeDrillPath({
+    reportId: baseReportId,
+    ...(args.def.widget_scope === undefined ? {} : { widgetScope: args.def.widget_scope }),
+    enabled: args.def.drill?.enabled ?? true,
+    ...(args.def.drill?.charts === undefined ? {} : { charts: args.def.drill.charts }),
+  });
+
+  /**
+   * Level 1's chart choice rides in as an ordinary widget override rather than
+   * through a second mechanism of its own: level 1 IS a widget of this report's
+   * spec (`drill.widget_id`), and `applyChartOverride` already swaps a bar for
+   * a line while carrying the drill fields across. A separate path for "the
+   * entry chart" would be a second place the same swap could be got wrong.
+   *
+   * Levels 2 and 3 are not widgets of this spec — they do not exist until
+   * someone clicks — so they are applied where they are produced, in
+   * `drillCustomReport` below.
+   */
+  const entryChart = drill.available ? drill.levels[0]?.chart : undefined;
+  const chartOverrides =
+    entryChart === 'line' || entryChart === 'bar'
+      ? { ...args.def.chart_overrides, [drill.widget_id]: entryChart }
+      : args.def.chart_overrides;
+
   const widgets: Widget[] = scopedWidgets
-    .map((w) => applyChartOverride(w, args.def.chart_overrides))
-    .map((w) => (args.def.bucket === undefined ? w : retitleForBucket(w, args.def.bucket)));
+    .map((w) => applyChartOverride(w, chartOverrides))
+    .map((w) => (args.def.bucket === undefined ? w : retitleForBucket(w, args.def.bucket)))
+    .map((w) => (drill.enabled ? w : undrill(w)));
 
   const spec: ChartSpec = {
     spec_version: 1,
@@ -383,13 +464,39 @@ async function runTemplateMode(args: {
         args.def.widget_scope === undefined
           ? `This is your own customised copy of "${result.title}". Edits here never change the original.`
           : `This is your own copy of one chart from "${result.title}". Edits here never change the original dashboard or its other charts.`,
+        /**
+         * Invariant 6 applied to the drill switch. A report whose chart stopped
+         * being clickable should say so where its logic is read — otherwise the
+         * only evidence is a click that does nothing, which reads as a bug.
+         */
+        ...(drill.available && !drill.enabled
+          ? ['Drill-down is turned off for this report, so its charts are not clickable. You can turn it back on from the visual editor.']
+          : []),
         'Scope is injected from your launch token, intersected with this report’s saved scope. It is shown read-only here and cannot be widened from this screen.',
       ],
     },
     degraded: merged.failures(),
     degraded_schools: merged.schoolFailures(),
     sqlText: definitions.map((d) => `-- ${d.key}: ${d.description}\n${d.sql}`).join('\n\n'),
+    drill,
   };
+}
+
+/**
+ * Strip the drill affordance from a widget, for a clone whose reader turned
+ * drill-down off (docs/06 §4.3).
+ *
+ * `drillable: false` rather than deleting the field: the spec allows either,
+ * and an explicit false is a statement that this chart does not drill, where an
+ * absent field is silence. `drill_dim` goes with it because the pair is only
+ * meaningful together — the widget invariant in spec.ts requires a dim only
+ * when `drillable` is true, so leaving a stale dim behind would be a fact about
+ * a path this report no longer offers.
+ */
+function undrill(widget: Widget): Widget {
+  if (!('drillable' in widget) || widget.drillable !== true) return widget;
+  const { drill_dim: _dim, drill_value_field: _value, ...rest } = widget;
+  return { ...rest, drillable: false } as Widget;
 }
 
 /**
@@ -768,6 +875,8 @@ export async function saveAiReport(args: {
     logic: run.logic,
     degraded: [],
     degraded_schools: [],
+    /** raw_sql: no curated path exists to offer (see `CustomReportView.drill`). */
+    drill: null,
   };
 }
 
@@ -776,6 +885,12 @@ interface ViewOutcome {
   readonly logic: ReportLogic;
   readonly degraded: { key: string; message: string }[];
   readonly degraded_schools: { school_id: string; message: string }[];
+  /**
+   * Deliberately NOT part of the cached outcome — see `viewReport`, which
+   * resolves it fresh on every response. It rides in this shape only so the two
+   * branches below hand back one object.
+   */
+  readonly drill: DrillView | null;
 }
 
 export async function viewReport(args: {
@@ -796,6 +911,26 @@ export async function viewReport(args: {
     filters: def.mode === 'template' ? def.params : {},
   });
   const hit = await cacheGet<ViewOutcome>(key);
+
+  /**
+   * Resolved on every response, never read back out of the cache entry.
+   *
+   * It is a pure lookup over `DRILL_PATHS` and this report's own stored block —
+   * no query, no connection — so caching it buys nothing and costs the one
+   * thing that matters here: a cached copy would go on describing a path after
+   * the catalog changed underneath it, and the editor would render a level the
+   * server no longer serves. The rows are cached; the description of how to
+   * navigate them is derived.
+   */
+  const drill =
+    def.mode === 'template' && isDashboardId(def.base_report_id)
+      ? describeDrillPath({
+          reportId: def.base_report_id,
+          ...(def.widget_scope === undefined ? {} : { widgetScope: def.widget_scope }),
+          enabled: def.drill?.enabled ?? true,
+          ...(def.drill?.charts === undefined ? {} : { charts: def.drill.charts }),
+        })
+      : null;
 
   let outcome: ViewOutcome;
   if (hit !== null) {
@@ -819,6 +954,7 @@ export async function viewReport(args: {
     outcome = {
       ...hit.value,
       spec: { ...hit.value.spec, meta: { ...hit.value.spec.meta, served_from: 'cache' } },
+      drill,
     };
   } else if (def.mode === 'template') {
     const run = await runTemplateMode({
@@ -828,7 +964,13 @@ export async function viewReport(args: {
       def,
       effectiveSchoolIds: effective,
     });
-    outcome = { spec: run.spec, logic: run.logic, degraded: run.degraded, degraded_schools: run.degraded_schools };
+    outcome = {
+      spec: run.spec,
+      logic: run.logic,
+      degraded: run.degraded,
+      degraded_schools: run.degraded_schools,
+      drill,
+    };
     if (outcome.degraded.length === 0 && outcome.degraded_schools.length === 0) {
       await cacheSet(key, outcome, config.CACHE_TTL_SECONDS);
     }
@@ -840,7 +982,7 @@ export async function viewReport(args: {
       def,
       effectiveSchoolIds: effective,
     });
-    outcome = { spec: run.spec, logic: run.logic, degraded: [], degraded_schools: [] };
+    outcome = { spec: run.spec, logic: run.logic, degraded: [], degraded_schools: [], drill };
     await cacheSet(key, outcome, config.CACHE_TTL_SECONDS);
   }
 
@@ -869,6 +1011,129 @@ export async function viewReport(args: {
   };
 }
 
+/**
+ * One level of a CUSTOM report's drill path (docs/06 §4, ADR-020).
+ *
+ * -- Why this exists rather than pointing the client at the predefined route --
+ * `POST /api/report/:id/drill` takes a `DashboardId` and reads its filters off
+ * the query string. A clone is neither: its id is a `report_definitions` row,
+ * and its filters are the values it SAVED (ADR-018) — the whole point of a
+ * clone being that it keeps comparing the years it was taken with. A client
+ * that drilled a clone through the predefined route would have to send the
+ * base report's id and re-supply the clone's filters from the browser, which
+ * would make a saved report's drilled levels answer a question the reader could
+ * change in the URL.
+ *
+ * So the LEVEL is built by exactly the same `buildDrill` the predefined path
+ * uses — same catalog, same click validation, same caps, same cache key, same
+ * scope double-check — and what this function adds is only the three things
+ * that are specific to a clone: resolving which base report and which stored
+ * filters, honouring the clone's own drill switch, and drawing the level as the
+ * clone asks (`applyLevelChart`).
+ */
+export async function drillCustomReport(args: {
+  session: SessionClaims;
+  correlationId: string;
+  id: string;
+  requestedSchoolIds: readonly string[];
+  widgetId: string;
+  level: number;
+  context: readonly DrillStep[];
+}): Promise<DrillResult> {
+  const row = await getRowOrThrow(args.id, args.correlationId);
+  /**
+   * `assertVisible`, not `assertOwner`: drilling is READING, and a report
+   * shared to the school or the trust is meant to be read by the people it was
+   * shared with. Editing its path is a different question and is owner-gated
+   * where it belongs, on `updateReportVisual`.
+   */
+  assertVisible(row, args.session, args.correlationId);
+  const def = parseReportDef(row.def_json, args.correlationId);
+
+  if (def.mode !== 'template') {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'This report was saved from a statement of its own, so it has no drill path.',
+      correlationId: args.correlationId,
+    });
+  }
+  if (!isDashboardId(def.base_report_id)) {
+    throw new PlatformError({
+      code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+      message: 'The predefined report this clone was based on no longer exists.',
+      correlationId: args.correlationId,
+    });
+  }
+  const baseReportId: DashboardId = def.base_report_id;
+
+  const path = describeDrillPath({
+    reportId: baseReportId,
+    ...(def.widget_scope === undefined ? {} : { widgetScope: def.widget_scope }),
+    enabled: def.drill?.enabled ?? true,
+    ...(def.drill?.charts === undefined ? {} : { charts: def.drill.charts }),
+  });
+  /**
+   * The switch is enforced HERE and not only by withholding `drillable` from
+   * the spec. A chart that is not drawn as clickable is a UI fact; a request
+   * can still be typed by hand, and "the button was hidden" is not an access
+   * decision (CODING_GUIDELINES §10's reasoning applied to a control).
+   */
+  if (!path.available || !path.enabled) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: path.available
+        ? 'Drill-down is turned off for this report.'
+        : 'This report does not drill down.',
+      correlationId: args.correlationId,
+    });
+  }
+
+  const effective = effectiveScope(row, args.requestedSchoolIds, args.correlationId);
+
+  /**
+   * The clone's OWN saved filters, read back exactly as `runTemplateMode` reads
+   * them. A level fetched under filters re-derived from today would be a
+   * breakdown of a different question from the chart it was reached by
+   * clicking — the failure ADR-018 stores params to prevent.
+   */
+  const academicYear = typeof def.params['academic_year'] === 'string' ? def.params['academic_year'] : '';
+  const asOfDate =
+    typeof def.params['as_of_date'] === 'string' ? def.params['as_of_date'] : new Date().toISOString().slice(0, 10);
+  const compareYear =
+    typeof def.params['compare_year'] === 'string'
+      ? def.params['compare_year']
+      : previousAcademicYear(academicYear);
+
+  const drill = await buildDrill({
+    session: args.session,
+    schoolIds: effective,
+    reportId: baseReportId,
+    widgetId: args.widgetId,
+    level: args.level,
+    context: args.context,
+    academicYear,
+    asOfDate,
+    compareYear,
+    correlationId: args.correlationId,
+  });
+
+  /**
+   * Level 1 is a widget of the report's own spec and gets its chart in
+   * `runTemplateMode`; levels 2 and 3 do not exist until someone clicks, so
+   * this is where their chart choice lands. Applied to the FINISHED level, so
+   * the rows, the GROUP BY and the statement in the logic panel are identical
+   * whichever chart was chosen (ADR-015).
+   */
+  const widget = applyLevelChart({
+    widget: drill.widget,
+    chart: path.levels[drill.level - 1]?.chart,
+    measures: drillMeasureCount(baseReportId),
+    correlationId: args.correlationId,
+  });
+
+  return { ...drill, widget };
+}
+
 export async function updateReportVisual(args: {
   session: SessionClaims;
   correlationId: string;
@@ -876,6 +1141,14 @@ export async function updateReportVisual(args: {
   academicYear: string;
   asOfDate: string;
   chartOverrides?: Record<string, 'bar' | 'line'>;
+  /**
+   * docs/06 §4.3's "clones may change or disable the path". Absent leaves the
+   * report's existing drill block exactly as it is — this endpoint saves the
+   * panel a reader edited, and a filter-only save must not silently reset a
+   * drill configuration nobody touched (the same rule `compare_year` follows
+   * a few lines down).
+   */
+  drill?: DrillSelection | undefined;
 }): Promise<CustomReportView> {
   const row = await getRowOrThrow(args.id, args.correlationId);
   assertOwner(row, args.session, args.correlationId);
@@ -932,6 +1205,7 @@ export async function updateReportVisual(args: {
     ...(args.chartOverrides === undefined ? {} : { chart_overrides: args.chartOverrides }),
     ...(existing.widget_scope === undefined ? {} : { widget_scope: existing.widget_scope }),
     ...(existing.bucket === undefined ? {} : { bucket: existing.bucket }),
+    ...drillBlock(args.drill ?? existing.drill, existingBaseId, existing.widget_scope),
   };
 
   const run = await runTemplateMode({
@@ -962,6 +1236,54 @@ export async function updateReportVisual(args: {
   });
 
   return toView(updated, next, run, args.session);
+}
+
+/**
+ * Normalise a drill block against the catalog before it is STORED.
+ *
+ * The point is that a saved definition may not claim something `resolveDrill`
+ * would refuse. Two things are dropped rather than persisted:
+ *
+ *   A block for a report with no curated path at all, or for a widget-scoped
+ *   clone that kept a widget which does not drill. Storing `enabled: true`
+ *   there would put a switch in the editor that no click could honour.
+ *
+ *   A per-level chart the level cannot be drawn as — a donut on a level that
+ *   drills, or on a path with several measures. `describeDrillPath` is asked
+ *   which options a level really has, so the check here and the options offered
+ *   in the editor are the same computation rather than two copies of a rule.
+ *
+ * The result is sparse on purpose: a level left at the catalog's own chart
+ * stores nothing, so it keeps following the catalog instead of pinning a copy.
+ */
+function drillBlock(
+  requested: DrillSelection | undefined,
+  baseReportId: DashboardId,
+  widgetScope: string | undefined,
+): { drill?: DrillSelection } {
+  if (requested === undefined) return {};
+
+  const path = describeDrillPath({
+    reportId: baseReportId,
+    ...(widgetScope === undefined ? {} : { widgetScope }),
+    enabled: requested.enabled,
+  });
+  if (!path.available) return {};
+
+  const charts: Record<string, DrillChart> = {};
+  for (const level of path.levels) {
+    const chosen = requested.charts?.[String(level.n)];
+    if (chosen === undefined || !level.chart_options.includes(chosen)) continue;
+    if (chosen === level.chart) continue;
+    charts[String(level.n)] = chosen;
+  }
+
+  return {
+    drill: {
+      enabled: requested.enabled,
+      ...(Object.keys(charts).length === 0 ? {} : { charts }),
+    },
+  };
 }
 
 export async function updateReportSql(args: {
@@ -1025,6 +1347,8 @@ export async function updateReportSql(args: {
     logic: run.logic,
     degraded: [],
     degraded_schools: [],
+    /** raw_sql: no curated path exists to offer (see `CustomReportView.drill`). */
+    drill: null,
   };
 }
 
@@ -1131,6 +1455,8 @@ export async function applyRefinement(args: {
     logic: run.logic,
     degraded: [],
     degraded_schools: [],
+    /** raw_sql: no curated path exists to offer (see `CustomReportView.drill`). */
+    drill: null,
   };
 }
 
@@ -1261,7 +1587,14 @@ async function getRowOrThrow(id: string, correlationId: string): Promise<ReportD
 function toView(
   row: ReportDefinitionRow,
   def: ReportDef,
-  run: { spec: ChartSpec; logic: ReportLogic; degraded?: { key: string; message: string }[]; degraded_schools?: { school_id: string; message: string }[] },
+  run: {
+    spec: ChartSpec;
+    logic: ReportLogic;
+    degraded?: { key: string; message: string }[];
+    degraded_schools?: { school_id: string; message: string }[];
+    /** Present for every template run; absent means raw_sql, which has no path. */
+    drill?: DrillView;
+  },
   session: SessionClaims,
 ): CustomReportView {
   return {
@@ -1278,5 +1611,6 @@ function toView(
     logic: run.logic,
     degraded: run.degraded ?? [],
     degraded_schools: run.degraded_schools ?? [],
+    drill: run.drill ?? null,
   };
 }

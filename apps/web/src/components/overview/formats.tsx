@@ -8,6 +8,7 @@ import type { ReactElement } from 'react';
 import type { SessionResponse } from '../../api/client';
 import type { SlotState } from './useOverview';
 import {
+  AdmissionsCard,
   AreaCard,
   BigChartCard,
   CustomerCard,
@@ -27,7 +28,7 @@ import {
 import { Icon } from '../Icon';
 
 export const FORMAT_SLOTS = {
-  A: ['tiles', 'rings', 'monthly', 'weekly_receipts', 'weekly_attendance', 'top_schools', 'fee_heads'],
+  A: ['tiles', 'rings', 'monthly', 'admissions_by_school', 'weekly_receipts', 'weekly_attendance', 'top_schools', 'fee_heads'],
   B: ['years', 'students_by_year', 'att_status', 'top_students', 'gauges', 'late_payers', 'pending_top'],
   C: ['tiles', 'area', 'modes', 'rings', 'late_weekly'],
 } as const;
@@ -48,7 +49,11 @@ export function FormatA({ states, year, asOf, onOpen }: FormatProps): ReactEleme
     <div className="gridA">
       <TilesCard state={states['tiles']} className="slotTiles" />
       <RingsCard state={states['rings']} year={year} asOf={asOf} onOpen={onOpen} />
-      <MonthlyCard state={states['monthly']} onOpen={onOpen} />
+      {/* One column, two charts of equal height — see `.slotBars` in dashboard.css. */}
+      <div className="slotBars stackBars">
+        <MonthlyCard state={states['monthly']} onOpen={onOpen} />
+        <AdmissionsCard state={states['admissions_by_school']} onOpen={onOpen} />
+      </div>
       <SparkCard state={states['weekly_receipts']} kpiId="kpi-week-receipts" lineId="line-week-receipts" className="slotSpark" slot={1} title="Weekly receipts" />
       <SparkCard state={states['weekly_attendance']} kpiId="kpi-week-attendance" lineId="line-week-attendance" className="slotSpark" slot={2} title="Weekly attendance" />
       <TopSchoolsCard state={states['top_schools']} onOpen={onOpen} />

@@ -298,7 +298,7 @@ export function MonthlyCard({ state, onOpen }: { state: SlotState | undefined; o
   const [type, setType] = useChartType(widget);
   return (
     <Card
-      className="slotBars fillChart"
+      className="fillChart"
       title="Monthly fee receipts"
       tools={
         <>
@@ -310,6 +310,42 @@ export function MonthlyCard({ state, onOpen }: { state: SlotState | undefined; o
     >
       <Slot state={state}>
         {(widgets) => <Chart widget={widgets.find((w) => w.id === 'bar-month')} type={type} slot={0} fill />}
+      </Slot>
+    </Card>
+  );
+}
+
+/**
+ * New admissions, one bar per school -- the entry level of the Admissions drill
+ * path, on the Dashboard.
+ *
+ * It shares the left column with Monthly fee receipts (`.slotBars`, which is
+ * now the STACK holding both rather than the receipts card itself), so the two
+ * split that column's height evenly instead of the receipts chart taking all of
+ * it. That was the point of adding it here: the receipts bars had two rows to
+ * fill and nothing to say with the second one.
+ *
+ * The chart is not clickable. The Dashboard's slot API cannot drill (see
+ * `buildAdmissionsBySchool`), so the descent is behind the Report button, which
+ * opens Admissions Funnel where class and section are two more clicks away.
+ */
+export function AdmissionsCard({ state, onOpen }: { state: SlotState | undefined; onOpen: (id: string) => void }): ReactElement {
+  const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === 'bar-school-admissions') : undefined;
+  const [type, setType] = useChartType(widget);
+  return (
+    <Card
+      className="fillChart"
+      title="New admissions"
+      tools={
+        <>
+          <ReportButton onClick={() => { onOpen('admissions-funnel'); }} />
+          <ChartTypeSelect value={type} onChange={setType} />
+        </>
+      }
+      notes={notesOf(state)}
+    >
+      <Slot state={state}>
+        {(widgets) => <Chart widget={widgets.find((w) => (w as { id?: unknown }).id === 'bar-school-admissions')} type={type} slot={2} fill />}
       </Slot>
     </Card>
   );

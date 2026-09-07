@@ -147,6 +147,92 @@ describe('today sums the schools and names the day', () => {
   });
 });
 
+/**
+ * The tile read 0 for eleven of the thirteen tenants in the extract until
+ * 2026-09-07, because it counted admission numbers in a funnel table most
+ * schools never fill in. It counts the roll now -- see the `admissions` query
+ * in mcp-server/src/reports/catalog.ts. Locked in here because the failure it
+ * replaces was success-shaped: a zero is a perfectly plausible answer to "how
+ * many admissions this year", and nothing on screen said otherwise.
+ */
+describe('new admissions is counted off the roll and splits by gender', () => {
+  it('sums the schools and breaks the tile down boys and girls', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('admissions', [{ gender: 'Girl', students: 162 }, { gender: 'Boy', students: 135 }])] },
+      { school_id: 'b', queries: [query('admissions', [{ gender: 'Girl', students: 138 }, { gender: 'Boy', students: 135 }])] },
+    ]);
+    const card = await build('tiles');
+    const tile = card.widgets.find((w): w is KpiWidget => w.type === 'kpi' && w.id === 'tile-admissions');
+    expect(tile?.value).toBe('570');
+    expect(tile?.breakdown?.map((p) => p.value)).toEqual(['270', '300']);
+    /** The reader is told which of the two possible definitions this is. */
+    expect(card.notes.some((n) => n.includes('new to the school this academic year'))).toBe(true);
+  });
+
+  it('rates the gauge against the roll, not against a candidate count', async () => {
+    response = result([
+      {
+        school_id: 'a',
+        queries: [
+          query('roll', [{ gender: 'Girl', students: 2000 }, { gender: 'Boy', students: 2000 }]),
+          query('admissions', [{ gender: 'Girl', students: 500 }, { gender: 'Boy', students: 500 }]),
+        ],
+      },
+    ]);
+    const card = await build('gauges');
+    const rate = card.widgets.find((w): w is KpiWidget => w.type === 'kpi' && w.id === 'gauge-admissions-rate');
+    expect(rate?.label).toBe('New share of the roll');
+    expect(rate?.value).toBe('25.0%');
+  });
+
+  it('omits the rate rather than inventing a denominator when the roll did not answer', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('admissions', [{ gender: 'Girl', students: 500 }])] },
+    ]);
+    const card = await build('gauges');
+    expect(card.widgets.some((w) => w.id === 'gauge-admissions-rate')).toBe(false);
+    const total = card.widgets.find((w): w is KpiWidget => w.type === 'kpi' && w.id === 'gauge-admissions');
+    expect(total?.value).toBe('500');
+  });
+});
+
+/**
+ * The Dashboard card added 2026-09-07. It re-groups the SAME `admissions`
+ * statement the tiles card runs, so the thing worth locking in is that it stays
+ * a re-grouping: a second statement here would be a scan the Dashboard did not
+ * used to pay for, on the layout the launch warms.
+ */
+describe('new admissions by school re-groups the tile’s own statement', () => {
+  it('sums each school’s rows separately and names the school', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('admissions', [{ gender: 'Girl', students: 162 }, { gender: 'Boy', students: 135 }])] },
+      { school_id: 'b', queries: [query('admissions', [{ gender: 'Girl', students: 138 }, { gender: 'Boy', students: 135 }])] },
+    ]);
+    const card = await build('admissions_by_school');
+    const bar = card.widgets.find((w) => w.id === 'bar-school-admissions') as { data: Record<string, unknown>[] };
+    /** 162 + 135 within a school; never 297 + 273 across them. */
+    expect(bar.data).toEqual([
+      { school_name: 'Alpha', students: 297 },
+      { school_name: 'Beta', students: 273 },
+    ]);
+  });
+
+  it('costs the tile’s statement and nothing else', async () => {
+    response = result([{ school_id: 'a', queries: [] }]);
+    await build('admissions_by_school');
+    expect(lastCall?.args['query_keys']).toEqual(['admissions']);
+  });
+
+  it('is not marked drillable — the Dashboard has no drill endpoint', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('admissions', [{ gender: 'Boy', students: 10 }])] },
+    ]);
+    const card = await build('admissions_by_school');
+    const bar = card.widgets.find((w) => w.id === 'bar-school-admissions');
+    expect((bar as { drillable?: unknown }).drillable).toBeUndefined();
+  });
+});
+
 describe('late payers join the two ledgers by enrolment', () => {
   it('ranks late-and-unpaid first and keeps the masked flag on names', async () => {
     response = result([

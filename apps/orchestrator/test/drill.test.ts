@@ -984,6 +984,112 @@ describe('enrollment drills school to class to section', () => {
   });
 });
 
+/**
+ * The path added 2026-09-07, when the admissions tile was moved off the funnel
+ * table (mcp-server/src/reports/catalog.ts). Its levels read the ROLL while
+ * every other widget on the report reads the funnel, so the thing worth locking
+ * in is that they stay on the roll: a level that quietly went back to
+ * `students_admission_data_set` would draw zeroes for most schools and look
+ * exactly like a school with no admissions.
+ */
+describe('admissions drills school to class to section, over the roll', () => {
+  it('builds level 1 per school from the new_by_class rows already on the page', async () => {
+    const built = await build('admissions-funnel', [
+      {
+        school_id: 'stmarksmb',
+        queries: [
+          query('new_by_class', [
+            { classname: 'NURSERY', seq: 1, students: 258 },
+            { classname: 'K.G.', seq: 2, students: 8 },
+          ]),
+        ],
+      },
+      { school_id: 'stmarksj', queries: [query('new_by_class', [{ classname: 'NURSERY', seq: 1, students: 240 }])] },
+    ]);
+
+    const widget = built.spec.widgets.find(
+      (w): w is BarWidget => w.type === 'bar' && w.id === 'bar-school-admissions',
+    );
+    /** 258 + 8 within a school; never 266 + 240 across them. */
+    expect(widget?.data).toEqual([
+      { school_id: 'stmarksmb', school_name: 'Meera Bagh', students: 266 },
+      { school_id: 'stmarksj', school_name: 'Janakpuri', students: 240 },
+    ]);
+    /** One measure, so a plain single-series bar rather than a grouped one. */
+    expect(widget?.series).toBeUndefined();
+    expect(widget?.drillable).toBe(true);
+  });
+
+  it('runs new_by_class at level 2 — the roll, not the funnel', async () => {
+    response = {
+      report_id: 'admissions-funnel',
+      title: 'Admissions Funnel',
+      source: 'students_admission_data_set · students_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('new_by_class', [
+              { classname: 'NURSERY', seq: 1, students: 258 },
+              { classname: 'K.G.', seq: 2, students: 8 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('admissions-funnel', 'bar-school-admissions', 2, [SCHOOL_STEP]);
+    expect(lastCall?.args['query_keys']).toEqual(['new_by_class']);
+    const widget = out.widget as BarWidget;
+    expect(widget.x).toBe('classname');
+    expect(widget.drill_dim).toBe('class');
+    /** The class name is both the label and the value, so no separate field. */
+    expect(widget.drill_value_field).toBeUndefined();
+  });
+
+  it('binds the clicked class as a STRING at level 3 and stops there', async () => {
+    response = {
+      report_id: 'admissions-funnel',
+      title: 'Admissions Funnel',
+      source: 'students_admission_data_set · students_data_set',
+      params: {},
+      as_of: '2026-08-31T10:00:00.000Z',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          status: 'ok',
+          queries: [
+            query('new_by_section_for_class', [
+              { sectionname: 'C', students: 2 },
+              { sectionname: 'F', students: 1 },
+            ]),
+          ],
+        },
+      ],
+    };
+    const out = await drillOn('admissions-funnel', 'bar-school-admissions', 3, [
+      SCHOOL_STEP,
+      { dim: 'class', value: 'I', label: 'I' },
+    ]);
+    expect(lastCall?.args['query_keys']).toEqual(['new_by_section_for_class']);
+    const params = lastCall?.args['params'] as Record<string, unknown>;
+    expect(params['drill_class']).toBe('I');
+    expect(typeof params['drill_class']).toBe('string');
+    expect((out.widget as BarWidget).x).toBe('sectionname');
+    expect((out.widget as BarWidget).drillable).toBe(false);
+  });
+
+  it('has no note and no pending marker, because every level partitions cleanly', () => {
+    const path = DRILL_PATHS['admissions-funnel'];
+    for (const level of path?.levels ?? []) {
+      expect(level.note).toBeUndefined();
+      expect(level.pending).toBeUndefined();
+    }
+  });
+});
+
 describe('comparative analysis drills school to instalment to class', () => {
   it('builds level 1 per school from the demand rows both years share', async () => {
     /**

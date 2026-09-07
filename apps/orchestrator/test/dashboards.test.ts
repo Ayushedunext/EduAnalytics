@@ -769,7 +769,7 @@ describe("Principal's Snapshot", () => {
             query('by_class', [{ classname: 'V', seq: 5, students: 40 }]),
             query('fees', [{ payable: 100000, paid: 80000, balance: 20000 }]),
             query('staff', [{ on_roll: 25 }]),
-            query('admissions', [{ candidates: 50, admissions: 30 }]),
+            query('admissions', [{ admissions: 30 }]),
             query('attendance', [{ marked_days: 100, present_days: 90 }]),
           ],
         },
@@ -779,6 +779,8 @@ describe("Principal's Snapshot", () => {
     expect(kpi(built.spec, 'kpi-students')?.value).toBe('40');
     expect(kpi(built.spec, 'kpi-attendance')?.value).toBe('90.0%');
     expect(kpi(built.spec, 'kpi-admissions')?.value).toBe('30');
+    /** Off the roll now, so the label promises no conversion (see the builder). */
+    expect(kpi(built.spec, 'kpi-admissions')?.label).toBe('New admissions · 2026-27');
   });
 });
 

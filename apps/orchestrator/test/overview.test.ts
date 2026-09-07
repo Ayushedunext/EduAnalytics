@@ -263,6 +263,77 @@ describe('late payers join the two ledgers by enrolment', () => {
   });
 });
 
+describe('the attendance ranking states the floor it actually applied', () => {
+  /**
+   * The floor is the school's, not this service's: it arrives as a column
+   * because a register four weeks old and a register a year old cannot share
+   * one. These tests hold the card to reporting what came back rather than
+   * what the catalog used to hardcode.
+   */
+  function ranked(school: string, floor: number, students: [string, number, number][]) {
+    return {
+      school_id: school,
+      queries: [
+        query(
+          'top_attendance',
+          students.map(([enrollmentno, marked, present]) => ({
+            studentname: `Student ${enrollmentno}`,
+            enrollmentno,
+            classname: 'X',
+            sectionname: 'B',
+            marked_days: marked,
+            present_days: String(present),
+            min_marked_days: String(floor),
+          })),
+        ),
+      ],
+    };
+  }
+
+  it('names the one floor when the scope agrees on it', async () => {
+    response = result([ranked('a', 6, [['1', 12, 12]])]);
+    const card = await build('top_students', ['a']);
+    expect(card.status).toBe('ok');
+    expect(card.notes.join(' ')).toContain('at least 6 marked days');
+  });
+
+  it('names a range when two schools applied different floors', async () => {
+    response = result([ranked('a', 5, [['1', 11, 11]]), ranked('b', 6, [['2', 12, 12]])]);
+    const card = await build('top_students');
+    expect(card.notes.join(' ')).toContain('at least 5–6 marked days');
+  });
+
+  it('ranks by rate, then by days marked, and keeps four', async () => {
+    response = result([
+      ranked('a', 5, [
+        ['1', 12, 9],
+        ['2', 6, 6],
+        ['3', 12, 12],
+        ['4', 10, 9],
+        ['5', 11, 11],
+      ]),
+    ]);
+    const card = await build('top_students', ['a']);
+    const table = card.widgets.find((w): w is TableWidget => w.type === 'table');
+    expect(table?.rows.map((r) => r['enrollment'])).toEqual(['3', '5', '2', '4']);
+    expect(table?.rows[0]?.['marked']).toBe(12);
+  });
+
+  /**
+   * The card that started this: every student below the floor, so the ranking
+   * is empty and says so. It must stay `ok` -- an empty ranking is an answer,
+   * and `blocked` would put a failure message where a true one belongs.
+   */
+  it('is an empty ranking, not a blocked card, when no student clears the floor', async () => {
+    response = result([{ school_id: 'a', queries: [query('top_attendance', [])] }]);
+    const card = await build('top_students', ['a']);
+    expect(card.status).toBe('ok');
+    const table = card.widgets.find((w): w is TableWidget => w.type === 'table');
+    expect(table?.rows).toEqual([]);
+    expect(card.notes).toEqual([]);
+  });
+});
+
 describe('the fee-heads donut partitions the money', () => {
   it('nets late fee and transport out of received and adds pending', async () => {
     response = result([

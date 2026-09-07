@@ -92,7 +92,7 @@ The Dashboard, and the shell every screen sits in, follow the signed-off **"AI D
 | Top Clients | Schools ranked by fee collected | — | — |
 | Task Categories + Data Activity | Fee position donut (received · late fee · transport fee · pending) + the four by month | — | — |
 | Total Works / Statistics / Daily Tasks | — | Billed and collected by year (two lines) / students on roll by year / attendance recorded | — |
-| Team Members | — | Four students with the highest attendance (≥ 20 marked days) | — |
+| Team Members | — | Four students with the highest attendance, above a floor read off the school's own register (half the best-covered student's marked days, capped at 20, never below 5 — so a school four weeks into a term still ranks) | — |
 | Four KPI gauges | — | Students (male/female), today's attendance (present/absent), new enrolment, staff attendance today | — |
 | Latest Projects table | — | Students paying late or not paying, with a **Remind** action that drafts a mail (no recipient — the extract holds no parent contact; agreed 2026-09-04) | — |
 | Inbox | — | Top 10 students by pending fees | — |

@@ -134,23 +134,37 @@ export function Home({
           grid has nothing to gain from stopping short of the window on a wide
           monitor the way a filter-pills-and-table page does. */}
       <div className="px-7 py-6 max-w-[1900px]">
-        <h1 className="page-title">
-          {greeting()}, {session.user.role === 'DIRECTOR' ? 'Director ' : ''}
-          {surname(session.user.name)}
-        </h1>
-
-        {/* docs/10 §3: scope line under the title, and an "as of" label because
-            docs/03 assumption 2 accepts replica lag only if it is stated. */}
-        <div className="pageContext mb-5">
-          <span>{scopeNames}</span>
-          <span className="dot">·</span>
-          <span>data as of {asOf(home.spec.meta.as_of ?? home.spec.meta.generated_at)}</span>
-          {loading && (
-            <>
-              <span className="dot">·</span>
-              <span>refreshing…</span>
-            </>
-          )}
+        {/**
+          * Greeting and context on ONE line (2026-09-03).
+          *
+          * They were stacked, which spent about 60px at the top of the one
+          * screen every user lands on to say a name and a timestamp. Neither is
+          * a finding, and on a reporting surface the first fold belongs to the
+          * numbers. Side by side they read as a page header -- who is looking,
+          * at what, as of when -- and the KPI strip moves up by a whole row.
+          *
+          * The scope line stays mandatory and stays on screen (docs/10 §3); it
+          * has moved, not gone. `flex-wrap` keeps it under the greeting on a
+          * narrow window rather than squeezing either.
+          */}
+        <div className="pageHead">
+          <h1 className="page-title">
+            {greeting()}, {session.user.role === 'DIRECTOR' ? 'Director ' : ''}
+            {surname(session.user.name)}
+          </h1>
+          {/* docs/10 §3: scope, and an "as of" label because docs/03 assumption 2
+              accepts replica lag only if it is stated. */}
+          <div className="pageContext">
+            <span>{scopeNames}</span>
+            <span className="dot">·</span>
+            <span>data as of {asOf(home.spec.meta.as_of ?? home.spec.meta.generated_at)}</span>
+            {loading && (
+              <>
+                <span className="dot">·</span>
+                <span>refreshing…</span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* docs/02 §6: a school dropped from scope is surfaced, never silently
@@ -170,6 +184,22 @@ export function Home({
             {home.degraded_schools.map((d) => d.school_id).join(', ')}.
           </div>
         )}
+
+        {/* A different partiality from the one above, and it needs different
+            words. Those schools FAILED; these answered fine and simply have no
+            data recorded for the academic year on screen -- almost always a roll
+            that has not been rolled over yet. Saying "could not be reached"
+            would send someone to look for an outage that is not there.
+
+            Stated per metric, because they do not move together: a trust can
+            have next year's fee demand raised for all three schools while only
+            one has enrolled its students. */}
+        {home.partial_metrics.map((metric) => (
+          <div key={metric.label} className="notice mb-4">
+            {metric.label} for {home.academic_year ?? 'this year'} does not include{' '}
+            {metric.schools.join(', ')} — no data is recorded there for that year yet.
+          </div>
+        ))}
 
         <div
           className={`askbar mb-5 ${aiActive ? '' : 'locked'}`}
@@ -200,7 +230,26 @@ export function Home({
           <div className="go">{aiActive ? 'Ask AI →' : 'Locked'}</div>
         </div>
 
-        <div className="kpis">
+        {/**
+          * The strip, inside a labelled group (2026-09-03).
+          *
+          * Reference dashboards of this kind file their summary tiles under a
+          * heading rather than floating them on the canvas, and the reason is
+          * hierarchy: a row of four cards with nothing above it is four
+          * unrelated facts, where the same row under "Key indicators" is one
+          * answer to one question. It also gives the blocked tiles a home --
+          * "Students · NO DATA" reads as part of a set rather than as a card
+          * that failed to load.
+          *
+          * A `<section>` with a real heading, not a styled div: this is a
+          * labelled region of the page and a screen reader should be able to
+          * jump to it.
+          */}
+        <section className="group" aria-labelledby="kpi-group-label">
+          <h2 className="groupLabel" id="kpi-group-label">
+            Key indicators
+          </h2>
+          <div className="kpis">
           {home.spec.widgets.map((widget) => (
             // Same tile the predefined dashboards and Ask AI use (§20) — a KPI
             // reads identically everywhere in the product, and since 2026-09-01
@@ -225,7 +274,8 @@ export function Home({
               </span>
             </div>
           ))}
-        </div>
+          </div>
+        </section>
 
         <div className="sect">
           Your dashboards

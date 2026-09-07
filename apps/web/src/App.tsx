@@ -69,6 +69,22 @@ export function App(): JSX.Element {
   const [previews, setPreviews] = useState<Record<string, HomePreview>>({});
   const [previewsLoading, setPreviewsLoading] = useState(false);
   /**
+   * The academic year the reader CHOSE, if they chose one.
+   *
+   * `null` means "whatever the server resolved" — the same shape, and the same
+   * reasoning, as `DashboardPage`'s `compareYear`: the app opens on the server's
+   * answer rather than on a year this component picked, so the year on screen is
+   * always one the data supports, and a school whose latest year differs sees
+   * its own. Overriding is the reader's decision and lives only here.
+   *
+   * Cleared when the school selection changes, because the options are a
+   * property of the SELECTION: a year one school holds may be a year another
+   * has never had, and a stale override would silently query a year the new
+   * selection has no data for. `effectiveYear` below falls back rather than
+   * trusting the override to still be valid.
+   */
+  const [chosenYear, setChosenYear] = useState<string | null>(null);
+  /**
    * Navigation is a single piece of state, not a router.
    *
    * CODING_GUIDELINES §23 leaves the frontend state-management library
@@ -125,14 +141,16 @@ export function App(): JSX.Element {
     return () => { cancelled = true; };
   }, []);
 
-  const loadHome = useCallback((schoolIds: string[]) => {
+  const loadHome = useCallback((schoolIds: string[], academicYear?: string) => {
     if (schoolIds.length === 0) return;
     setHomeLoading(true);
     setHomeError(null);
-    // A fresh school selection invalidates the previous previews immediately
-    // rather than leaving last scope's cards on screen while new ones load.
+    // A fresh school selection OR a fresh year invalidates the previous previews
+    // immediately, rather than leaving the last ones on screen while new ones
+    // load — a card showing 2025-26 under a strip that already says 2026-27 is
+    // the page disagreeing with itself, which is worse than a skeleton.
     setPreviews({});
-    getHome(schoolIds)
+    getHome(schoolIds, academicYear)
       .then((data) => { setHome(data); })
       .catch((err: unknown) => {
         /**
@@ -146,8 +164,30 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (state.kind !== 'ready') return;
+    // A school change drops the year override before reloading — see `chosenYear`.
+    setChosenYear(null);
     loadHome(selected);
   }, [state.kind, selected, loadHome]);
+
+  /**
+   * The reader picked a year in the topbar, so the KPI strip is rebuilt for it.
+   *
+   * The strip HAS to follow the control. The grid's preview cards already take
+   * the year as a request parameter, so a strip that stayed on the server's
+   * derived year would put next year's charts under last year's totals with
+   * nothing on screen admitting the two were about different years — and both
+   * would look equally authoritative.
+   *
+   * `selected` is read but is deliberately NOT a dependency. A school change is
+   * the effect above, which clears `chosenYear` first, so this one either never
+   * fires for that change or fires having already returned early. Adding the
+   * dependency would make every school change load Home twice.
+   */
+  useEffect(() => {
+    if (state.kind !== 'ready' || chosenYear === null) return;
+    loadHome(selected, chosenYear);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.kind, chosenYear, loadHome]);
 
   /**
    * Fetch the preview cards for a set of dashboards, committing each as IT
@@ -185,6 +225,26 @@ export function App(): JSX.Element {
   );
 
   /**
+   * The year every screen actually queries: the reader's choice where they made
+   * one, the server's resolved year otherwise.
+   *
+   * The `includes` check is what makes the override safe rather than merely
+   * cleared on selection change. `setChosenYear(null)` in `loadHome` fires when
+   * the fetch STARTS; between then and the response landing there is a render
+   * where the old `home` is still on screen, and a race that let a year survive
+   * it would query a year the new selection may hold nothing for. Falling back
+   * to the server's answer whenever the choice is not among the offered years
+   * means the invalid state cannot be reached at all, rather than being tidied
+   * up after the fact.
+   */
+  const effectiveYear =
+    home === null
+      ? null
+      : chosenYear !== null && home.academic_years.includes(chosenYear)
+        ? chosenYear
+        : home.academic_year;
+
+  /**
    * Dashboard's grid. Fires once the KPI strip's fetch has told us the academic
    * year -- the previews endpoint needs it (services/home.ts) and this way it is
    * never re-derived a second time client-side. A session that can read neither
@@ -196,10 +256,10 @@ export function App(): JSX.Element {
    * dashboard the catalog considers `coming` or `blocked`.
    */
   useEffect(() => {
-    if (home === null || home.academic_year === null || selected.length === 0) return;
+    if (home === null || effectiveYear === null || selected.length === 0) return;
     if (home.grid.length === 0) return;
-    return fetchPreviews(home.grid, selected, home.academic_year);
-  }, [home, selected, fetchPreviews]);
+    return fetchPreviews(home.grid, selected, effectiveYear);
+  }, [home, effectiveYear, selected, fetchPreviews]);
 
   /**
    * A module's own cards, fetched when the module is OPENED rather than with
@@ -213,12 +273,12 @@ export function App(): JSX.Element {
    */
   useEffect(() => {
     if (route.kind !== 'module') return;
-    if (home === null || home.academic_year === null || selected.length === 0) return;
+    if (home === null || effectiveYear === null || selected.length === 0) return;
     const module = home.modules.find((m) => m.id === route.id);
     if (module === undefined) return;
     const missing = module.report_ids.filter((id) => previews[id] === undefined);
     if (missing.length === 0) return;
-    return fetchPreviews(missing, selected, home.academic_year);
+    return fetchPreviews(missing, selected, effectiveYear);
     /**
      * `previews` is read but NOT a dependency, and that is the point: adding it
      * would re-run this effect on every card that lands, and each run would see
@@ -227,7 +287,7 @@ export function App(): JSX.Element {
      * The effect only needs the map as it stood when the module was opened.
      */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route, home, selected, fetchPreviews]);
+  }, [route, home, effectiveYear, selected, fetchPreviews]);
 
   if (state.kind === 'loading') {
     /** docs/10 §1.4: skeletons and status, never a bare spinner. */
@@ -321,7 +381,9 @@ export function App(): JSX.Element {
           session={state.session}
           selected={selected}
           onSelect={setSelected}
-          academicYear={home?.academic_year ?? null}
+          academicYear={effectiveYear}
+          academicYears={home?.academic_years ?? []}
+          onSelectYear={setChosenYear}
           crumb={
             route.kind === 'home'
               ? 'Dashboard'
@@ -374,7 +436,7 @@ export function App(): JSX.Element {
             session={state.session}
             reportId={route.id}
             schoolIds={selected}
-            academicYear={home?.academic_year ?? null}
+            academicYear={effectiveYear}
             /**
              * Back to where the reader came from. A report reached from the
              * Fees module returns to Fees; one reached from Dashboard or a
@@ -423,7 +485,7 @@ export function App(): JSX.Element {
                 dashboards={home?.dashboards ?? []}
                 previews={previews}
                 schoolIds={selected}
-                academicYear={home?.academic_year ?? null}
+                academicYear={effectiveYear}
                 onBack={() => { setRoute({ kind: 'modules' }); }}
                 onOpen={(id) => {
                   setCameFromModule(module.id);
@@ -435,7 +497,7 @@ export function App(): JSX.Element {
         ) : route.kind === 'my-reports' ? (
           <MyReports
             schoolIds={selected}
-            academicYear={home?.academic_year ?? null}
+            academicYear={effectiveYear}
             onOpen={(id) => { setRoute({ kind: 'report-edit', id }); }}
             onEdit={(id) => { setRoute({ kind: 'report-edit', id, edit: true }); }}
           />

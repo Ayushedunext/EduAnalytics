@@ -37,9 +37,36 @@ homeRouter.get('/api/home', (req: Request, res: Response, next: NextFunction): v
 
     const schoolIds = await resolveRequestedSchools(req);
 
+    /**
+     * The topbar's academic year, when the reader has picked one (docs/10 §2).
+     *
+     * OPTIONAL here, unlike on `/api/home/preview/:id` below where it is
+     * required — the whole point of this endpoint is that it works out the year
+     * for itself, and every other caller depends on that. Absent means "resolve
+     * it from the data", which is the first load and the overwhelming majority
+     * of requests.
+     *
+     * Validated for SHAPE, then checked for MEMBERSHIP by the service, which
+     * falls back to the derived year rather than summing an unknown year into a
+     * confident zero. Shape is checked here for the same reason the preview
+     * route gives: the value is bound as a query parameter either way, so a
+     * malformed one would not be dangerous — it would be worse than dangerous,
+     * it would silently match no rows everywhere at once.
+     */
+    const rawYear = req.query['academic_year'];
+    const academicYear = typeof rawYear === 'string' && rawYear !== '' ? rawYear : undefined;
+    if (academicYear !== undefined && !ACADEMIC_YEAR.test(academicYear)) {
+      throw new PlatformError({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'academic_year must look like "2026-27".',
+        correlationId: req.correlationId,
+      });
+    }
+
     const summary = await buildHomeSummary({
       session,
       schoolIds,
+      ...(academicYear === undefined ? {} : { academicYear }),
       correlationId: req.correlationId,
     });
 

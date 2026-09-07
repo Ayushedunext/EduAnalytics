@@ -27,10 +27,25 @@ interface Props {
   selected: readonly string[];
   onSelect: (schoolIds: string[]) => void;
   academicYear: string | null;
+  /**
+   * The years the selection has data for (`/api/home`). One or none renders the
+   * plain chip this control has always been — a select with a single option is
+   * an affordance that does nothing.
+   */
+  academicYears: readonly string[];
+  onSelectYear: (academicYear: string) => void;
   crumb: string;
 }
 
-export function Topbar({ session, selected, onSelect, academicYear, crumb }: Props): JSX.Element {
+export function Topbar({
+  session,
+  selected,
+  onSelect,
+  academicYear,
+  academicYears,
+  onSelectYear,
+  crumb,
+}: Props): JSX.Element {
   const [open, setOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const multi = session.scope.length > 1;
@@ -114,9 +129,46 @@ export function Topbar({ session, selected, onSelect, academicYear, crumb }: Pro
         </div>
       )}
 
-      {/* The year comes from the data, not a constant: it is whatever the ERP's
-          latest academic year actually is (see services/home.ts). */}
-      <div className="ay">AY {academicYear ?? '—'}</div>
+      {/**
+        * The academic year — a CONTROL since 2026-09-03, a read-only chip before
+        * that.
+        *
+        * The options come from the data, not a constant: they are the years the
+        * selected schools actually hold (`/api/home`, `academic_years`), and the
+        * one it opens on is the year the server resolved. That was already true
+        * of the label; what was missing was any way to act on it. A reader whose
+        * fee book has moved to next year while the roll has not could see only
+        * the roll's year, with no route to the money — which is the state the
+        * development extract is in today.
+        *
+        * It sits beside the school picker because it is the same KIND of thing:
+        * a filter that applies to every screen, so it belongs in global chrome.
+        * A report's own "Compare with" year does not (DashboardPage.tsx) — that
+        * one applies to exactly the report that declares it, and putting it here
+        * would show a dead control on ten other pages.
+        *
+        * A `<select>` rather than the school picker's checkbox menu: a year is
+        * exactly one value, and the native control is keyboard-navigable and
+        * screen-reader-labelled without this file reimplementing either.
+        */}
+      {academicYears.length > 1 ? (
+        <label className="ay aySelect">
+          <span className="sr-only">Academic year</span>
+          <span aria-hidden="true">AY</span>
+          <select
+            value={academicYear ?? ''}
+            onChange={(event) => { onSelectYear(event.target.value); }}
+          >
+            {academicYears.map((year) => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <div className="ay">AY {academicYear ?? '—'}</div>
+      )}
 
       <div className="avatar" title={`${session.user.name} · ${session.user.role}`}>
         {session.user.name

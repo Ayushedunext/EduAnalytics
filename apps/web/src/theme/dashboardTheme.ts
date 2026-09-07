@@ -5,7 +5,7 @@
  * -- Where the values come from ------------------------------------------------
  * Both are the reader's choice and nothing else: no server round-trip, no
  * per-tenant config, no claim about the data. They persist in `localStorage`
- * so a reader who picked "Sidebar frame" in amber lands on it next launch, and
+ * so a reader who picked View 3 in amber lands on it next launch, and
  * a storage that refuses (a private window, an embedding that blocks it) simply
  * yields the defaults — the page never depends on the value being there.
  *
@@ -24,11 +24,19 @@ import { derivePalette, type ChartPalette } from '@sap/chart-spec/react';
 
 export type DashboardLayout = 'A' | 'B' | 'C';
 
-export const LAYOUTS: readonly { id: DashboardLayout; label: string; swatch: string }[] = [
-  { id: 'A', label: 'Gradient nav', swatch: 'linear-gradient(90deg,#3dbe6c,#1e7be0)' },
-  { id: 'B', label: 'Clean grid', swatch: 'linear-gradient(90deg,#3c7cff,#ff4d8d)' },
-  { id: 'C', label: 'Sidebar frame', swatch: 'linear-gradient(90deg,#f5a623,#1e3a8a)' },
+/**
+ * The bar's order, left to right. The ids are the formats as they were drawn;
+ * the labels are what a reader sees. View 1 is format B — the one a reader
+ * lands on at launch (DEFAULT_LAYOUT) — so the order here is B, A, C.
+ */
+export const LAYOUTS: readonly { id: DashboardLayout; label: string }[] = [
+  { id: 'B', label: 'View 1' },
+  { id: 'A', label: 'View 2' },
+  { id: 'C', label: 'View 3' },
 ];
+
+/** What a reader gets before they have picked anything: View 1. */
+export const DEFAULT_LAYOUT: DashboardLayout = 'B';
 
 /** Each layout's own palette, as the reference designs were drawn. */
 export const LAYOUT_PALETTES: Record<DashboardLayout, ChartPalette> = {
@@ -48,7 +56,8 @@ export const THEME_SWATCHES: readonly string[] = [
   '#e5484d',
 ];
 
-const STORAGE_KEY = 'sap.dashboard.theme.v1';
+// v2: the default moved from format A to format B, so v1's stored picks are dropped.
+const STORAGE_KEY = 'sap.dashboard.theme.v2';
 
 interface Stored {
   layout?: unknown;
@@ -66,15 +75,15 @@ function isHex(value: unknown): value is string {
 function readStored(): { layout: DashboardLayout; custom: string | null } {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return { layout: 'A', custom: null };
+    if (raw === null) return { layout: DEFAULT_LAYOUT, custom: null };
     const parsed: unknown = JSON.parse(raw);
     const stored = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Stored;
     return {
-      layout: isLayout(stored.layout) ? stored.layout : 'A',
+      layout: isLayout(stored.layout) ? stored.layout : DEFAULT_LAYOUT,
       custom: isHex(stored.custom) ? stored.custom : null,
     };
   } catch {
-    return { layout: 'A', custom: null };
+    return { layout: DEFAULT_LAYOUT, custom: null };
   }
 }
 

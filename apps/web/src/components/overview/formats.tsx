@@ -42,7 +42,7 @@ interface FormatProps {
   onOpen: (reportId: string) => void;
 }
 
-/** Format A · Gradient nav: the artifact's 24-column grid. */
+/** Format A · View 2: the artifact's 24-column grid. */
 export function FormatA({ states, year, asOf, onOpen }: FormatProps): ReactElement {
   return (
     <div className="gridA">
@@ -57,7 +57,7 @@ export function FormatA({ states, year, asOf, onOpen }: FormatProps): ReactEleme
   );
 }
 
-/** Format B · Clean grid: three charts, members, four gauges, table and inbox. */
+/** Format B · View 1: three charts, members, four gauges, table and inbox. */
 export function FormatB({ states, onOpen }: FormatProps): ReactElement {
   return (
     <>
@@ -81,7 +81,7 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
   );
 }
 
-/** Format C · Sidebar frame: profile, tiles, area with legend toggles, donut, gauges, sparkline. */
+/** Format C · View 3: profile, tiles, area with legend toggles, donut, gauges, sparkline. */
 export function FormatC({ states, session, year, asOf, scopeCount, onOpen }: FormatProps): ReactElement {
   return (
     <div className="mainC">

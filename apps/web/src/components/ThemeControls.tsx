@@ -13,8 +13,8 @@ export function ThemeControls({ theme }: { theme: DashboardTheme }): ReactElemen
   return (
     <div className="thControls">
       <div>
-        <span className="thLbl">Layout</span>
-        <span className="thSeg" role="group" aria-label="Dashboard layout">
+        <span className="thLbl">Dashboard</span>
+        <span className="thSeg" role="group" aria-label="Dashboard view">
           {LAYOUTS.map((layout) => (
             <button
               key={layout.id}
@@ -23,7 +23,6 @@ export function ThemeControls({ theme }: { theme: DashboardTheme }): ReactElemen
               aria-pressed={theme.layout === layout.id}
               onClick={() => { theme.setLayout(layout.id); }}
             >
-              <span className="sw" style={{ background: layout.swatch }} />
               {layout.label}
             </button>
           ))}

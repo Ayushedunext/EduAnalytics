@@ -1162,9 +1162,9 @@ const ADMISSIONS_FUNNEL: PredefinedReport = {
   id: 'admissions-funnel',
   title: 'Admissions Funnel',
   schema_version: 'erp-v1',
-  source: 'students_admission_data_set',
+  source: 'students_admission_data_set · students_data_set',
   domain: 'students',
-  params: [ACADEMIC_YEAR],
+  params: [ACADEMIC_YEAR, DRILL_CLASS],
   queries: [
     {
       key: 'funnel',
@@ -1202,6 +1202,53 @@ const ADMISSIONS_FUNNEL: PredefinedReport = {
         "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
         'FROM students_admission_data_set WHERE academicyearname = :academic_year ' +
         'GROUP BY gender ORDER BY candidates DESC',
+    },
+    /**
+     * -- The second source on this report, and why it is here -----------------
+     * Everything above reads the funnel table, which for most schools in the
+     * extract holds enquiries and nothing else -- no registration, application
+     * or admission number, so every stage after the first draws zero and the
+     * report says nothing about how many students a school actually took in.
+     * That is an honest reading of the funnel and a useless answer to "how many
+     * new admissions", which is the question the page is opened with.
+     *
+     * These two statements answer it from the roll instead, on the same
+     * definition the Dashboard tile uses -- one `isOldStudent` flag, validated
+     * there (see DASHBOARD_OVERVIEW's `admissions`). They are the drill path's
+     * levels 2 and 3; level 1 re-groups `new_by_class` per school rather than
+     * summing it, so it costs no statement of its own.
+     *
+     * The funnel queries are left exactly as they are. A school that DOES run
+     * its admissions through the ERP still gets its conversion rates; this adds
+     * the count that does not depend on that, rather than replacing a reading
+     * that is correct where the data supports it.
+     */
+    {
+      key: 'new_by_class',
+      description: 'Students new to the roll this year, by class',
+      sql:
+        'SELECT classname, MIN(classseq) AS seq, COUNT(*) AS students ' +
+        'FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        "AND isOldStudent = 'No' " +
+        'GROUP BY classname ORDER BY seq',
+    },
+    /**
+     * The leaf. `drill_only` because nothing on the base page draws sections --
+     * unlike Enrollment Overview, which reads them for a table anyway -- so this
+     * statement runs when someone descends into a class and not before.
+     */
+    {
+      key: 'new_by_section_for_class',
+      description: 'Students new to the roll this year, by section within one class',
+      drill_only: true,
+      sql:
+        'SELECT sectionname, COUNT(*) AS students ' +
+        'FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        "AND isOldStudent = 'No' " +
+        'AND (:drill_class IS NULL OR classname = :drill_class) ' +
+        'GROUP BY sectionname ORDER BY sectionname',
     },
   ],
 };
@@ -1842,7 +1889,7 @@ const PRINCIPAL_SNAPSHOT: PredefinedReport = {
   title: "Principal's Snapshot",
   schema_version: 'erp-v1',
   source:
-    'students_data_set · fee_compile_data_set · employees_data_set · students_admission_data_set · student_attendance_data_set',
+    'students_data_set · fee_compile_data_set · employees_data_set · student_attendance_data_set',
   domain: 'students',
   params: [ACADEMIC_YEAR, AS_OF_DATE, FROM_DATE, TO_DATE],
   queries: [
@@ -1871,13 +1918,24 @@ const PRINCIPAL_SNAPSHOT: PredefinedReport = {
         'AND (joining_date IS NULL OR joining_date <= :as_of_date) THEN 1 ELSE 0 END) AS on_roll ' +
         'FROM employees_data_set',
     },
+    /**
+     * The roll, not the funnel -- the same move, for the same measured reason,
+     * as DASHBOARD_OVERVIEW's `admissions` above; that query's comment carries
+     * the numbers. Changed together deliberately: this tile and the Dashboard's
+     * carry the same label over the same schools and the same year, and two
+     * screens disagreeing about what an admission is would be read as one of
+     * them being broken rather than as two definitions.
+     *
+     * No gender split here. The Dashboard tile has a two-part breakdown to
+     * fill; this one is a bare KPI, so a single number is all it can draw.
+     */
     {
       key: 'admissions',
-      description: 'Candidates and admissions so far this year',
+      description: 'Students new to the roll this year',
       sql:
-        'SELECT COUNT(*) AS candidates, ' +
-        "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
-        'FROM students_admission_data_set WHERE academicyearname = :academic_year',
+        'SELECT COUNT(*) AS admissions FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        "AND isOldStudent = 'No'",
     },
     {
       /**
@@ -2582,13 +2640,51 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         'AND (joining_date IS NULL OR joining_date <= :as_of_date) THEN 1 ELSE 0 END) AS on_roll ' +
         'FROM employees_data_set',
     },
+    /**
+     * New admissions read from the ROLL, not from the admission funnel.
+     *
+     * -- Why this does not read `students_admission_data_set` ------------------
+     * It did until 2026-09-07, and it returned zero for most schools. Two
+     * separate reasons, either of which is enough on its own. Measured on the
+     * extract for the three St Mark's schools: the funnel table holds no 2026-27
+     * rows at all for them (its history stops at 2024-25), AND every row it does
+     * hold has an empty `admissionno` -- each one is a bare enquiry, status 1,
+     * with an enquiry number and nothing else. So `SUM(admissionno <> '')` was
+     * zero in every year, not just the selected one. Only two of thirteen
+     * tenants in the extract ever populated `admissionno`.
+     *
+     * A tile that reads 0 for eleven schools out of thirteen is not measuring
+     * admissions, it is measuring whether a school uses the ERP's admission
+     * module. The roll knows the answer regardless: `isOldStudent` marks a
+     * student who is new to the school this year.
+     *
+     * -- Why `isOldStudent` and not `joining_date` -----------------------------
+     * The obvious alternative -- joined between `acfromdate` and `actodate` --
+     * undercounts badly, because schools admit BEFORE the year starts. St Mark's
+     * takes its 2026-27 intake in January-March 2026, so those joining dates sit
+     * outside a window that opens on 1 April. Measured: 229 by the date window
+     * against 830 by the flag, a 72% undercount.
+     *
+     * The flag was validated against a definition that uses no flag at all -- a
+     * student whose `enrollmentno` first appears in this academic year. The two
+     * agree to 830 vs 832 across the three schools, and per school (260/260,
+     * 273/274, 297/298). It holds on other tenants too (sacsgb 646/646,
+     * ehws_dup 1109/1101), so it is a property of the column and not of one
+     * school's data entry.
+     *
+     * Grouped by gender rather than returned as a single number so the tile
+     * keeps a two-part breakdown, and so it splits the same way -- through the
+     * same `genderSplit` -- as the `roll` query above it. `students` and not
+     * `admissions` as the column name for exactly that reason.
+     */
     {
       key: 'admissions',
-      description: 'Candidates and admissions so far this year',
+      description: 'Students new to the roll this year, by gender',
       sql:
-        'SELECT COUNT(*) AS candidates, ' +
-        "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
-        'FROM students_admission_data_set WHERE academicyearname = :academic_year',
+        'SELECT gender, COUNT(*) AS students FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        "AND isOldStudent = 'No' " +
+        'GROUP BY gender ORDER BY students DESC',
     },
     {
       key: 'fees',

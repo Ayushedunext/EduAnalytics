@@ -441,11 +441,40 @@ describe('what a card shows', () => {
    * kinds of card inside one module — live charts for the gridded ones, dead
    * tiles for the rest — would have been a distinction no reader could see.
    *
-   * It has no curated drill path, so it takes the LEAD branch: exactly what a
-   * gridded report without a path takes, which is the point. Nothing about a
-   * preview is special-cased for the module screen.
+   * It takes whichever branch its OWN tables put it in, with nothing
+   * special-cased for the module screen -- which is the point, and is why both
+   * branches are asserted here rather than one. Admissions Funnel grew a
+   * curated path on 2026-09-07 and so takes the DRILL branch; before that it
+   * took the lead branch, and a report still without a path (Library, the
+   * Principal's Snapshot) takes it today.
    */
   it('previews a built dashboard that the grid does not draw', async () => {
+    buildDashboard.mockResolvedValue(
+      specWith([
+        {
+          id: 'bar-school-admissions',
+          type: 'bar',
+          title: 'New admissions by school',
+          x: 'school_name',
+          y: 'students',
+          data: [{ school_name: 'Meera Bagh', students: 297 }],
+        },
+      ]),
+    );
+
+    const preview = await build('admissions-funnel');
+
+    expect(preview.status).toBe('ok');
+    expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
+      reportId: 'admissions-funnel',
+      queryKeys: [REAL_DRILL_QUERY['admissions-funnel']],
+    });
+    /** The drill entry, by id -- so the card the module screen draws is clickable. */
+    expect((preview.widget as { id: string }).id).toBe('bar-school-admissions');
+  });
+
+  it('previews an ungridded dashboard with no path from its lead query', async () => {
+    noPathFor.add('admissions-funnel');
     buildDashboard.mockResolvedValue(
       specWith([
         { id: 'bar-funnel', type: 'bar', title: 'Funnel', x: 's', y: 'n', data: [{ s: 'Enquiry', n: 4 }] },

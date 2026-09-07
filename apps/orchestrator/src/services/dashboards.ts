@@ -451,6 +451,7 @@ export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
  */
 export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
   'enrollment-overview': 'by_class',
+  'admissions-funnel': 'new_by_class',
   'trend-analysis': 'collection_by_month',
   'fee-comparative': 'demand_by_period',
   'fee-collection': 'by_component',
@@ -1047,6 +1048,63 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
         narrow: { kind: 'param', param: 'drill_class', type: 'string' },
         title: 'Students on roll by section · {context}',
         group_by: 'section',
+      },
+    ],
+  },
+
+  /**
+   * Admissions: school → class → section, over students NEW to the roll.
+   *
+   * -- Why this path measures the roll and not the funnel --------------------
+   * Every other widget on this report descends from `students_admission_data_set`,
+   * and a drill built on it would be three levels of zeroes for most schools:
+   * the table holds bare enquiries with no admission number, so the measure a
+   * reader wants -- how many were actually taken in -- is not in it. The drill
+   * reads `isOldStudent` off the roll instead, which is the same definition the
+   * Dashboard's admissions tile now uses. The two agreeing is the point: a tile
+   * and a drill that disagreed about what an admission is would be worse than
+   * the zero this replaces, because a wrong number is read as a right one.
+   *
+   * -- Why the levels partition cleanly --------------------------------------
+   * The same shape as Enrollment Overview and for the same reason: a new student
+   * is on one school's roll, in one class, in one section. So the class bars sum
+   * to the school and the section bars sum to the class, exactly -- no `note`
+   * warning against adding them up, unlike Fee Defaulters where one person can
+   * appear in two quarters. That absence is a fact about this measure rather
+   * than an oversight.
+   *
+   * ONE measure, so every level draws a plain single-series bar with the
+   * gradient and tallest-bar highlight -- the comparison is within the chart
+   * (which class took the most?), which is what that treatment is for.
+   */
+  'admissions-funnel': {
+    widget_id: 'bar-school-admissions',
+    measures: [{ field: 'students', label: 'New admissions' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        /** The axis reads the name; the click pushes the id (see Fee Collection). */
+        drill_value_field: 'school_id',
+        title: 'New admissions by school',
+        group_by: 'school',
+      },
+      {
+        x: 'classname',
+        drill_dim: 'class',
+        /** The class name IS the bound value, so no separate value field. */
+        query: 'new_by_class',
+        narrow: { kind: 'scope' },
+        title: 'New admissions by class · {context}',
+        group_by: 'class',
+      },
+      {
+        x: 'sectionname',
+        query: 'new_by_section_for_class',
+        narrow: { kind: 'param', param: 'drill_class', type: 'string' },
+        title: 'New admissions by section · {context}',
+        group_by: 'section',
+        /** The leaf: no `drill_dim`, so this chart is not clickable. */
       },
     ],
   },
@@ -3345,8 +3403,10 @@ function buildStaffOverview(merged: Merged, { asOf, scope }: BuildContext): Dash
  * screen, not just in a comment: a funnel is exactly the kind of chart whose
  * definition changes what it means.
  */
-function buildAdmissionsFunnel(merged: Merged, { year }: BuildContext): DashboardBuild {
+function buildAdmissionsFunnel(merged: Merged, { year, scope }: BuildContext): DashboardBuild {
   const widgets: Widget[] = [];
+  /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
+  const path = DRILL_PATHS['admissions-funnel'] as DrillPath;
 
   const funnel = merged.sumAll('funnel', [
     'candidates',
@@ -3358,6 +3418,63 @@ function buildAdmissionsFunnel(merged: Merged, { year }: BuildContext): Dashboar
   const byClass = merged.sumBy('by_class', 'classname', ['candidates', 'admissions'], 'seq');
   const byStatus = merged.sumBy('by_status', 'candidate_statusid', ['candidates']);
   const byGender = merged.sumBy('by_gender', 'gender', ['candidates', 'admissions']);
+  const newByClass = merged.sumBy('new_by_class', 'classname', ['students'], 'seq');
+
+  /**
+   * The count that does not depend on the funnel being filled in, led with
+   * because for most schools in this extract it is the only one of the two that
+   * is a number rather than a zero. Placed BEFORE the funnel KPIs so a reader
+   * meets the answer to "how many did we take in" before the conversion rates
+   * that may all read 0.0%.
+   */
+  const newTotal = newByClass.reduce((sum, row) => sum + num(row['students']), 0);
+  if (newByClass.length > 0) {
+    widgets.push({
+      id: 'kpi-new-admissions',
+      type: 'kpi',
+      label: `New admissions · ${year}`,
+      value: count(newTotal),
+      tone: 'positive',
+    });
+  }
+
+  /**
+   * Drill level 1 (ADR-020, `DRILL_PATHS`) -- one bar per school, drilling to
+   * class and then section. Built from the `new_by_class` rows the KPI above
+   * already reads, kept per school instead of summed across them, so the entry
+   * point to the whole path costs no query of its own.
+   */
+  const perSchool = merged.sumPerSchool('new_by_class', ['students']);
+  if (perSchool.length > 0) {
+    const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'students',
+      data: perSchool.map((entry) => ({
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        students: entry.totals['students'] ?? 0,
+      })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+  }
+
+  if (newByClass.length > 0) {
+    widgets.push({
+      id: 'bar-new-class',
+      type: 'bar',
+      title: 'New admissions by class',
+      x: 'classname',
+      y: 'students',
+      data: newByClass.map((r) => ({ classname: label(r['classname']), students: num(r['students']) })),
+    });
+  }
 
   if (funnel !== null) {
     const candidates = num(funnel['candidates']);
@@ -3463,8 +3580,9 @@ function buildAdmissionsFunnel(merged: Merged, { year }: BuildContext): Dashboar
 
   return {
     widgets,
-    groupBy: ['stage', 'class', 'status', 'gender'],
+    groupBy: ['school', 'stage', 'class', 'section', 'status', 'gender'],
     notes: [
+      'New admissions is counted off the roll — students the ERP marks as new to the school this academic year — and not off the funnel below it. The two answer different questions and will not agree: a school that does not issue admission numbers through the ERP has a full roll and an empty funnel.',
       'The stages are read from the numbers the ERP issued each candidate — an enquiry number means the enquiry stage was reached, an admission number means admitted. The table has no stage column and no stage dates, so this is a reading of the data rather than a field in it.',
       'Status ids are shown as ids because no status lookup was supplied with this dataset. Compare them against the inferred stages above rather than assuming the two agree.',
     ],
@@ -3779,7 +3897,7 @@ function buildPrincipalSnapshot(merged: Merged, { year, asOf }: BuildContext): D
   const byClass = merged.sumBy('by_class', 'classname', ['students'], 'seq');
   const fees = merged.sumAll('fees', ['payable', 'paid', 'balance']);
   const staff = merged.sumAll('staff', ['on_roll']);
-  const admissions = merged.sumAll('admissions', ['candidates', 'admissions']);
+  const admissions = merged.sumAll('admissions', ['admissions']);
   const attendance = merged.sumAll('attendance', ['marked_days', 'present_days']);
 
   if (byClass.length > 0) {
@@ -3818,14 +3936,18 @@ function buildPrincipalSnapshot(merged: Merged, { year, asOf }: BuildContext): D
     });
   }
 
+  /**
+   * Read off the roll, so the label no longer promises a conversion: there is
+   * no candidate count behind this number and a parenthetical naming one would
+   * be inventing a denominator. See the `admissions` query in
+   * mcp-server/src/reports/catalog.ts for why it moved off the funnel.
+   */
   if (admissions !== null) {
-    const candidates = num(admissions['candidates']);
-    const admitted = num(admissions['admissions']);
     widgets.push({
       id: 'kpi-admissions',
       type: 'kpi',
-      label: `Admitted this year (of ${count(candidates)} candidates)`,
-      value: count(admitted),
+      label: `New admissions · ${year}`,
+      value: count(num(admissions['admissions'])),
       tone: 'positive',
     });
   }

@@ -47,6 +47,14 @@ export const OVERVIEW_SLOTS = {
   tiles: ['roll', 'staff', 'att_today', 'staff_today', 'admissions', 'overdue'],
   rings: ['att_by_month', 'fees', 'staff_by_month'],
   monthly: ['heads_by_month'],
+  /**
+   * The same `admissions` statement the tiles card already runs, kept per
+   * school instead of summed across them -- so this card costs no scan of its
+   * own beyond what the Dashboard was already paying (the result cache keys per
+   * statement, services/overview-queries.ts). The by-school reading is level 1
+   * of the Admissions drill path, which is what the card opens into.
+   */
+  admissions_by_school: ['admissions'],
   weekly_receipts: ['receipts_by_week'],
   weekly_attendance: ['att_by_week'],
   top_schools: ['fees'],
@@ -84,6 +92,7 @@ export const WARM_SLOTS: readonly OverviewSlotKey[] = [
   'tiles',
   'rings',
   'monthly',
+  'admissions_by_school',
   'weekly_receipts',
   'weekly_attendance',
   'top_schools',
@@ -280,6 +289,7 @@ const BUILDERS: Record<OverviewSlotKey, (merged: Merged, ctx: Ctx) => Built> = {
   tiles: buildTiles,
   rings: buildRings,
   monthly: buildMonthly,
+  admissions_by_school: buildAdmissionsBySchool,
   weekly_receipts: buildWeeklyReceipts,
   weekly_attendance: buildWeeklyAttendance,
   top_schools: buildTopSchools,
@@ -371,11 +381,19 @@ function buildTiles(merged: Merged, ctx: Ctx): Built {
     }));
     notes.push(...dayNote('staff', t));
   }
+  /**
+   * Counted off the roll, not off the admission funnel -- see the `admissions`
+   * query in mcp-server/src/reports/catalog.ts for the measurement that moved
+   * it. The breakdown is Boys/Girls rather than the Admitted/Candidates it used
+   * to be, because the roll has no notion of a candidate: a student is either on
+   * it or is not, and there is no one to have applied and been refused.
+   */
   if (merged.succeeded('admissions')) {
-    const a = merged.sumAll('admissions', ['candidates', 'admissions']);
-    widgets.push(kpi('tile-admissions', 'New admissions this year', count(num(a?.['admissions'])), {
-      breakdown: parts([['Admitted', count(num(a?.['admissions']))], ['Candidates', count(num(a?.['candidates']))]]),
+    const split = genderSplit(merged.concatRows('admissions').map((r) => r.row));
+    widgets.push(kpi('tile-admissions', 'New admissions this year', count(split.total), {
+      breakdown: parts([['Boys', count(split.boys)], ['Girls', count(split.girls)]]),
     }));
+    notes.push('New admissions counts students the ERP marks as new to the school this academic year, read from the roll. It is not the admission funnel’s conversion count — most schools in this extract leave the funnel’s admission number blank.');
   }
   if (merged.succeeded('overdue')) {
     const o = merged.sumAll('overdue', ['defaulters', 'outstanding']);
@@ -424,6 +442,49 @@ function buildMonthly(merged: Merged): Built {
     widgets: [
       { id: 'bar-month', type: 'bar', title: 'Fee receipts by month', x: 'month', y: 'received', x_title: 'Month', y_title: 'Fee received (₹)', data: monthlyHeads(merged).map((r) => ({ month: r['month'] as string, received: num(r['received']) })) },
     ],
+  };
+}
+
+/**
+ * New admissions, one bar per school -- level 1 of the Admissions drill path
+ * (services/dashboards.ts `DRILL_PATHS`), drawn on the Dashboard beside the
+ * receipts it shares a column with.
+ *
+ * -- Why it re-groups rather than re-queries ---------------------------------
+ * `admissions` is already on the wire for the tiles card, grouped by gender. A
+ * school's bar is that school's rows summed; the tile is every school's rows
+ * summed. Same statement, two groupings, one scan -- which is what ADR-020
+ * means by a drill entry being a re-grouping.
+ *
+ * -- What it does NOT do -----------------------------------------------------
+ * It does not drill IN PLACE. The Dashboard's slot API has no drill endpoint --
+ * drilling lives on the report page (routes/report.ts) -- so the card is drawn
+ * without `drillable`, and clicking it opens Admissions Funnel where all three
+ * levels work. Marking it drillable here would invite a click nothing on this
+ * screen can answer.
+ */
+function buildAdmissionsBySchool(merged: Merged, ctx: Ctx): Built {
+  if (!merged.succeeded('admissions')) return { widgets: [] };
+  const perSchool = merged.sumPerSchool('admissions', ['students']);
+  if (perSchool.length === 0) return { widgets: [] };
+  const schoolName = new Map(ctx.scope.map((entry) => [entry.school_id, entry.school_name]));
+  return {
+    widgets: [
+      {
+        id: 'bar-school-admissions',
+        type: 'bar',
+        title: 'New admissions by school',
+        x: 'school_name',
+        y: 'students',
+        x_title: 'School',
+        y_title: 'New admissions',
+        data: perSchool.map((entry) => ({
+          school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+          students: entry.totals['students'] ?? 0,
+        })),
+      },
+    ],
+    notes: ['Students the ERP marks as new to the school this academic year, read from the roll. Open the report to break a school down by class and then by section.'],
   };
 }
 
@@ -651,10 +712,21 @@ function buildGauges(merged: Merged): Built {
     widgets.push(kpi('gauge-attendance', "Today's student attendance", count(t.present), { breakdown: parts([['Present', count(t.present)], ['Absent', count(t.absent)]]) }));
     notes.push(...dayNote('student', t));
   }
+  /**
+   * The rate is new admissions as a share of the ROLL, replacing an
+   * enquiry-to-admission conversion that no longer has a denominator: the
+   * funnel's candidate count left with the funnel (see `buildTiles`). Both
+   * numbers come from the same merge, so the share is over the same schools
+   * that contributed the numerator -- a school whose roll query failed
+   * contributes to neither.
+   */
   if (merged.succeeded('admissions')) {
-    const a = merged.sumAll('admissions', ['candidates', 'admissions']);
-    widgets.push(kpi('gauge-admissions-rate', 'Candidates admitted', pct(share(num(a?.['admissions']), num(a?.['candidates'])))));
-    widgets.push(kpi('gauge-admissions', 'New student enrolment', count(num(a?.['admissions'])), { breakdown: parts([['Admitted', count(num(a?.['admissions']))], ['Candidates', count(num(a?.['candidates']))]]) }));
+    const a = genderSplit(merged.concatRows('admissions').map((r) => r.row));
+    if (merged.succeeded('roll')) {
+      const roll = genderSplit(merged.concatRows('roll').map((r) => r.row));
+      widgets.push(kpi('gauge-admissions-rate', 'New share of the roll', pct(share(a.total, roll.total))));
+    }
+    widgets.push(kpi('gauge-admissions', 'New student enrolment', count(a.total), { breakdown: parts([['Boys', count(a.boys)], ['Girls', count(a.girls)]]) }));
   }
   if (merged.succeeded('staff_today')) {
     const t = latestDay(merged, 'staff_today');

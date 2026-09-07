@@ -35,6 +35,7 @@ import { coalesce } from '../cache/single-flight.js';
 import { config } from '../config.js';
 import { Merged } from './dashboards.js';
 import { OVERVIEW_REPORT_ID, runOverviewQueries } from './overview-queries.js';
+import { splitStaffTypes } from './staff-types.js';
 
 export { OVERVIEW_REPORT_ID };
 
@@ -361,9 +362,38 @@ function buildTiles(merged: Merged, ctx: Ctx): Built {
       breakdown: parts([['Boys', count(split.boys)], ['Girls', count(split.girls)]]),
     }));
   }
+  /**
+   * The headcount, with its employment split beneath it.
+   *
+   * Every other tile on this card carries its parts — Students has boys and
+   * girls, both attendance tiles have present and absent, admissions has the
+   * gender mix — and staff was the one figure standing on its own, which read
+   * as a tile whose detail had failed to load rather than as a tile with no
+   * detail to give. The split is the same one the Dashboard's KPI strip prints
+   * (`home.ts`), from the same classification (`staff-types.ts`), so a reader
+   * who sees "Permanent 120" on one screen sees the same 120 on the other.
+   *
+   * `classified` false means the schools in scope spell `stafftype` entirely in
+   * opaque codes, and the tile goes back to the bare headcount — three parts
+   * reading 0 / 0 / everything is not a breakdown, it is noise wearing one.
+   */
   if (merged.succeeded('staff')) {
+    const rows = merged.concatRows('staff').map((r) => r.row);
+    const split = splitStaffTypes(rows, 'on_roll');
     const total = merged.sumAll('staff', ['on_roll']);
-    widgets.push(kpi('tile-staff', 'Total staff', count(num(total?.['on_roll']))));
+    widgets.push(kpi('tile-staff', 'Total staff', count(num(total?.['on_roll'])), {
+      ...(split.classified
+        ? {
+            breakdown: parts([
+              ['Permanent', count(split.permanent)],
+              ['Not permanent', count(split.impermanent)],
+              ...(split.unclassified > 0
+                ? ([['Unclassified', count(split.unclassified)]] as const)
+                : []),
+            ]),
+          }
+        : {}),
+    }));
   }
   if (merged.succeeded('att_today')) {
     const t = latestDay(merged, 'att_today');

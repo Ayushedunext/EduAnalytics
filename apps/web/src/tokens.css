@@ -680,8 +680,31 @@ body {
    whole strip a row of height to say "▲ 2.4%". Beside the figure it reads as an
    annotation ON the figure, which is what it is, and the strip gets shorter --
    the same trade the greeting and the scope line made on the page header. */
-.kpiFigure { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.kpiFigure .kpiValue { flex: 0 1 auto; min-width: 0; }
+/* The figure never gives up its own width to the annotation beside it
+   (2026-09-07). The delta is a phrase, not a token — Trend Analysis prints
+   "+3.0% vs same months of 2025-26" and Comparative Analysis "-46.6 pp vs
+   2025-26" — and a shrinkable figure beside a phrase that long lost the fight:
+   the pill wrapped to four lines, took most of the tile, and squeezed the
+   number until `.kpi`'s `overflow: hidden` cut it off mid-value. "₹42.4Cr"
+   rendered as "₹42.4" and "₹92.0Cr" as "₹92.0C" — a clipped figure that is
+   still perfectly legible as a WRONG figure, which is worse than one that is
+   obviously missing.
+
+   Two changes, and both are needed. The value's floor is `min-content`, not
+   `0`: a flex item explicitly floored at zero shrinks past the width of its own
+   text, which is how a figure ended up narrower than the digits in it. At
+   min-content it can still yield the slack a text value has ("7 academic years"
+   wraps between its words on a narrow tile, as it always did) and can never
+   yield more than a value with no break in it needs — "₹42.4Cr" is one
+   unbreakable token, so it now sets its own floor. And the row WRAPS, so a
+   delta that will not fit beside the figure at that floor drops to its own line
+   under it instead of pushing the figure out of the tile. The row-gap is
+   tighter than the column-gap because a wrapped delta is still an annotation ON
+   the figure, not a second line of tile; a short delta — the "▲ 0.6" case the
+   one-line layout was designed around — still sits beside the figure, since it
+   fits. */
+.kpiFigure { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; min-width: 0; }
+.kpiFigure .kpiValue { flex: 0 1 auto; min-width: min-content; }
 /* The dial a rate metric carries (chart-spec `MeterRing`). `flex: none` so a
    long figure never squeezes the ring out of round, and the negative margin
    pulls it back over the tile's left padding so the numbers on a strip of mixed
@@ -1272,7 +1295,30 @@ body {
 
 /* ---------- Ask AI page: chat (35%) + artifact canvas (65%) (docs/10 §3) ---------- */
 
-.askSplit { display: grid; grid-template-columns: clamp(300px, 35%, 400px) 1fr; gap: 16px; flex: 1; min-height: 0; }
+/* The split has a FLOOR, and the floor is what actually sizes it (2026-09-07).
+   `flex: 1` was written for a shell that fills the viewport; this one does not
+   — `.app` is ordinary flow (skins.css) and every ancestor's height is its
+   content's — so there was never any free space for the split to claim, and the
+   pane sized itself to the taller of two nearly-empty children. On a laptop
+   that is a ~350px box under a full-width header with the rest of the window
+   empty below it: the panel reads as a widget that failed to load rather than
+   as the working surface of the page, and the canvas's "Your report appears
+   here" invitation sits in a box too small to look like it means it.
+
+   `calc(100vh - 340px)` is the window minus the chrome above the split (frame
+   padding, menu bar, back link, title, scope line) and the footer below it, so
+   the box reaches roughly the foot of the window on any screen instead of
+   holding one fixed height. The clamp keeps it honest at both ends: never
+   shorter than 420px, where the chat's own composer and chips stop fitting
+   comfortably, and never taller than 960px, which is where a 1440p window lands
+   and past which the pane would be growing for its own sake. Both panes already knew how to be tall — the
+   message list and the canvas each scroll inside their own pane
+   (`overflow-y: auto`), and the composer stays pinned to the foot of the
+   chat — so this only gives them the height they were written for. */
+.askSplit {
+  display: grid; grid-template-columns: clamp(300px, 35%, 400px) 1fr; gap: 16px;
+  flex: 1; min-height: clamp(420px, calc(100vh - 340px), 960px);
+}
 @media (max-width: 860px) { .askSplit { grid-template-columns: 1fr; } }
 
 .askChat { display: flex; flex-direction: column; overflow: hidden; padding: 0; }

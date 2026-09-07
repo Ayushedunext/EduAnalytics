@@ -148,6 +148,67 @@ describe('today sums the schools and names the day', () => {
 });
 
 /**
+ * The staff tile was the only one on the card standing on a bare number while
+ * every neighbour carried its parts, which reads as a tile whose detail failed
+ * to load rather than as one with no detail to give. It carries the same
+ * permanent / not-permanent split the Dashboard's KPI strip prints, from the
+ * same classification (services/staff-types.ts) — so the two screens cannot
+ * disagree about what "permanent" counts.
+ *
+ * The second case is the one worth locking in: `stafftype` is opaque codes for
+ * most tenants in the extract, and a tile that answered "Permanent 0, Not
+ * permanent 0, Unclassified 228" would be reporting the column's shape as if it
+ * were the school's staffing.
+ */
+describe('the staff tile carries its employment split, and only where the ERP names one', () => {
+  it('sums the schools and splits permanent, not permanent and the rest', async () => {
+    response = result([
+      {
+        school_id: 'a',
+        queries: [
+          query('staff', [
+            { stafftype: 'CONFIRMATION', on_roll: 120 },
+            { stafftype: 'CONTRACTUAL', on_roll: 40 },
+            { stafftype: 'S0011', on_roll: 35 },
+          ]),
+        ],
+      },
+      {
+        school_id: 'b',
+        queries: [
+          query('staff', [
+            { stafftype: 'PROBATION', on_roll: 18 },
+            { stafftype: 'S004AD', on_roll: 15 },
+          ]),
+        ],
+      },
+    ]);
+    const card = await build('tiles');
+    const tile = card.widgets.find((w): w is KpiWidget => w.type === 'kpi' && w.id === 'tile-staff');
+    /** The headcount is unchanged by the grouping: every row still counts. */
+    expect(tile?.value).toBe('228');
+    expect(tile?.breakdown).toEqual([
+      { label: 'Permanent', value: '120' },
+      { label: 'Not permanent', value: '58' },
+      { label: 'Unclassified', value: '50' },
+    ]);
+  });
+
+  it('shows the headcount alone when the column is codes and nothing else', async () => {
+    response = result([
+      {
+        school_id: 'a',
+        queries: [query('staff', [{ stafftype: 'S0011', on_roll: 200 }, { stafftype: 'S004AD', on_roll: 28 }])],
+      },
+    ]);
+    const card = await build('tiles');
+    const tile = card.widgets.find((w): w is KpiWidget => w.type === 'kpi' && w.id === 'tile-staff');
+    expect(tile?.value).toBe('228');
+    expect(tile?.breakdown).toBeUndefined();
+  });
+});
+
+/**
  * The tile read 0 for eleven of the thirteen tenants in the extract until
  * 2026-09-07, because it counted admission numbers in a funnel table most
  * schools never fill in. It counts the roll now -- see the `admissions` query

@@ -2633,12 +2633,31 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         'GROUP BY gender ORDER BY students DESC',
     },
     {
+      /**
+       * Grouped by `stafftype` since 2026-09-07, so the tile can carry the
+       * permanent / not-permanent split its neighbours already carry.
+       *
+       * The grouping column joins the statement rather than becoming a second
+       * one, for the same reason `roll` above takes `gender` and `home.ts`'s
+       * `studentsByYear` takes it too: this is the SAME scan of
+       * `employees_data_set`, and one extra grouping column is far cheaper than
+       * a second pass over the table — which is what the Dashboard's slot model
+       * exists to avoid (services/overview.ts, "one slot, one request").
+       *
+       * The headcount is unchanged by it. Every caller sums `on_roll` across
+       * whatever rows come back (`Merged.sumAll`), so the total is the same
+       * number the ungrouped statement returned; what is new is that it can now
+       * be broken down. The column is reported FAITHFULLY, codes and all — what
+       * those values mean is decided in one place, and that place is
+       * orchestrator/src/services/staff-types.ts, where it can be explained and
+       * tested rather than buried in SQL.
+       */
       key: 'staff',
-      description: 'Staff on roll as of the date',
+      description: 'Staff on roll as of the date, by employment type',
       sql:
-        'SELECT SUM(CASE WHEN (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'SELECT stafftype, SUM(CASE WHEN (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
         'AND (joining_date IS NULL OR joining_date <= :as_of_date) THEN 1 ELSE 0 END) AS on_roll ' +
-        'FROM employees_data_set',
+        'FROM employees_data_set GROUP BY stafftype',
     },
     /**
      * New admissions read from the ROLL, not from the admission funnel.

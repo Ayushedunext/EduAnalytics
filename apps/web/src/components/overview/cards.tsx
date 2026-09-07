@@ -554,7 +554,14 @@ function GaugeCard({ state, rateId, countId, slot }: { state: SlotState | undefi
           return (
             <div className="body">
               {type === 'donut' ? (
-                <GaugeRing pct={pct} colour={colour} text={pct === null ? '—' : String(Math.round(pct))} size={70} />
+                /* The unit is part of the figure. `rateOf` only ever returns a
+                   value it parsed out of a string ENDING in `%` (widgets.ts), so
+                   this number is a percentage by construction — and it sat in the
+                   ring as a bare "89" beside a "1,697" in the same card, where
+                   nothing said which of the two was a rate. The sibling gauge on
+                   the Data Graphic card below already prints the sign; this is the
+                   one that did not. */
+                <GaugeRing pct={pct} colour={colour} text={pct === null ? '—' : `${String(Math.round(pct))}%`} size={70} />
               ) : (
                 <div style={{ width: 130, height: 82, flex: 'none' }}>
                   <VividChart model={pointsModel(parts)} type={type} palette={palette} compact spark height={82} />

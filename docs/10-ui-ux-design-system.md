@@ -77,6 +77,35 @@ What is new in this pass is **tint**. Card shadows stay hairline-weight but gain
 3. **Tenant theming** — each school/trust gets accent color + logo (topbar, buttons, PDF header) from the same token system; no per-client CSS forks.
 4. **Feels instant** — skeleton loaders, streamed AI widgets, optimistic filter changes; UI responds within 100 ms even while data loads.
 
+### 1.5 The Dashboard: the "AI Dashboard" artifact, card for card (adopted 2026-09-04)
+
+The Dashboard, and the shell every screen sits in, follow the signed-off **"AI Dashboard" artifact** (Claude artifact `f5844b8a`, a design reference like the prototype in docs/11) **card for card, in each of its three layouts**. The product owner's rule, recorded here because it binds later work: *same layout, same graph* — a card is not moved, merged or replaced, and the data is fitted to the artifact's chart rather than the other way round.
+
+**Three layouts**, picked in a control bar above the Dashboard and remembered per browser (`theme/dashboardTheme.ts`), each fetching only its own cards from `GET /api/home/overview/:slot` (`services/overview.ts`, backed by the vetted `dashboard-overview` report in the MCP catalog):
+
+| Artifact card | Format A · Gradient nav | Format B · Clean grid | Format C · Sidebar frame |
+|---|---|---|---|
+| Buyer Location (map) | **Six coloured tiles** (the owner replaced the map): students, staff, today's student attendance %, today's staff attendance %, new admissions this year, fee defaulter amount | — | — |
+| Revenue Split (rings + bars + figure) | Student attendance %, fee realisation %, staff attendance %; figure = total fees billed | — | — |
+| Monthly Revenue | Fee receipts by month | — | — |
+| Weekly Sales / Weekly Orders | Receipts by week / student attendance % by week | — | — |
+| Top Clients | Schools ranked by fee collected | — | — |
+| Task Categories + Data Activity | Fee position donut (received · late fee · transport fee · pending) + the four by month | — | — |
+| Total Works / Statistics / Daily Tasks | — | Billed and collected by year (two lines) / students on roll by year / attendance recorded | — |
+| Team Members | — | Four students with the highest attendance (≥ 20 marked days) | — |
+| Four KPI gauges | — | Students (male/female), today's attendance (present/absent), new enrolment, staff attendance today | — |
+| Latest Projects table | — | Students paying late or not paying, with a **Remind** action that drafts a mail (no recipient — the extract holds no parent contact; agreed 2026-09-04) | — |
+| Inbox | — | Top 10 students by pending fees | — |
+| Profile / Data Company tiles | — | — | User card / students, staff, new admissions (no download button, per the owner) |
+| Area with legend toggles | — | — | Receipts · staff present days · attendance % by month |
+| Project Company donut / Data Graphic gauges / Customer Analytics | — | — | Payment modes / fee realisation and today's attendance / students paying late by week |
+
+**Definitions agreed with the product owner (2026-09-04).** *Today* is the latest day a register was marked on or before the as-of date, and the card names the day. *Transport fee* is the heads `Transport Fee`, `Transport Fees`, `Bus Fee`, `TPT1/2/3 FEE`, `TR.C`; *late fee* is the head `Late Fee`. A *late payer* has two or more receipts dated after the instalment they settle ended, or an overdue balance. One deviation from the plan as first stated, and why: "Total Works" was to plot fee collected against students on roll, but the two are different units on one axis and the roll would flat-line beside crores; it plots **billed against collected** by year and the roll takes the "Statistics" bars beside it.
+
+**What every layout keeps.** A **theme colour** (seven swatches plus a free colour, derived into six slots by `derivePalette`, applied as `--c0`…`--c5` and through `ChartPaletteProvider`), a **chart type menu on every chart** (bar, horizontal bar, line, area, donut, pie, polar area, radar — presentation state only, never written to a spec, a saved report or a PDF), the scope picker and academic-year control in the chrome (§3 "scope is always on screen"), and Ask AI in the nav, locked with a path where no key is set. The artifact carries no Ask bar and no catalogue strip, so the Dashboard draws neither; §2's Home description is amended accordingly. Notices for dropped scope and partial data stay — they appear only when something is wrong.
+
+**What the PDF gets.** `print.tsx` mounts no palette provider and no `.skin` wrapper, so exports are still drawn in the Meadow palette of §1 by the unchanged `widgets.tsx` path (ADR-021). The Meadow tokens remain the audited, CVD-validated set; the skins are a layer over them inside the same `packages/chart-spec` renderer — still one chart layer. A derived palette is spread around the wheel, not CVD-audited; every multi-series chart carries a legend and every donut a keyed share list. Dark mode from the reference is not carried.
+
 ## 2. Screen inventory
 
 | Screen | Essentials |

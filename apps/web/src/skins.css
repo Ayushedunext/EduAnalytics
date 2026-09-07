@@ -1,0 +1,248 @@
+/**
+ * The Dashboard skins (docs/10 §1.5, 2026-09-04) — the three layouts of the
+ * signed-off "AI Dashboard" artifact, applied over the app shell.
+ *
+ * Loaded AFTER tokens.css (main.tsx), and scoped under `.skin` so nothing here
+ * reaches the print surface: print.html mounts `#print-root` with no `.skin`
+ * wrapper and no palette provider, so a PDF is still drawn in the audited
+ * Meadow palette exactly as before (ADR-021).
+ *
+ * The six chart colours and the nav gradient are custom properties written on
+ * `:root` by theme/dashboardTheme.ts from the same value the charts receive
+ * through `ChartPaletteProvider` — one palette, two consumers. The defaults
+ * below are layout A's, so the page paints correctly for the first frame
+ * before the effect runs.
+ */
+
+:root {
+  --c0: #1fa0e8; --c1: #37c979; --c2: #f0508a; --c3: #f5a623; --c4: #8e6bf0; --c5: #12b5a5;
+  --grad-a: #3dbe6c; --grad-b: #1e7be0;
+}
+
+.skin {
+  --page: #eef1f5; --ink: #1e2a38; --ink-2: #5b6b7c; --ink-3: #98a5b3; --card: #ffffff; --line: #e6ebf1; --soft: #f4f6f9;
+  --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444;
+  height: 100%; overflow-y: auto;
+  background: var(--page); color: var(--ink);
+  font-family: Poppins, system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.45;
+}
+.skin--B { font-family: Nunito, Poppins, system-ui, sans-serif; }
+.skin .app { max-width: 1360px; margin: 0 auto; padding: 18px 18px 40px; }
+.skin svg.i { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.12em; flex-shrink: 0; }
+.skin button:focus-visible, .skin select:focus-visible, .skin input:focus-visible, .skin a:focus-visible { outline: 2px solid var(--c0); outline-offset: 2px; }
+
+/* ───────── control bar (layout · theme colour) ───────── */
+.thControls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 26px; padding: 12px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 18px; }
+.thLbl { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
+.thSeg { display: inline-flex; background: var(--soft); border-radius: 10px; padding: 3px; gap: 3px; vertical-align: middle; }
+.thSeg button { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-weight: 600; font-size: 12px; padding: 7px 14px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.thSeg button.on { background: var(--card); color: var(--ink); box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+.thColour { display: flex; align-items: center; }
+.thSwatches { display: inline-flex; gap: 6px; align-items: center; }
+.thSwatches button { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); cursor: pointer; padding: 0; }
+.thSwatches button.on { box-shadow: 0 0 0 2px var(--ink); }
+.thPicker { position: relative; display: inline-block; width: 34px; height: 34px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); overflow: hidden; background: conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); cursor: pointer; margin-left: 6px; vertical-align: middle; }
+.thPicker input { position: absolute; inset: -10px; width: 60px; height: 60px; opacity: 0; cursor: pointer; }
+.thReset { border: 1px solid var(--line); background: transparent; color: var(--ink-2); font: inherit; font-size: 12px; font-weight: 600; padding: 7px 12px; border-radius: 8px; cursor: pointer; margin-left: 10px; }
+.thReset:hover { color: var(--ink); border-color: var(--ink-3); }
+.thHint { font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
+
+/* ───────── surfaces ───────── */
+.skin .card { background: var(--card); border: 0; border-radius: 12px; box-shadow: 0 6px 18px rgba(20,40,70,.06); }
+.skin .specPanel { box-shadow: 0 6px 18px rgba(20,40,70,.06); }
+.skin .specPanel:hover { box-shadow: 0 10px 24px rgba(20,40,70,.10); }
+.skin .specPanelTitle { font-size: 13px; font-weight: 600; color: var(--ink); }
+.skin .specPanelActions { gap: 6px; }
+.skin .notice { border-radius: 12px; }
+
+/* ───────── scope chips, picker, avatar (all layouts) ───────── */
+.skin .skScope { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.skin .skScopePick { position: relative; }
+.skin .skChip { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 6px 12px; font-size: 11.5px; font-weight: 600; background: var(--soft); color: var(--ink-2); border: 1px solid var(--line); font-family: inherit; white-space: nowrap; line-height: 1.2; }
+.skin .skChip--btn { cursor: pointer; }
+.skin .skChip--btn:hover { color: var(--ink); }
+.skin .skChip--select { cursor: pointer; }
+.skin .skChip--select select { background: none; border: 0; font: inherit; color: inherit; cursor: pointer; outline: none; padding: 0; }
+.skin .skChip--select select option { color: #1e2a38; background: #fff; }
+.skin .skPicker { position: absolute; right: 0; top: 40px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px -8px rgba(20,40,70,.28); width: 250px; padding: 10px; z-index: 40; color: var(--ink); text-align: left; }
+.skin .skPicker label { display: flex; gap: 9px; align-items: center; padding: 8px; border-radius: 7px; font-size: 12.5px; cursor: pointer; font-weight: 500; }
+.skin .skPicker label:hover { background: var(--soft); }
+.skin .skPickerAll { margin-top: 6px; width: 100%; border: 1px solid var(--line); background: var(--soft); border-radius: 8px; padding: 7px; font: inherit; font-weight: 600; font-size: 12px; cursor: pointer; color: var(--ink-2); }
+.skin .skAvatar { width: 34px; height: 34px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-weight: 700; font-size: 12px; flex: none; background: linear-gradient(135deg, var(--c0), var(--c5)); box-shadow: inset 0 -6px 10px rgba(0,0,0,.15), inset 0 2px 4px rgba(255,255,255,.4); }
+.skin .skFoot { font-size: 11px; color: var(--ink-3); text-align: center; margin-top: 14px; }
+.skin .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* ───────── the menu bar, identical in all three layouts ───────── */
+/* One bar, one line (product owner, 2026-09-04): org mark · menu · scope chips ·
+   avatar, in the layout's gradient. Never wraps: as the window narrows the org
+   name collapses to its mark, then the labels give way to icons. */
+.skin .skBar { background: linear-gradient(170deg, var(--grad-a), var(--grad-b)); color: #fff; padding: 10px 16px; display: flex; flex-direction: row; align-items: center; gap: 10px; flex-wrap: nowrap; min-width: 0; }
+.skin .skLogo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 13px; flex: none; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 6px; }
+.skin .skLogo span { width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,.22); display: grid; place-items: center; font-size: 15px; flex: none; }
+.skin .skBarNav { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.skin .skBarNav::-webkit-scrollbar { display: none; }
+.skin .skBar a { display: flex; align-items: center; gap: 6px; color: #fff; font-size: 11.5px; white-space: nowrap; padding: 8px 8px; border-radius: 8px; cursor: pointer; opacity: .95; flex: none; }
+.skin .skBar a .i { font-size: 14px; opacity: .9; }
+.skin .skBar a.on { background: rgba(255,255,255,.16); }
+.skin .skBar a.locked { opacity: .6; cursor: default; }
+.skin .skBarRight { margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; }
+.skin .skBarRight .skScope { flex-wrap: nowrap; }
+.skin .skBarRight .skChip { background: rgba(255,255,255,.16); color: #fff; border-color: rgba(255,255,255,.25); }
+.skin .skBarRight .skAvatar { background: rgba(255,255,255,.22); box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+
+/* ───────── FORMAT A · gradient nav ───────── */
+.skin--A .skFrame { background: var(--card); border-radius: 22px; overflow: hidden; box-shadow: 0 20px 50px rgba(20,40,70,.16); border: 1px solid var(--line); }
+.skin--A .skBar { border-radius: 0 0 26px 26px; }
+.skin--A .skMain { background: var(--soft); padding: 16px; }
+
+/* ───────── FORMAT B · clean grid ───────── */
+.skin--B .skBar { border-radius: 18px; margin-bottom: 16px; box-shadow: 0 10px 24px -12px rgba(20,40,70,.45); }
+.skin--B .card { border-radius: 10px; box-shadow: 0 4px 14px rgba(20,40,70,.06); }
+
+/* ───────── FORMAT C · sidebar frame ───────── */
+.skin--C .skFrame--side { display: flex; flex-direction: column; background: var(--soft); border-radius: 18px; overflow: hidden; box-shadow: 0 20px 50px rgba(20,40,70,.16); border: 1px solid var(--line); }
+.skin--C .skBar { border-radius: 0 0 26px 26px; }
+.skin--C .skMain { padding: 18px; min-width: 0; }
+
+/* ───────── pages inside the frame ───────── */
+/* Every other screen keeps its own `<main><div class="px-7 py-6">` column; the
+   frame already pads, so the inner column pads less. */
+.skin .skMain > main > div { padding-left: 8px; padding-right: 8px; padding-top: 10px; }
+.skin .backLink { color: var(--ink-2); }
+.skin .page-title { color: var(--ink); }
+
+/* ───────── Dashboard body ───────── */
+.skin .pageContext { font-size: 12px; color: var(--ink-3); display: flex; gap: 6px 10px; flex-wrap: wrap; margin: 2px 0 12px; align-items: center; }
+.skin .pageContext b { color: var(--ink); font-weight: 600; font-size: 14px; }
+.skin .group { margin-bottom: 14px; }
+.skin .groupLabel, .skin .sect { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin: 18px 0 10px; display: flex; align-items: center; gap: 10px; }
+.skin .groupLabel::before, .skin .sect::before, .skin .sect::after { display: none; }
+.skin .sectNote { font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.skin--B .groupLabel, .skin--B .sect { font-size: 15px; font-weight: 700; text-transform: none; letter-spacing: 0; color: var(--ink); margin: 22px 0 12px; }
+.skin .skFine { font-size: 11.5px; color: var(--ink-3); margin-top: 28px; line-height: 1.6; }
+
+/* KPI tiles: the reference's card — ring on the left, figure on the right */
+.skin .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.skin .kpi { background: var(--card); border: 0; border-radius: 12px; padding: 14px 16px; box-shadow: 0 6px 18px rgba(20,40,70,.06); gap: 6px; overflow: visible; }
+.skin .kpi::before, .skin .kpi::after { display: none; }
+.skin .kpi:hover { box-shadow: 0 6px 18px rgba(20,40,70,.06); }
+.skin .kpiLabel { font-size: 11px; font-weight: 600; color: var(--ink-3); letter-spacing: .02em; }
+.skin .kpiFigure { gap: 12px; }
+.skin .kpiRing { width: 56px; height: 56px; margin-left: 0; }
+.skin .kpiValue { font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+.skin .kpiBreakdown { margin-top: 6px; display: flex; gap: 14px; flex-wrap: wrap; }
+.skin .kpiPartLabel { font-size: 10px; color: var(--ink-3); }
+.skin .kpiPartValue { font-size: 12px; font-weight: 700; color: var(--ink); }
+.skin .kpi.unavailable > b { color: var(--ink-3); }
+.skin .kpi.unavailable > span { color: var(--ink-3); }
+
+/* C files the tiles inside a panel, as coloured tiles */
+.skin--C .skProfileRow { display: grid; grid-template-columns: minmax(230px, 1fr) 2fr; gap: 14px; margin-bottom: 14px; }
+.skin--C .skProfile { display: flex; flex-direction: row; align-items: center; gap: 14px; padding: 16px 18px; }
+.skin--C .skAvatar--big { width: 58px; height: 58px; font-size: 17px; background: var(--c0); }
+.skin--C .skProfile b { display: block; font-size: 14px; font-weight: 600; }
+.skin--C .skProfile small { display: block; font-size: 9px; letter-spacing: .06em; color: var(--ink-3); }
+.skin--C .skProfile .meta { margin-top: 6px; font-size: 9px; font-weight: 600; color: var(--ink-2); display: flex; gap: 14px; letter-spacing: .03em; flex-wrap: wrap; }
+.skin--C .skKpiCard { padding: 16px 18px; }
+.skin--C .skKpiCard .kpis { margin-bottom: 0; grid-template-columns: repeat(auto-fit, minmax(124px, 1fr)); gap: 12px; }
+.skin--C .skKpiCard .kpi { background: var(--kpi-grad); color: #fff; padding: 10px 14px; border-radius: 10px; box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 8px 16px -8px rgba(0,0,0,.35); min-width: 0; }
+.skin--C .skKpiCard .kpiFigure { flex-wrap: wrap; gap: 8px; }
+.skin--C .skKpiCard .kpiValue { font-size: 21px; }
+.skin--C .skKpiCard .kpiRing { width: 40px; height: 40px; }
+.skin--C .skKpiCard .kpiDelta { background: rgba(255,255,255,.22); color: #fff; }
+.skin--C .skKpiCard .kpiBreakdown { gap: 8px 12px; }
+.skin--C .skKpiCard .kpi .kpiLabel, .skin--C .skKpiCard .kpi .kpiPartLabel { color: rgba(255,255,255,.88); }
+.skin--C .skKpiCard .kpi .kpiValue, .skin--C .skKpiCard .kpi .kpiPartValue, .skin--C .skKpiCard .kpi .kpiDelta { color: #fff !important; }
+.skin--C .skKpiCard .kpi .kpiRing circle:first-of-type { stroke: rgba(255,255,255,.3); }
+.skin--C .skKpiCard .kpi .kpiRing circle:last-of-type { stroke: #fff; }
+.skin--C .skKpiCard .kpi.unavailable { background: var(--card); color: var(--ink-3); box-shadow: none; border: 1px dashed var(--line); }
+@media (max-width: 900px) { .skin--C .skProfileRow { grid-template-columns: 1fr; } }
+
+/* Ask bar */
+.skin .askbar { border: 0; border-radius: 12px; background: var(--card); box-shadow: 0 6px 18px rgba(20,40,70,.06); padding: 10px 14px; }
+.skin .askbar:hover { box-shadow: 0 10px 24px rgba(20,40,70,.10); }
+.skin .askbar.locked { background: var(--soft); box-shadow: none; }
+.skin .askbar .bot, .skin .askbar .go { background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); box-shadow: 0 8px 18px -8px rgba(0,0,0,.35); }
+.skin .askbar.locked .bot, .skin .askbar.locked .go { background: var(--ink-3); box-shadow: none; }
+.skin .askbar .askKicker { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--c0); margin-bottom: 2px; }
+.skin .askbar .ph { font-style: normal; color: var(--ink-3); }
+
+/* Preview cards */
+.skin .pgallery { gap: 14px; }
+.skin .pcard { padding: 16px 18px; cursor: default; box-shadow: 0 6px 18px rgba(20,40,70,.06); border: 0; border-radius: 12px; background: var(--card); }
+.skin .pcard:hover { box-shadow: 0 10px 24px rgba(20,40,70,.10); border-color: transparent; }
+.skin .pcard::before { display: none; }
+.skin .pcardHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; cursor: pointer; }
+.skin .pcardTitle { min-width: 0; flex: 1 1 auto; }
+.skin .pcardTitle h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 8px; line-height: 1.3; }
+.skin .pcardTitle .sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 6px; }
+.skin .pcardIc { width: 24px; height: 24px; border-radius: 7px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(140deg, var(--grad-a), var(--grad-b)); flex-shrink: 0; }
+.skin .pcardHead .tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.skin .tinybtn { border: 1px solid var(--line); background: var(--card); color: var(--ink-2); font: inherit; font-size: 10px; font-weight: 600; padding: 4px 9px; border-radius: 6px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; cursor: pointer; }
+.skin .tinybtn.dark { background: #243b4a; color: #fff; border-color: #243b4a; }
+.skin--B .tinybtn.dark, .skin--C .tinybtn.dark { background: var(--c0); border-color: var(--c0); }
+.skin .ctype { appearance: none; -webkit-appearance: none; border: 1px solid var(--line); background: var(--soft); color: var(--ink-2); font: inherit; font-size: 11px; font-weight: 600; padding: 4px 20px 4px 8px; border-radius: 7px; cursor: pointer; max-width: 150px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 11px) 50%, calc(100% - 7px) 50%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+.skin .ctype:hover { color: var(--ink); border-color: var(--ink-3); }
+.skin .specPanelCompactTitle { display: none; }
+.skin .pcardMuted, .skin .pcardError { color: var(--ink-3); }
+.skin .skeleton { background: linear-gradient(90deg, var(--soft) 25%, #e9edf2 50%, var(--soft) 75%); background-size: 200% 100%; border-radius: 10px; }
+.skin .drillTrailCompact .chipbtn { border-radius: 6px; font-size: 10.5px; }
+
+/* B runs thirds, as the reference does */
+.skin--B .pcard--bar, .skin--B .pcard--donut { grid-column: span 4; }
+.skin--B .pcard--line { grid-column: span 8; }
+/* B runs thirds, as the reference does */
+.skin--B .pcard--bar, .skin--B .pcard--donut { grid-column: span 4; }
+.skin--B .pcard--line { grid-column: span 8; }
+@media (max-width: 1400px) { .skin--B .pcard, .skin--B .pcard--bar, .skin--B .pcard--donut, .skin--B .pcard--line { grid-column: span 6; } }
+@media (max-width: 980px) { .skin--B .pcard, .skin--B .pcard--bar, .skin--B .pcard--donut, .skin--B .pcard--line { grid-column: span 12; } }
+
+/* More dashboards */
+.skin .moreChip { background: var(--card); border: 0; box-shadow: 0 4px 12px rgba(20,40,70,.06); border-radius: 999px; font-weight: 600; color: var(--ink-2); }
+.skin .moreChip.clickable:hover { color: var(--ink); box-shadow: 0 6px 16px rgba(20,40,70,.10); }
+
+/* Chart legend drawn by the vivid renderer (@sap/chart-spec vivid.tsx) */
+.vividLegend { display: flex; gap: 4px 16px; flex-wrap: wrap; font-size: 11px; color: #5b6b7c; list-style: none; margin: 0 0 8px; padding: 0; justify-content: center; }
+.vividLegend li { display: inline-flex; align-items: center; gap: 6px; }
+.vividLegend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+/*
+ * A sparkline's axes, written out rather than drawn (vivid.tsx SparkAxes).
+ *
+ * Every part shrinks: these sit in card columns ~120px wide, and a row of three
+ * unshrinkable strings would widen its grid track (min-width:auto) and push the
+ * chart out of the card rather than wrap. The ends give up their text first
+ * (`min-width: 0` + ellipsis) so what survives is the measure and the axis.
+ */
+.vividSpark { display: flex; flex-direction: column; min-width: 0; }
+.vividSparkY { font-size: 9.5px; font-weight: 600; color: #8a99a8; letter-spacing: .1px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vividSparkX { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; min-width: 0; font-size: 9px; color: #9aa7b4; margin-top: 3px; }
+.vividSparkX b { flex: 0 1 auto; min-width: 0; font-weight: 600; letter-spacing: .1px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Equal shares either side, so the axis name sits dead centre under the line
+   whatever the two dates measure; and they are what gives way when it is tight. */
+.vividSparkX span { flex: 1 2 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .85; }
+.vividSparkX span:last-child { text-align: right; }
+.skin .vividSparkY { color: var(--ink-2); }
+.skin .vividSparkX { color: var(--ink-3); }
+
+.skin .specDonutLegend { color: var(--ink-2); }
+.skin .specDonutLegend .share, .skin .specDonutCenter .value { color: var(--ink); }
+.skin .specDonutCenter .label { color: var(--ink-3); }
+
+/* ───────── responsive ───────── */
+@media (max-width: 1400px) {
+  .skin .skLogo { max-width: 30px; gap: 0; margin-right: 2px; }
+  .skin .skBar a { font-size: 11px; padding: 7px 7px; gap: 5px; }
+  .skin .skBarRight .skChip { padding: 5px 10px; font-size: 11px; }
+}
+@media (max-width: 1120px) {
+  .skin .skBar a span { display: none; }
+  .skin .skBar a { padding: 8px 9px; }
+}
+@media (max-width: 900px) {
+  .thHint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skin * { animation: none !important; transition: none !important; }
+}

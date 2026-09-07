@@ -105,7 +105,11 @@ describe('a cache entry can only be reached by an identical request', () => {
     // v10 since the served catalog dropped the cards nobody can open. The list
     // rides INSIDE the cached `/api/home` value and the sidebar renders it, so
     // a warm entry would keep offering menu rows the running build withholds.
-    expect(cacheKey(BASE)).toMatch(/^sap:v10:report:fee-defaulters:[0-9a-f]{32}$/);
+    //
+    // v11 since the Dashboard's charts gained axis titles and its weeks are
+    // named by the day they started: a warm card is a set of widgets built
+    // before either, so it draws unlabelled axes and a `W36` category.
+    expect(cacheKey(BASE)).toMatch(/^sap:v11:report:fee-defaulters:[0-9a-f]{32}$/);
   });
 
   /**

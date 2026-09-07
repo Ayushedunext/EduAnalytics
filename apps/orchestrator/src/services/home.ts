@@ -41,6 +41,7 @@ import type { SessionClaims } from '../auth/session.js';
 import { withMcp, type RunMultiResult } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
 import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
+import { coalesce } from '../cache/single-flight.js';
 import { config } from '../config.js';
 import {
   DASHBOARD_DRILL_QUERY,
@@ -1079,6 +1080,104 @@ export const DASHBOARDS: readonly DashboardCard[] = [
   },
 ];
 
+/**
+ * The academic years the topbar offers, and the one the page opens on.
+ *
+ * -- Why this is not simply read off `/api/home` ------------------------------
+ * It was, and that was the single most expensive dependency on the screen. The
+ * SPA cannot request a card until it knows which year to ask for, so every
+ * Dashboard card waited on the whole KPI strip — and the strip's fee statement
+ * is an unindexed scan of `fee_compile_data_set` (see `METRIC_SQL.feesByYear`).
+ * Measured cold on the delivered extract (2026-09-06, three schools): 40.7 s
+ * during which the Dashboard could not send a single request. The year is a
+ * label; it must not cost a ledger scan to learn.
+ *
+ * -- Why students alone, and why that is not a behaviour change ---------------
+ * `buildHomeSummary` already derives its DEFAULT year from the students metric
+ * and falls back to fees only when students could not be read at all — an
+ * accountant holds `fees.read` and not `students.read`, and losing the year
+ * there would silently lose the fee figure too. This function makes exactly the
+ * same choice, so the year the page opens on is the same value by the same rule,
+ * arriving in 97 ms per school instead of behind the fee scan.
+ *
+ * The LIST can differ, and only in one direction: `buildHomeSummary` unions the
+ * years present in the fee ledger, which this does not read unless it has to.
+ * That is why the SPA keeps taking the picker's options from `/api/home` once it
+ * arrives and uses this list only to open with — the two agree on the selected
+ * year always, and on the option list once the strip has loaded.
+ */
+export interface AcademicYears {
+  readonly academic_year: string | null;
+  readonly academic_years: readonly string[];
+}
+
+export async function resolveAcademicYears(args: {
+  session: SessionClaims;
+  schoolIds: readonly string[];
+  correlationId: string;
+}): Promise<AcademicYears> {
+  const key = cacheKey({
+    kind: 'home:years',
+    schoolIds: args.schoolIds,
+    permissionClass: args.session.permission_class,
+    filters: {},
+  });
+
+  const hit = await cacheGet<AcademicYears>(key);
+  if (hit !== null) {
+    if (hit.stale) {
+      refreshInBackground(key, async () =>
+        academicYearsFresh({ ...args, correlationId: `${args.correlationId}:refresh` }, key),
+      );
+    }
+    return hit.value;
+  }
+  return coalesce(key, async () => academicYearsFresh(args, key));
+}
+
+async function academicYearsFresh(
+  args: { session: SessionClaims; schoolIds: readonly string[]; correlationId: string },
+  key: string,
+): Promise<AcademicYears> {
+  const scope = await schoolNames(args.schoolIds);
+  if (scope.length === 0) {
+    throw new PlatformError({
+      code: ERROR_CODES.TENANT_UNAVAILABLE,
+      message: 'None of the selected schools are available for analytics right now.',
+      correlationId: args.correlationId,
+    });
+  }
+
+  const years = await withMcp(args.session, args.correlationId, args.schoolIds, async (mcp) => {
+    const students = await mcp.call<RunMultiResult>('run_multi', {
+      school_ids: [...args.schoolIds],
+      sql: METRIC_SQL.studentsByYear,
+    });
+    if (outcomeOf(students).available) return yearsIn(students.rows);
+    /**
+     * Only reached when the roll could not be read at all — a permission
+     * refusal, or every school in the scope unreachable. Paying the fee scan
+     * then is the right trade: it is the difference between a page that opens
+     * and a page that cannot name a year to open on.
+     */
+    const fees = await mcp.call<RunMultiResult>('run_multi', {
+      school_ids: [...args.schoolIds],
+      sql: METRIC_SQL.feesByYear,
+    });
+    return outcomeOf(fees).available ? yearsIn(fees.rows) : [];
+  });
+
+  const resolved: AcademicYears = { academic_year: years[0] ?? null, academic_years: years };
+  /**
+   * A scope that answered with no years at all is not cached. It is the shape a
+   * total outage takes — every school refused, nothing to union — and freezing
+   * it would keep the page yearless for the length of the TTL after the replicas
+   * came back.
+   */
+  if (years.length > 0) await cacheSet(key, resolved, config.CACHE_TTL_SECONDS);
+  return resolved;
+}
+
 export async function buildHomeSummary(args: {
   session: SessionClaims;
   schoolIds: readonly string[];
@@ -1099,15 +1198,6 @@ export async function buildHomeSummary(args: {
   academicYear?: string | undefined;
   correlationId: string;
 }): Promise<HomeSummary> {
-  const scope = await schoolNames(args.schoolIds);
-  if (scope.length === 0) {
-    throw new PlatformError({
-      code: ERROR_CODES.TENANT_UNAVAILABLE,
-      message: 'None of the selected schools are available for analytics right now.',
-      correlationId: args.correlationId,
-    });
-  }
-
   /**
    * Same tier ① as the dashboards (docs/09 §4), and the same [MANDATORY]
    * permission-class component in the key (docs/08 §5): Home shows a fee total
@@ -1139,16 +1229,50 @@ export async function buildHomeSummary(args: {
      * is a full scan of `fee_compile_data_set`, and this is the screen every user
      * lands on, so without it exactly one user per TTL waits out that scan before
      * seeing anything at all.
+     *
+     * The rebuild calls `buildHomeFresh`, NOT back into this function. Re-entering
+     * here read the same stale entry the rebuild existed to replace, found its own
+     * refresh already registered for the key, and returned the stale value as the
+     * rebuild's result — so nothing was ever refreshed and the entry simply aged
+     * out, handing the next reader the full cold scan. Serve-stale only works if
+     * the rebuild path cannot see the cache.
      */
     if (hit.stale) {
       refreshInBackground(key, async () =>
-        buildHomeSummary({ ...args, correlationId: `${args.correlationId}:refresh` }),
+        buildHomeFresh({ ...args, correlationId: `${args.correlationId}:refresh` }, key),
       );
     }
     return {
       ...hit.value,
       spec: { ...hit.value.spec, meta: { ...hit.value.spec.meta, served_from: 'cache' } },
     };
+  }
+
+  /**
+   * One build per key however many readers are waiting — including the launch
+   * warm, which starts this a second before the browser asks for it and would
+   * otherwise be competing with it for the same three replica connections
+   * (cache/single-flight.ts).
+   */
+  return coalesce(key, async () => buildHomeFresh(args, key));
+}
+
+async function buildHomeFresh(
+  args: {
+    session: SessionClaims;
+    schoolIds: readonly string[];
+    academicYear?: string | undefined;
+    correlationId: string;
+  },
+  key: string,
+): Promise<HomeSummary> {
+  const scope = await schoolNames(args.schoolIds);
+  if (scope.length === 0) {
+    throw new PlatformError({
+      code: ERROR_CODES.TENANT_UNAVAILABLE,
+      message: 'None of the selected schools are available for analytics right now.',
+      correlationId: args.correlationId,
+    });
   }
 
   const { students, staff, fees, attendance } = await withMcp(

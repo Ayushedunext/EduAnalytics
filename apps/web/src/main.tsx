@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { ChartMotionProvider } from '@sap/chart-spec/react';
 import { App } from './App';
 import './tokens.css';
+import './skins.css';
+import './dashboard.css';
 
 const root = document.getElementById('root');
 if (root === null) throw new Error('#root not found');

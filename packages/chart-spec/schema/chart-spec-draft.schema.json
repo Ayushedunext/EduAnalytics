@@ -51,6 +51,37 @@
                       "warning",
                       "negative"
                     ]
+                  },
+                  "breakdown": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "string"
+                        },
+                        "tone": {
+                          "type": "string",
+                          "enum": [
+                            "neutral",
+                            "positive",
+                            "warning",
+                            "negative"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "value"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 2,
+                    "maxItems": 3
                   }
                 },
                 "required": [
@@ -210,6 +241,10 @@
                         },
                         "masked": {
                           "type": "boolean"
+                        },
+                        "sort_field": {
+                          "type": "string",
+                          "minLength": 1
                         }
                       },
                       "required": [

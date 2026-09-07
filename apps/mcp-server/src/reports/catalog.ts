@@ -2495,6 +2495,295 @@ const TREND_ANALYSIS: PredefinedReport = {
     },
   ],
 };
+/**
+ * Dashboard Overview — the statements behind the Dashboard's cards
+ * (docs/10 §1.5, adopted 2026-09-04).
+ *
+ * -- Why one report rather than pieces of eleven ------------------------------
+ * The Dashboard follows a signed-off design whose cards do not line up with the
+ * predefined reports: one card wants "late fee collected this month" beside
+ * "pending by month", another wants today's staff attendance beside new
+ * admissions. Borrowing a query key from each report would make the Dashboard's
+ * catalog a map of eleven other catalogs, and the day one of those keys was
+ * renamed for its own report's reasons, a Dashboard card would silently break.
+ * So the Dashboard has its own report, with every statement it draws named
+ * here — vetted by the same guard, scoped by the same tenant filter, capped
+ * and audited like every other statement in this file.
+ *
+ * Several statements are near-copies of ones above (attendance by month, staff
+ * present days, payment modes). That is deliberate and it is the choice
+ * PRINCIPAL_SNAPSHOT already made for the same reason: a report is a unit that
+ * is vetted, cached and explained as a whole (Invariant 6 prints THIS report's
+ * SQL under THIS card), and sharing text across reports would couple their
+ * change histories for the sake of a few saved lines.
+ *
+ * -- "Today" ------------------------------------------------------------------
+ * The design shows today's attendance. The extract is a replica that lags, a
+ * register is marked during the day, and a Sunday has no register at all — so
+ * "today" is defined as THE LATEST DAY ANYTHING WAS MARKED on or before the
+ * as-of date, and the day itself is returned so the card can say which day it
+ * is showing. Agreed with the product owner 2026-09-04.
+ *
+ * -- Fee heads --------------------------------------------------------------
+ * `componentname` is free text the ERP's users typed, so "transport" is a list
+ * of the spellings observed in the extract (agreed 2026-09-04), and "late fee"
+ * is the one head the ERP writes for it. Neither is a pattern match: a LIKE
+ * would sweep in "Transport Deposit Refund" the day someone created it.
+ *
+ * -- Late payers ------------------------------------------------------------
+ * A receipt is late when `feedate` falls after the instalment it settles ended
+ * (`installment_enddate`). A student is a late payer at two or more such
+ * receipts in the year (agreed 2026-09-04); one late receipt is an incident,
+ * two is a habit. Whether they ALSO still owe is a separate statement against
+ * the demand ledger, and the orchestrator joins the two lists by enrolment
+ * number rather than this file trying to join two ledgers that do not share a
+ * key beyond it.
+ */
+const TRANSPORT_HEADS =
+  "('Transport Fee', 'Transport Fees', 'Bus Fee', 'TPT1 FEE', 'TPT2 FEE', 'TPT3 FEE', 'TR.C')";
+
+/** One row per student-day on the latest marked day on or before the as-of date. */
+const STUDENT_LATEST_DAY =
+  '(SELECT MAX(id) AS id FROM student_attendance_data_set ' +
+  'WHERE attendancedate = (SELECT MAX(attendancedate) FROM student_attendance_data_set ' +
+  'WHERE attendancedate <= :as_of_date) ' +
+  'GROUP BY studentid, attendancedate) k ' +
+  'JOIN student_attendance_data_set a ON a.id = k.id';
+
+const STAFF_LATEST_DAY =
+  '(SELECT MAX(id) AS id FROM employee_attendance_data_set ' +
+  'WHERE attendancedate = (SELECT MAX(attendancedate) FROM employee_attendance_data_set ' +
+  'WHERE attendancedate <= :as_of_date) ' +
+  'GROUP BY employeeid, attendancedate) k ' +
+  'JOIN employee_attendance_data_set e ON e.id = k.id';
+
+const DASHBOARD_OVERVIEW: PredefinedReport = {
+  id: 'dashboard-overview',
+  title: 'Dashboard',
+  schema_version: 'erp-v1',
+  source:
+    'students_data_set · students_admission_data_set · employees_data_set · fee_compile_data_set · fee_collection_data_set · student_attendance_data_set · employee_attendance_data_set',
+  domain: 'students',
+  params: [ACADEMIC_YEAR, AS_OF_DATE, FROM_DATE, TO_DATE],
+  queries: [
+    {
+      key: 'roll',
+      description: 'Students on roll for the year, by gender',
+      sql:
+        'SELECT gender, COUNT(*) AS students FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
+        'GROUP BY gender ORDER BY students DESC',
+    },
+    {
+      key: 'staff',
+      description: 'Staff on roll as of the date',
+      sql:
+        'SELECT SUM(CASE WHEN (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'AND (joining_date IS NULL OR joining_date <= :as_of_date) THEN 1 ELSE 0 END) AS on_roll ' +
+        'FROM employees_data_set',
+    },
+    {
+      key: 'admissions',
+      description: 'Candidates and admissions so far this year',
+      sql:
+        'SELECT COUNT(*) AS candidates, ' +
+        "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
+        'FROM students_admission_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      key: 'fees',
+      description: "The year's demand, what was realised against it, and the balance",
+      sql:
+        'SELECT ROUND(SUM(total_payable_amount)) AS payable, ' +
+        'ROUND(SUM(paid_amount)) AS paid, ROUND(SUM(balance_amount)) AS balance ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      key: 'overdue',
+      description: 'Students carrying an overdue balance as of the date, and what they owe',
+      sql:
+        'SELECT COUNT(DISTINCT enrollmentno) AS defaulters, ROUND(SUM(balance_amount)) AS outstanding ' +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        'AND balance_amount > 0 AND periodtodate < :as_of_date',
+    },
+    {
+      key: 'heads',
+      description: 'Receipts for the year, and how much of them was late fee and transport fee',
+      sql:
+        'SELECT ROUND(SUM(paidamount)) AS received, ' +
+        "ROUND(SUM(CASE WHEN componentname = 'Late Fee' THEN paidamount ELSE 0 END)) AS late_fee, " +
+        `ROUND(SUM(CASE WHEN componentname IN ${TRANSPORT_HEADS} THEN paidamount ELSE 0 END)) AS transport ` +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      key: 'heads_by_month',
+      description: 'Receipts by month, with the late fee and transport fee within them',
+      sql:
+        'SELECT fee_month, MIN(MONTH(feedate)) AS mo, ROUND(SUM(paidamount)) AS received, ' +
+        "ROUND(SUM(CASE WHEN componentname = 'Late Fee' THEN paidamount ELSE 0 END)) AS late_fee, " +
+        `ROUND(SUM(CASE WHEN componentname IN ${TRANSPORT_HEADS} THEN paidamount ELSE 0 END)) AS transport ` +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+        'GROUP BY fee_month ORDER BY mo',
+    },
+    {
+      key: 'receipts_by_week',
+      description: 'Receipts by ISO week',
+      sql:
+        "SELECT DATE_FORMAT(feedate, '%x-W%v') AS week, MIN(YEARWEEK(feedate, 3)) AS seq, " +
+        'ROUND(SUM(paidamount)) AS received ' +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+        "GROUP BY DATE_FORMAT(feedate, '%x-W%v') ORDER BY seq",
+    },
+    {
+      key: 'pending_by_month',
+      description: 'Balance still owed, by the month the fee was demanded for',
+      sql:
+        "SELECT DATE_FORMAT(periodfromdate, '%Y-%m') AS ym, ROUND(SUM(balance_amount)) AS pending " +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        'AND periodfromdate IS NOT NULL AND balance_amount > 0 ' +
+        "GROUP BY DATE_FORMAT(periodfromdate, '%Y-%m') ORDER BY ym",
+    },
+    {
+      key: 'by_mode',
+      description: 'Receipts by payment mode',
+      sql:
+        'SELECT paymenttype, ROUND(SUM(paidamount)) AS collected ' +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+        'GROUP BY paymenttype ORDER BY collected DESC',
+    },
+    {
+      key: 'collected_by_year',
+      description: 'Receipts by academic year, over all recorded history',
+      sql:
+        'SELECT academicyearname AS ay, ROUND(SUM(paidamount)) AS collected ' +
+        'FROM fee_collection_data_set GROUP BY ay ORDER BY ay',
+    },
+    {
+      key: 'billed_by_year',
+      description: 'Demand raised by academic year, over all recorded history',
+      sql:
+        'SELECT academicyearname AS ay, ROUND(SUM(total_payable_amount)) AS payable ' +
+        'FROM fee_compile_data_set GROUP BY ay ORDER BY ay',
+    },
+    {
+      key: 'students_by_year',
+      description: 'Students on roll by academic year, over all recorded history',
+      sql:
+        'SELECT academicyearname AS ay, COUNT(DISTINCT studentid) AS students ' +
+        'FROM students_data_set GROUP BY ay ORDER BY ay',
+    },
+    {
+      key: 'att_status',
+      description: 'What the student register recorded over the window, unbucketed',
+      sql:
+        'SELECT a.statusname, COUNT(*) AS days FROM ' + STUDENT_DAYS +
+        ' GROUP BY a.statusname ORDER BY days DESC',
+    },
+    {
+      key: 'att_by_month',
+      description: 'Marked and present student-days by month',
+      sql:
+        'SELECT LEFT(a.attendancedate, 7) AS month, ' + MONTH_SEQ +
+        ", COUNT(*) AS marked_days, SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' + STUDENT_DAYS +
+        ' GROUP BY LEFT(a.attendancedate, 7) ORDER BY seq',
+    },
+    {
+      key: 'att_by_week',
+      description: 'Marked and present student-days by ISO week',
+      sql:
+        "SELECT DATE_FORMAT(a.attendancedate, '%x-W%v') AS week, MIN(YEARWEEK(a.attendancedate, 3)) AS seq, " +
+        "COUNT(*) AS marked_days, SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' + STUDENT_DAYS +
+        " GROUP BY DATE_FORMAT(a.attendancedate, '%x-W%v') ORDER BY seq",
+    },
+    {
+      key: 'att_today',
+      description: 'The student register on the latest marked day on or before the as-of date',
+      sql:
+        'SELECT a.attendancedate AS day, COUNT(*) AS marked_days, ' +
+        "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days, " +
+        "SUM(CASE WHEN a.statusname = 'Absent' THEN 1 ELSE 0 END) AS absent_days " +
+        'FROM ' + STUDENT_LATEST_DAY +
+        ' GROUP BY a.attendancedate',
+    },
+    {
+      key: 'staff_today',
+      description: 'The staff register on the latest marked day on or before the as-of date',
+      sql:
+        'SELECT e.attendancedate AS day, COUNT(*) AS marked_days, ' +
+        "SUM(CASE WHEN e.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days, " +
+        "SUM(CASE WHEN e.statusname = 'Absent' THEN 1 ELSE 0 END) AS absent_days " +
+        'FROM ' + STAFF_LATEST_DAY +
+        ' GROUP BY e.attendancedate',
+    },
+    {
+      key: 'staff_by_month',
+      description: 'Marked and present staff-days by month',
+      sql:
+        'SELECT LEFT(e.attendancedate, 7) AS month, ' +
+        'MIN(LEFT(e.attendancedate, 4) * 100 + SUBSTRING(e.attendancedate, 6, 2)) AS seq, ' +
+        "COUNT(*) AS marked_days, SUM(CASE WHEN e.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' + STAFF_DAYS +
+        ' GROUP BY LEFT(e.attendancedate, 7) ORDER BY seq',
+    },
+    {
+      /**
+       * Twenty marked days is the floor: a child marked twice and present twice
+       * is at 100% and tells a Director nothing. The floor is stated on the
+       * card, and `marked_days` is a column so the basis of every rate is
+       * visible beside it.
+       */
+      key: 'top_attendance',
+      description: 'Students with the highest attendance over the window (at least 20 marked days)',
+      sql:
+        'SELECT a.studentname, a.enrollmentno, a.classname, a.sectionname, ' +
+        'COUNT(*) AS marked_days, ' +
+        "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' + STUDENT_DAYS +
+        ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname ' +
+        'HAVING COUNT(*) >= 20 ' +
+        "ORDER BY SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) / COUNT(*) DESC, " +
+        'marked_days DESC LIMIT 4',
+    },
+    {
+      key: 'late_payers',
+      description: 'Students with two or more receipts paid after the instalment ended',
+      sql:
+        'SELECT studentname, enrollmentno, classname, sectionname, COUNT(*) AS receipts, ' +
+        'SUM(CASE WHEN feedate > installment_enddate THEN 1 ELSE 0 END) AS late_payments ' +
+        'FROM fee_collection_data_set ' +
+        'WHERE academicyearname = :academic_year AND installment_enddate IS NOT NULL ' +
+        'GROUP BY enrollmentno, studentname, classname, sectionname ' +
+        'HAVING SUM(CASE WHEN feedate > installment_enddate THEN 1 ELSE 0 END) >= 2 ' +
+        'ORDER BY late_payments DESC LIMIT 50',
+    },
+    {
+      key: 'pending_students',
+      description: 'Students carrying a balance, largest first, with how much of it is overdue',
+      sql:
+        'SELECT studentname, enrollmentno, classname, sectionname, ' +
+        'ROUND(SUM(balance_amount)) AS balance, ' +
+        'ROUND(SUM(CASE WHEN periodtodate < :as_of_date THEN balance_amount ELSE 0 END)) AS overdue ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'GROUP BY enrollmentno, studentname, classname, sectionname ' +
+        'ORDER BY balance DESC LIMIT 50',
+    },
+    {
+      key: 'late_by_week',
+      description: 'Students who paid late, by the ISO week the late receipt was taken',
+      sql:
+        "SELECT DATE_FORMAT(feedate, '%x-W%v') AS week, MIN(YEARWEEK(feedate, 3)) AS seq, " +
+        'COUNT(DISTINCT enrollmentno) AS students ' +
+        'FROM fee_collection_data_set ' +
+        'WHERE academicyearname = :academic_year AND installment_enddate IS NOT NULL ' +
+        'AND feedate > installment_enddate ' +
+        "GROUP BY DATE_FORMAT(feedate, '%x-W%v') ORDER BY seq",
+    },
+  ],
+};
+
 const REPORTS: readonly PredefinedReport[] = [
   ENROLLMENT_OVERVIEW,
   FEE_COMPARATIVE,
@@ -2509,6 +2798,7 @@ const REPORTS: readonly PredefinedReport[] = [
   TRANSPORT_ANALYTICS,
   LIBRARY_TEXTBOOKS,
   TREND_ANALYSIS,
+  DASHBOARD_OVERVIEW,
 ];
 
 const BY_ID = new Map(REPORTS.map((report) => [report.id, report]));

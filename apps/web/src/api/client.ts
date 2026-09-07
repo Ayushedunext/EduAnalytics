@@ -413,6 +413,26 @@ export function drillReport(
  * app open on a year each school actually has, and what keeps the response
  * cacheable under the key every user of that school shares.
  */
+/**
+ * The academic years this scope has, and the one to open on.
+ *
+ * A separate, cheap request rather than a field of `getHome`, because the year
+ * gates the whole Dashboard: no card can be asked for until one is known, and
+ * `/api/home` cannot answer quickly (it scans the fee ledger for its arrears
+ * tile). Both are fired together on load; the cards start on this one.
+ */
+export interface HomeYears {
+  academic_year: string | null;
+  academic_years: string[];
+}
+
+export function getHomeYears(schoolIds: readonly string[]): Promise<HomeYears> {
+  const query = new URLSearchParams();
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  const suffix = query.toString();
+  return request<HomeYears>(`/api/home/years${suffix === '' ? '' : `?${suffix}`}`);
+}
+
 export function getHome(
   schoolIds: readonly string[],
   academicYear?: string,
@@ -959,4 +979,28 @@ export async function askAI(
     }
   }
   if (buffer.trim() !== '') onEvent(JSON.parse(buffer) as AskAiEvent);
+}
+
+// -- The Dashboard's cards (docs/10 §1.5) --------------------------------------
+
+/** One card of the Dashboard — services/overview.ts. Widgets validate in the renderer (§10). */
+export interface OverviewSlot {
+  key: string;
+  widgets: unknown[];
+  status: 'ok' | 'blocked';
+  reason?: string;
+  notes: string[];
+  queries: { key: string; description: string; sql: string }[];
+  degraded_schools: { school_id: string; message: string }[];
+  as_of: string;
+}
+
+export function getOverviewSlot(
+  schoolIds: readonly string[],
+  academicYear: string,
+  slot: string,
+): Promise<OverviewSlot> {
+  const query = new URLSearchParams({ academic_year: academicYear });
+  if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
+  return request<OverviewSlot>(`/api/home/overview/${encodeURIComponent(slot)}?${query.toString()}`);
 }

@@ -18,7 +18,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
-import { buildHomePreview, buildHomeSummary, gridSlot } from '../services/home.js';
+import { buildHomePreview, buildHomeSummary, gridSlot, resolveAcademicYears } from '../services/home.js';
+import { buildOverviewSlot, isOverviewSlot } from '../services/overview.js';
 import { isDashboardId } from '../services/dashboards.js';
 import { ACADEMIC_YEAR, AS_OF_DATE, isRealDate, today } from './report.js';
 
@@ -102,6 +103,39 @@ homeRouter.get('/api/home', (req: Request, res: Response, next: NextFunction): v
  * unavailable dashboard is not a failed request (ADR-011). An id that is not a
  * previewable dashboard at all IS an error — that is a caller bug, not a state.
  */
+/**
+ * GET /api/home/years -- which academic years this scope has, and which to open on.
+ *
+ * Split out of `/api/home` because it gates the entire Dashboard: no card can be
+ * requested until a year is known, and `/api/home` cannot answer in under a
+ * second (its fee statement is an unindexed scan). See `resolveAcademicYears`
+ * for why answering from the roll alone gives the same year by the same rule.
+ *
+ * Same scope treatment as every other read: the school set comes from the
+ * verified session via `resolveRequestedSchools`, never from the query string
+ * unchecked (ADR-007).
+ */
+homeRouter.get('/api/home/years', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const session = req.session;
+    if (session === undefined) {
+      throw new PlatformError({
+        code: ERROR_CODES.SESSION_INVALID,
+        message: 'Please open Analytics from the ERP menu.',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const schoolIds = await resolveRequestedSchools(req);
+    const years = await resolveAcademicYears({
+      session,
+      schoolIds,
+      correlationId: req.correlationId,
+    });
+    res.json(years);
+  })().catch(next);
+});
+
 homeRouter.get('/api/home/preview/:key', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     const session = req.session;
@@ -166,5 +200,69 @@ homeRouter.get('/api/home/preview/:key', (req: Request, res: Response, next: Nex
     });
 
     res.json(preview);
+  })().catch(next);
+});
+
+/**
+ * One card of the Dashboard (docs/10 §1.5), by slot — services/overview.ts.
+ *
+ * Shaped exactly like `/api/home/preview/:key` and for the same reason: every
+ * card is its own request, so the page fills as each one lands, and a card
+ * that cannot be built answers 200 with `status: 'blocked'` and its reason
+ * rather than failing the request (ADR-011).
+ */
+homeRouter.get('/api/home/overview/:slot', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const session = req.session;
+    if (session === undefined) {
+      throw new PlatformError({
+        code: ERROR_CODES.SESSION_INVALID,
+        message: 'Please open Analytics from the ERP menu.',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const rawSlot = req.params['slot'];
+    const slot = typeof rawSlot === 'string' ? rawSlot : '';
+    if (!isOverviewSlot(slot)) {
+      throw new PlatformError({
+        code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
+        message: 'That dashboard card does not exist.',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const rawYear = req.query['academic_year'];
+    const academicYear = typeof rawYear === 'string' ? rawYear : '';
+    if (!ACADEMIC_YEAR.test(academicYear)) {
+      throw new PlatformError({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'academic_year must look like "2026-27".',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const rawAsOf = req.query['as_of'];
+    const asOfDate = typeof rawAsOf === 'string' && rawAsOf !== '' ? rawAsOf : today();
+    if (!AS_OF_DATE.test(asOfDate) || !isRealDate(asOfDate)) {
+      throw new PlatformError({
+        code: ERROR_CODES.VALIDATION_FAILED,
+        message: 'as_of must be a real date, YYYY-MM-DD.',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const schoolIds = await resolveRequestedSchools(req);
+
+    const card = await buildOverviewSlot({
+      session,
+      schoolIds,
+      slot,
+      academicYear,
+      asOfDate,
+      correlationId: req.correlationId,
+    });
+
+    res.json(card);
   })().catch(next);
 });

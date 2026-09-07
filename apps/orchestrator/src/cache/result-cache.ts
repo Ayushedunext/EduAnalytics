@@ -216,6 +216,14 @@ export function cacheKey(parts: {
     filters: Object.fromEntries(Object.entries(parts.filters).sort(([a], [b]) => a.localeCompare(b))),
   });
   /**
+   * v11 (2026-09-07): axis titles on the Dashboard's charts, and weeks named by
+   * the day they started. A cached card carries the WIDGETS as they were built,
+   * so a warm key keeps serving line widgets with no `x_title`/`y_title` (the
+   * chart draws exactly as it did, unlabelled) and week categories still reading
+   * `W36`, with the KPI part still labelled `Week` — which the tile now looks up
+   * as `Week of` and therefore prints as nothing at all. Deserialises perfectly,
+   * screen is wrong: the case this digit exists for.
+   *
    * v10 (2026-09-01): the served catalog. `/api/home`'s cached value CARRIES the
    * dashboard list (`HomeSummary.dashboards`), which the sidebar renders
    * directly — so `servedDashboards` withholding the unopenable cards changes
@@ -233,7 +241,7 @@ export function cacheKey(parts: {
    * chart under the new title. Nothing fails; the screen is just wrong, which is
    * exactly the failure this digit exists for.
    */
-  return `sap:v10:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
+  return `sap:v11:${parts.kind}:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`;
 }
 
 /**

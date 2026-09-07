@@ -36,7 +36,6 @@
 .thLbl { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
 .thSeg { display: inline-flex; background: var(--soft); border-radius: 10px; padding: 3px; gap: 3px; vertical-align: middle; }
 .thSeg button { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-weight: 600; font-size: 12px; padding: 7px 14px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
-.thSeg button .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; }
 .thSeg button.on { background: var(--card); color: var(--ink); box-shadow: 0 2px 6px rgba(0,0,0,.08); }
 .thColour { display: flex; align-items: center; }
 .thSwatches { display: inline-flex; gap: 6px; align-items: center; }
@@ -208,6 +207,25 @@
 .vividLegend { display: flex; gap: 4px 16px; flex-wrap: wrap; font-size: 11px; color: #5b6b7c; list-style: none; margin: 0 0 8px; padding: 0; justify-content: center; }
 .vividLegend li { display: inline-flex; align-items: center; gap: 6px; }
 .vividLegend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+/*
+ * A sparkline's axes, written out rather than drawn (vivid.tsx SparkAxes).
+ *
+ * Every part shrinks: these sit in card columns ~120px wide, and a row of three
+ * unshrinkable strings would widen its grid track (min-width:auto) and push the
+ * chart out of the card rather than wrap. The ends give up their text first
+ * (`min-width: 0` + ellipsis) so what survives is the measure and the axis.
+ */
+.vividSpark { display: flex; flex-direction: column; min-width: 0; }
+.vividSparkY { font-size: 9.5px; font-weight: 600; color: #8a99a8; letter-spacing: .1px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vividSparkX { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; min-width: 0; font-size: 9px; color: #9aa7b4; margin-top: 3px; }
+.vividSparkX b { flex: 0 1 auto; min-width: 0; font-weight: 600; letter-spacing: .1px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Equal shares either side, so the axis name sits dead centre under the line
+   whatever the two dates measure; and they are what gives way when it is tight. */
+.vividSparkX span { flex: 1 2 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .85; }
+.vividSparkX span:last-child { text-align: right; }
+.skin .vividSparkY { color: var(--ink-2); }
+.skin .vividSparkX { color: var(--ink-3); }
+
 .skin .specDonutLegend { color: var(--ink-2); }
 .skin .specDonutLegend .share, .skin .specDonutCenter .value { color: var(--ink); }
 .skin .specDonutCenter .label { color: var(--ink-3); }

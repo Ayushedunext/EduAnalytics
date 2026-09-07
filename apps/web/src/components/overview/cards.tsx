@@ -324,9 +324,16 @@ export function SparkCard({ state, kpiId, lineId, className, slot, title }: { st
       <Slot state={state}>
         {(widgets) => {
           const k = kpiOf(widgets, kpiId);
+          const week = partOf(k, 'Week of');
           return (
             <>
-              <div className="val">{k?.value ?? '—'} <small style={{ fontWeight: 500, color: 'var(--ink-3)', fontSize: 10 }}>{partOf(k, 'Week') ?? ''}</small></div>
+              <div className="val">
+                {k?.value ?? '—'}{' '}
+                {/* The week the figure is FOR, spelled out: the tile used to print the ISO ordinal ("W36"). */}
+                <small style={{ fontWeight: 500, color: 'var(--ink-3)', fontSize: 10 }}>
+                  {week === undefined ? '' : `week of ${week}`}
+                </small>
+              </div>
               <div className="chart">
                 <Chart widget={widget} type={type} slot={slot} spark />
               </div>
@@ -370,11 +377,16 @@ export function TopSchoolsCard({ state, onOpen }: { state: SlotState | undefined
   );
 }
 
+/**
+ * The four minis of the fee-activity grid, in palette slots. Each names itself
+ * from its own `y_title` ("Received (₹)"), so nothing is written over them
+ * here — a card-side label beside the spec's would be the same word twice.
+ */
 const ACTIVITY = [
-  ['line-received', 'Received', 3],
-  ['line-late', 'Late fee', 1],
-  ['line-transport', 'Transport fee', 2],
-  ['line-pending', 'Pending', 0],
+  ['line-received', 3],
+  ['line-late', 1],
+  ['line-transport', 2],
+  ['line-pending', 0],
 ] as const;
 
 export function FeeHeadsCard({ state }: { state: SlotState | undefined }): ReactElement {
@@ -397,9 +409,8 @@ export function FeeHeadsCard({ state }: { state: SlotState | undefined }): React
             <div>
               <div className="actsTitle">Fee activity by month</div>
               <div className="acts">
-                {ACTIVITY.map(([id, label, slot]) => (
+                {ACTIVITY.map(([id, slot]) => (
                   <div key={id} className="sparkChart">
-                    <div className="a">{label}</div>
                     <Chart widget={lineOf(widgets, id)} type="area" slot={slot} spark />
                   </div>
                 ))}

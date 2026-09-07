@@ -422,7 +422,7 @@ function buildMonthly(merged: Merged): Built {
   if (!merged.succeeded('heads_by_month')) return { widgets: [] };
   return {
     widgets: [
-      { id: 'bar-month', type: 'bar', title: 'Fee receipts by month', x: 'month', y: 'received', data: monthlyHeads(merged).map((r) => ({ month: r['month'] as string, received: num(r['received']) })) },
+      { id: 'bar-month', type: 'bar', title: 'Fee receipts by month', x: 'month', y: 'received', x_title: 'Month', y_title: 'Fee received (₹)', data: monthlyHeads(merged).map((r) => ({ month: r['month'] as string, received: num(r['received']) })) },
     ],
   };
 }
@@ -433,31 +433,35 @@ function weekly(merged: Merged, key: string, fields: string[]): Record<string, u
 
 function buildWeeklyReceipts(merged: Merged): Built {
   if (!merged.succeeded('receipts_by_week')) return { widgets: [] };
-  const rows = weekly(merged, 'receipts_by_week', ['received']).map((r) => ({ week: weekLabel(String(r['week'])), received: num(r['received']) }));
+  const raw = weekly(merged, 'receipts_by_week', ['received']);
+  const rows = raw.map((r) => ({ week: weekLabel(String(r['week'])), received: num(r['received']) }));
+  const lastWeek = raw[raw.length - 1];
   const last = rows[rows.length - 1];
   return {
     widgets: [
       kpi('kpi-week-receipts', 'Weekly receipts', rupees(last === undefined ? 0 : last.received), {
-        breakdown: parts([['Week', last?.week ?? '—'], ['Weeks recorded', count(rows.length)]]),
+        breakdown: parts([['Week of', lastWeek === undefined ? '—' : weekLabel(String(lastWeek['week']), true)], ['Weeks recorded', count(rows.length)]]),
       }),
-      { id: 'line-week-receipts', type: 'line', title: 'Receipts by week', x: 'week', y: 'received', data: rows },
+      { id: 'line-week-receipts', type: 'line', title: 'Receipts by week', x: 'week', y: 'received', x_title: 'Week starting', y_title: 'Fee received (₹)', data: rows },
     ],
   };
 }
 
 function buildWeeklyAttendance(merged: Merged): Built {
   if (!merged.succeeded('att_by_week')) return { widgets: [] };
-  const rows = weekly(merged, 'att_by_week', ['marked_days', 'present_days']).map((r) => ({
+  const raw = weekly(merged, 'att_by_week', ['marked_days', 'present_days']);
+  const rows = raw.map((r) => ({
     week: weekLabel(String(r['week'])),
     rate: pctValue(share(num(r['present_days']), num(r['marked_days']))),
   }));
+  const lastWeek = raw[raw.length - 1];
   const last = rows[rows.length - 1];
   return {
     widgets: [
       kpi('kpi-week-attendance', 'Weekly attendance', last === undefined ? '—' : `${String(last.rate)}%`, {
-        breakdown: parts([['Week', last?.week ?? '—'], ['Weeks marked', count(rows.length)]]),
+        breakdown: parts([['Week of', lastWeek === undefined ? '—' : weekLabel(String(lastWeek['week']), true)], ['Weeks marked', count(rows.length)]]),
       }),
-      { id: 'line-week-attendance', type: 'line', title: 'Student attendance by week, %', x: 'week', y: 'rate', data: rows },
+      { id: 'line-week-attendance', type: 'line', title: 'Student attendance by week, %', x: 'week', y: 'rate', x_title: 'Week starting', y_title: 'Students present (%)', data: rows },
     ],
   };
 }
@@ -527,18 +531,28 @@ function buildFeeHeads(merged: Merged): Built {
   }
   if (merged.succeeded('heads_by_month')) {
     const months = monthlyHeads(merged);
-    const series = (id: string, title: string, field: string): Widget => ({
+    /**
+     * These four draw side by side under one "Fee activity by month" heading
+     * (cards.tsx `FeeHeadsCard`), in a column about 120px wide. So the measure
+     * is named short — it is the mini's only label — and no `x_title` repeats
+     * "Month" four times under a heading that already says it; the first and
+     * last month still print under each line.
+     */
+    const series = (id: string, title: string, field: string, measure: string): Widget => ({
       id, type: 'line', title, x: 'month', y: field,
+      y_title: measure,
       data: months.map((r) => ({ month: r['month'] as string, [field]: num(r[field]) })),
     });
-    widgets.push(series('line-received', 'Received by month', 'received'));
-    widgets.push(series('line-late', 'Late fee by month', 'late_fee'));
-    widgets.push(series('line-transport', 'Transport fee by month', 'transport'));
+    widgets.push(series('line-received', 'Received by month', 'received', 'Received (₹)'));
+    widgets.push(series('line-late', 'Late fee by month', 'late_fee', 'Late fee (₹)'));
+    widgets.push(series('line-transport', 'Transport fee by month', 'transport', 'Transport (₹)'));
   }
   if (merged.succeeded('pending_by_month')) {
     const rows = merged.sumBy('pending_by_month', 'ym', ['pending']).sort((a, b) => String(a['ym']).localeCompare(String(b['ym'])));
     widgets.push({
       id: 'line-pending', type: 'line', title: 'Pending by month demanded for', x: 'month', y: 'pending',
+      /* The one mini whose months are NOT the months money arrived in. */
+      x_title: 'Month demanded', y_title: 'Pending (₹)',
       data: rows.map((r) => ({ month: ymLabel(String(r['ym'])), pending: num(r['pending']) })),
     });
   }
@@ -567,7 +581,7 @@ function buildYears(merged: Merged): Built {
     if (c !== undefined) rows.push({ year, measure: 'Collected', amount: c.value });
   }
   return {
-    widgets: [{ id: 'line-years', type: 'line', title: 'Billed and collected, year by year', x: 'year', y: 'amount', series: 'measure', data: rows }],
+    widgets: [{ id: 'line-years', type: 'line', title: 'Billed and collected, year by year', x: 'year', y: 'amount', series: 'measure', x_title: 'Academic year', y_title: 'Amount (₹)', data: rows }],
     notes: ['Billed comes from the demand ledger, which the extract holds from 2024-25; collected comes from the receipt ledger, which reaches further back.'],
   };
 }
@@ -575,7 +589,7 @@ function buildYears(merged: Merged): Built {
 function buildStudentsByYear(merged: Merged): Built {
   if (!merged.succeeded('students_by_year')) return { widgets: [] };
   const rows = byYear(merged.sumBy('students_by_year', 'ay', ['students']), 'students');
-  return { widgets: [{ id: 'bar-years', type: 'bar', title: 'Students on roll, year by year', x: 'year', y: 'students', data: rows.map((r) => ({ year: r.year, students: r.value })) }] };
+  return { widgets: [{ id: 'bar-years', type: 'bar', title: 'Students on roll, year by year', x: 'year', y: 'students', x_title: 'Academic year', y_title: 'Students on roll', data: rows.map((r) => ({ year: r.year, students: r.value })) }] };
 }
 
 function buildAttStatus(merged: Merged): Built {
@@ -754,15 +768,15 @@ function buildPendingTop(merged: Merged): Built {
 function buildArea(merged: Merged): Built {
   const widgets: Widget[] = [];
   if (merged.succeeded('heads_by_month')) {
-    widgets.push({ id: 'line-receipts', type: 'line', title: 'Fee receipts', x: 'month', y: 'received', data: monthlyHeads(merged).map((r) => ({ month: r['month'] as string, received: num(r['received']) })) });
+    widgets.push({ id: 'line-receipts', type: 'line', title: 'Fee receipts', x: 'month', y: 'received', x_title: 'Month', y_title: 'Fee received (₹)', data: monthlyHeads(merged).map((r) => ({ month: r['month'] as string, received: num(r['received']) })) });
   }
   if (merged.succeeded('staff_by_month')) {
     const rows = merged.sumBy('staff_by_month', 'month', ['marked_days', 'present_days'], 'seq');
-    widgets.push({ id: 'line-staff', type: 'line', title: 'Present staff-days', x: 'month', y: 'present', data: rows.map((r) => ({ month: ymLabel(String(r['month'])), present: num(r['present_days']) })) });
+    widgets.push({ id: 'line-staff', type: 'line', title: 'Present staff-days', x: 'month', y: 'present', x_title: 'Month', y_title: 'Staff-days present', data: rows.map((r) => ({ month: ymLabel(String(r['month'])), present: num(r['present_days']) })) });
   }
   if (merged.succeeded('att_by_month')) {
     const rows = merged.sumBy('att_by_month', 'month', ['marked_days', 'present_days'], 'seq');
-    widgets.push({ id: 'line-attendance', type: 'line', title: 'Student attendance, %', x: 'month', y: 'rate', data: rows.map((r) => ({ month: ymLabel(String(r['month'])), rate: pctValue(share(num(r['present_days']), num(r['marked_days']))) })) });
+    widgets.push({ id: 'line-attendance', type: 'line', title: 'Student attendance, %', x: 'month', y: 'rate', x_title: 'Month', y_title: 'Students present (%)', data: rows.map((r) => ({ month: ymLabel(String(r['month'])), rate: pctValue(share(num(r['present_days']), num(r['marked_days']))) })) });
   }
   return { widgets };
 }
@@ -775,12 +789,14 @@ function buildModes(merged: Merged): Built {
 
 function buildLateWeekly(merged: Merged): Built {
   if (!merged.succeeded('late_by_week')) return { widgets: [] };
-  const rows = weekly(merged, 'late_by_week', ['students']).map((r) => ({ week: weekLabel(String(r['week'])), students: num(r['students']) }));
+  const raw = weekly(merged, 'late_by_week', ['students']);
+  const rows = raw.map((r) => ({ week: weekLabel(String(r['week'])), students: num(r['students']) }));
+  const lastWeek = raw[raw.length - 1];
   const last = rows[rows.length - 1];
   return {
     widgets: [
-      kpi('kpi-late-week', 'Students paying late', count(last === undefined ? 0 : last.students), { tone: 'warning', breakdown: parts([['Week', last?.week ?? '—'], ['Weeks with late receipts', count(rows.length)]]) }),
-      { id: 'line-late-week', type: 'line', title: 'Students paying late, by week', x: 'week', y: 'students', data: rows },
+      kpi('kpi-late-week', 'Students paying late', count(last === undefined ? 0 : last.students), { tone: 'warning', breakdown: parts([['Week of', lastWeek === undefined ? '—' : weekLabel(String(lastWeek['week']), true)], ['Weeks with late receipts', count(rows.length)]]) }),
+      { id: 'line-late-week', type: 'line', title: 'Students paying late, by week', x: 'week', y: 'students', x_title: 'Week starting', y_title: 'Students paying late', data: rows },
     ],
     notes: ['A student is counted in the week a receipt was taken after its instalment had ended. The same student can appear in several weeks.'],
   };
@@ -847,10 +863,38 @@ function ymLabel(ym: string): string {
   return `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${(m[1] ?? '').slice(2)}`;
 }
 
-/** `2026-W18` → `W18`. The year is the card's; the week is what changes. */
-function weekLabel(week: string): string {
-  const m = /-W(\d{2})$/.exec(week);
-  return m === null ? week : `W${m[1]}`;
+/**
+ * `2026-W18` → `27 Apr`: the Monday the week began.
+ *
+ * It used to render `W18`, which is what the ISO string carries and what
+ * nobody outside a finance team reads. A reader hovering the weekly sparkline
+ * was told "W14" and had no way to turn that into a date; the week's own start
+ * date needs no key. `full` adds the year, for the one place that states a
+ * single week rather than a run of them (the KPI line under the figure), where
+ * an academic year crossing January makes `5 Jan` ambiguous on its own.
+ */
+function weekLabel(week: string, full = false): string {
+  const m = /^(\d{4})-W(\d{2})$/.exec(week);
+  if (m === null) return week;
+  const start = isoWeekStart(Number(m[1]), Number(m[2]));
+  const day = String(start.getUTCDate());
+  const month = MONTHS[start.getUTCMonth()] ?? '';
+  return full ? `${day} ${month} ${String(start.getUTCFullYear())}` : `${day} ${month}`;
+}
+
+/**
+ * The Monday of ISO week `week` in ISO year `year`, in UTC.
+ *
+ * ISO week 1 is the week holding 4 January (the definition MySQL's
+ * `DATE_FORMAT(..., '%x-W%v')` emits), so the year's first Monday is 4 January
+ * minus its own weekday, and week N starts N-1 weeks after that.
+ */
+function isoWeekStart(year: number, week: number): Date {
+  const DAY = 86_400_000;
+  const jan4 = Date.UTC(year, 0, 4);
+  const weekday = new Date(jan4).getUTCDay(); /* 0 = Sunday */
+  const monday1 = jan4 - ((weekday === 0 ? 7 : weekday) - 1) * DAY;
+  return new Date(monday1 + (week - 1) * 7 * DAY);
 }
 
 function dateLabel(iso: string): string {

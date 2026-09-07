@@ -46,6 +46,7 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
+  Label,
   Line,
   Pie,
   PieChart,
@@ -324,10 +325,17 @@ function VividTooltip({
   active,
   label,
   payload,
+  xTitle,
 }: {
   readonly active?: boolean;
   readonly label?: string | number;
   readonly payload?: readonly TipEntry[];
+  /**
+   * What the hovered category IS ("Week starting"). A sparkline has no visible
+   * axis, so without this the heading is a bare "6 Apr" and the reader has to
+   * infer what a point on the line stands for.
+   */
+  readonly xTitle?: string | undefined;
 }): ReactElement | null {
   if (active !== true || payload === undefined || payload.length === 0) return null;
   const heading = label ?? payload[0]?.name;
@@ -344,6 +352,9 @@ function VividTooltip({
   });
   return (
     <div style={TIP_STYLE}>
+      {xTitle !== undefined && (
+        <div style={{ opacity: 0.7, fontSize: 10, letterSpacing: 0.2 }}>{xTitle}</div>
+      )}
       {heading !== undefined && <div style={{ fontWeight: 600, marginBottom: 4 }}>{String(heading)}</div>}
       {rows.map((entry, index) => (
         <div key={`${String(entry.dataKey ?? entry.name ?? '')}-${String(index)}`} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -362,6 +373,56 @@ function VividTooltip({
           <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{fullNum.format(Number(entry.value))}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * An axis title, drawn by Recharts inside the axis band.
+ *
+ * `null` when the spec left the title out, so the axis keeps exactly the height
+ * it had before this existed and no chart moves for a title it does not have.
+ */
+function axisTitle(text: string | undefined, side: 'bottom' | 'left'): ReactElement | null {
+  if (text === undefined) return null;
+  return (
+    <Label
+      value={text}
+      position={side === 'bottom' ? 'insideBottom' : 'insideLeft'}
+      offset={side === 'bottom' ? -2 : 0}
+      {...(side === 'left' ? { angle: -90 as const } : {})}
+      style={{ fill: INK_3, fontSize: 10, fontWeight: 600, textAnchor: 'middle' }}
+    />
+  );
+}
+
+/**
+ * A sparkline's axes, written out rather than drawn: the measure above the
+ * line, and under it the first category, what the categories ARE, and the last.
+ * Three short strings do the work ticks would at a height where ticks do not
+ * fit (the Dashboard's activity minis are 82px tall).
+ */
+function SparkAxes({
+  model,
+  children,
+}: {
+  readonly model: ChartModel;
+  readonly children: ReactNode;
+}): ReactElement {
+  const first = model.labels[0];
+  const last = model.labels[model.labels.length - 1];
+  const foot = model.xTitle !== undefined || (first !== undefined && last !== undefined && first !== last);
+  return (
+    <div className="vividSpark">
+      {model.yTitle !== undefined && <div className="vividSparkY">{model.yTitle}</div>}
+      {children}
+      {foot && (
+        <div className="vividSparkX">
+          <span>{first ?? ''}</span>
+          {model.xTitle !== undefined && <b>{model.xTitle}</b>}
+          <span>{first === last ? '' : last ?? ''}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -391,6 +452,10 @@ interface ModelSeries {
 export interface ChartModel {
   readonly labels: readonly string[];
   readonly series: readonly ModelSeries[];
+  /** What the category axis is, in the reader's words (`x_title`); absent means unlabelled. */
+  readonly xTitle?: string | undefined;
+  /** What the value axis measures, units included (`y_title`). */
+  readonly yTitle?: string | undefined;
   /** Colour slot per category — used by the forms that colour BY CATEGORY. */
   readonly categorySlots: readonly number[];
   /** Whether even a cartesian form colours per category (a donut's data drawn as bars). */
@@ -447,10 +512,12 @@ export function modelOf(widget: BarWidget | LineWidget | DonutWidget, baseSlot: 
       stacked: false,
     };
   }
+  const titles = { xTitle: widget.x_title, yTitle: widget.y_title };
   if (widget.type === 'line' && widget.series !== undefined) {
     const p = pivot(widget.data, widget.x, widget.y, widget.series);
     if (p.names.length > 0) {
       return {
+        ...titles,
         labels: p.labels,
         series: p.names.map((name, index) => ({
           name,
@@ -481,6 +548,7 @@ export function modelOf(widget: BarWidget | LineWidget | DonutWidget, baseSlot: 
           },
         ];
   return {
+    ...titles,
     labels,
     series,
     categorySlots: labels.map((_label, index) => index % 6),
@@ -493,6 +561,7 @@ export function modelOf(widget: BarWidget | LineWidget | DonutWidget, baseSlot: 
 /** Several series folded to one value each — what a round form draws. */
 function collapsed(model: ChartModel): ChartModel {
   if (model.series.length <= 1) return model;
+  /* No axes on a round form, so `xTitle`/`yTitle` are deliberately dropped. */
   return {
     labels: model.series.map((s) => s.name),
     series: [
@@ -786,6 +855,8 @@ export function VividChart({ model, type, palette, compact, spark, fill, height:
       : 270;
   const labelWidth = horizontal ? clamp(longest * 6.6 + 14, 72, 150) : 0;
   const tilt = !horizontal && longest > 6;
+  /* The band an axis title needs under the ticks; nothing when there is no title. */
+  const xTitleRoom = model.xTitle === undefined ? 0 : 15;
 
   const chartProps = clickable
     ? {
@@ -797,11 +868,21 @@ export function VividChart({ model, type, palette, compact, spark, fill, height:
       }
     : {};
 
+  /**
+   * A sparkline hides its axes, so its titles are written around the plot
+   * (`SparkAxes`); every other form draws them on the axes themselves.
+   */
+  const frame = (chart: ReactElement): ReactElement =>
+    spark === true && (model.xTitle !== undefined || model.yTitle !== undefined)
+      ? <SparkAxes model={model}>{chart}</SparkAxes>
+      : chart;
+
   return (
     <>
       {model.series.length > 1 && (
         <SeriesLegend entries={model.series.map((s) => ({ name: s.name, colour: colour(s.slot) }))} />
       )}
+      {frame(
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart
           data={data}
@@ -840,16 +921,20 @@ export function VividChart({ model, type, palette, compact, spark, fill, height:
             )
           ) : horizontal ? (
             <>
-              <XAxis type="number" tick={{ fill: INK_2, fontSize: 10 }} tickFormatter={(v: number) => compactNum.format(v)} axisLine={false} tickLine={false} height={26} />
+              <XAxis type="number" tick={{ fill: INK_2, fontSize: 10 }} tickFormatter={(v: number) => compactNum.format(v)} axisLine={false} tickLine={false} height={26 + (model.yTitle === undefined ? 0 : 14)}>
+                {axisTitle(model.yTitle, 'bottom')}
+              </XAxis>
               <YAxis
                 type="category"
                 dataKey="__x"
-                width={labelWidth}
+                width={labelWidth + (model.xTitle === undefined ? 0 : 14)}
                 interval={0}
                 tick={<CategoryTick maxChars={Math.floor((labelWidth - 14) / 6.6)} />}
                 axisLine={false}
                 tickLine={false}
-              />
+              >
+                {axisTitle(model.xTitle, 'left')}
+              </YAxis>
             </>
           ) : (
             <>
@@ -860,13 +945,19 @@ export function VividChart({ model, type, palette, compact, spark, fill, height:
                 tickLine={false}
                 interval="preserveStartEnd"
                 minTickGap={8}
-                {...(tilt ? { angle: -35, textAnchor: 'end', height: clamp(longest * 4.8 + 26, 40, 76), tickMargin: 6 } : { height: 30, tickMargin: 8 })}
-              />
-              <YAxis tick={{ fill: INK_2, fontSize: 10 }} tickFormatter={(v: number) => compactNum.format(v)} axisLine={false} tickLine={false} width={46} />
+                {...(tilt
+                  ? { angle: -35, textAnchor: 'end' as const, height: clamp(longest * 4.8 + 26, 40, 76) + xTitleRoom, tickMargin: 6 }
+                  : { height: 30 + xTitleRoom, tickMargin: 8 })}
+              >
+                {axisTitle(model.xTitle, 'bottom')}
+              </XAxis>
+              <YAxis tick={{ fill: INK_2, fontSize: 10 }} tickFormatter={(v: number) => compactNum.format(v)} axisLine={false} tickLine={false} width={46 + (model.yTitle === undefined ? 0 : 14)}>
+                {axisTitle(model.yTitle, 'left')}
+              </YAxis>
             </>
           )}
           <Tooltip
-            content={<VividTooltip />}
+            content={<VividTooltip xTitle={model.xTitle} />}
             cursor={lines ? { stroke: INK_3, strokeWidth: 1, strokeDasharray: '3 3' } : { fill: 'rgba(30,42,56,0.05)' }}
           />
           {lines
@@ -912,7 +1003,8 @@ export function VividChart({ model, type, palette, compact, spark, fill, height:
                 </Bar>
               ))}
         </ComposedChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer>,
+      )}
     </>
   );
 }

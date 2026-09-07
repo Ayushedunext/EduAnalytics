@@ -18,7 +18,7 @@
 import './env-defaults.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { vi } from 'vitest';
-import type { KpiWidget, TableWidget, DonutWidget } from '@sap/chart-spec';
+import type { KpiWidget, LineWidget, TableWidget, DonutWidget } from '@sap/chart-spec';
 import { predefinedReports } from '../../mcp-server/src/reports/catalog.js';
 
 interface QueryResult {
@@ -198,6 +198,28 @@ describe('the fee-heads donut partitions the money', () => {
       ['Transport fee collected', 150],
       ['Pending', 300],
     ]);
+  });
+});
+
+describe('a week is named by the day it started, and both axes say what they are', () => {
+  it('turns the ISO week into its Monday and titles the axes', async () => {
+    response = result([
+      {
+        school_id: 'a',
+        queries: [query('receipts_by_week', [
+          { week: '2026-W14', seq: 202614, received: 420000 },
+          { week: '2026-W36', seq: 202636, received: 681000 },
+        ])],
+      },
+    ]);
+    const card = await build('weekly_receipts', ['a']);
+    const line = card.widgets.find((w): w is LineWidget => w.type === 'line');
+    /* ISO week 14 of 2026 begins Monday 30 March; week 36 begins Monday 31 August. */
+    expect(line?.data.map((r) => r['week'])).toEqual(['30 Mar', '31 Aug']);
+    expect(line?.x_title).toBe('Week starting');
+    expect(line?.y_title).toBe('Fee received (₹)');
+    const tile = card.widgets.find((w): w is KpiWidget => w.type === 'kpi');
+    expect(tile?.breakdown?.[0]).toEqual({ label: 'Week of', value: '31 Aug 2026' });
   });
 });
 

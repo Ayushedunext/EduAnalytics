@@ -237,6 +237,27 @@ const cartesian = {
   y: z.string().min(1),
   data: z.array(dataRowSchema),
   /**
+   * What the two axes MEAN, in the reader's words — added 2026-09-07.
+   *
+   * `x` and `y` name columns; `x_title` and `y_title` name facts. A dashboard
+   * card is a chart with no room for a caption, so a series called `rate`
+   * plotted against a category called `week` arrives on screen as a shape with
+   * no units: the review that prompted this found a reader hovering a point
+   * and being told "W14 · 77.2", which names neither the period nor what was
+   * counted. The renderer prints `y_title` above the plot and `x_title` under
+   * it (sparklines, between the first and last category) and puts `x_title`
+   * over the tooltip's heading.
+   *
+   * Server-set for the same reason `kpi.value` arrives pre-formatted: the
+   * orchestrator is what knows that `received` is rupees and `rate` is a
+   * percentage of marked days, and a screen and a PDF that each guessed would
+   * eventually guess differently (ADR-021). Both optional — a chart whose
+   * title already says it ("Fee receipts by month") can leave them off, and
+   * every widget written before this date keeps rendering as it did.
+   */
+  x_title: z.string().min(1).optional(),
+  y_title: z.string().min(1).optional(),
+  /**
    * What this chart's measure is about — added 2026-08-29.
    *
    * The same field `kpi` has always had, and set by the same authority for the

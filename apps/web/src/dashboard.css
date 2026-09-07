@@ -43,8 +43,10 @@
 
 .skin .donutrow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; flex: 1; align-items: center; }
 .skin .actsTitle { font-size: 11px; font-weight: 600; margin-bottom: 8px; color: var(--ink); }
-.skin .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
-.skin .acts .a { font-size: 10px; color: var(--ink-2); font-weight: 500; }
+/* `minmax(0, …)` and min-width:0: a track that cannot be narrower than its
+   widest unbreakable string is a track that overflows the card. */
+.skin .acts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 14px; }
+.skin .acts > * { min-width: 0; }
 
 .skin .userrow { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 11px; }
 .skin .userrow:last-child { border-bottom: 0; }

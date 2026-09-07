@@ -105,6 +105,17 @@ export interface DrillRequest {
    */
   readonly compareYear?: string | undefined;
   readonly correlationId: string;
+  /**
+   * Internal, set only by this service's own background rebuild — never a route
+   * parameter, because a reader who could ask for an uncached build could ask
+   * for a scan on demand.
+   *
+   * Without it the rebuild re-entered `buildDrill`, read the stale entry it was
+   * triggered to replace, found its own refresh already registered for the key,
+   * and returned that stale value as the rebuild's result. Nothing was ever
+   * refreshed; the entry aged out and the next click paid a full cold read.
+   */
+  readonly skipCache?: boolean;
 }
 
 /**
@@ -296,7 +307,7 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
     filters: params,
   });
 
-  const hit = await cacheGet<DrillResult>(key);
+  const hit = args.skipCache === true ? null : await cacheGet<DrillResult>(key);
   if (hit !== null) {
     /**
      * A stale entry is served NOW and rebuilt behind the response, exactly as
@@ -306,7 +317,7 @@ export async function buildDrill(args: DrillRequest): Promise<DrillResult> {
      */
     if (hit.stale) {
       refreshInBackground(key, async () =>
-        buildDrill({ ...args, correlationId: `${args.correlationId}:refresh` }),
+        buildDrill({ ...args, correlationId: `${args.correlationId}:refresh`, skipCache: true }),
       );
     }
     return hit.value;

@@ -20,9 +20,11 @@ import {
   ApiFailure,
   getHome,
   getHomePreview,
+  getHomeYears,
   getSession,
   type HomePreview,
   type HomeResponse,
+  type HomeYears,
   type SessionResponse,
 } from './api/client';
 import { ChartPaletteProvider } from '@sap/chart-spec/react';
@@ -47,6 +49,16 @@ export function App(): JSX.Element {
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [selected, setSelected] = useState<string[]>([]);
   const [home, setHome] = useState<HomeResponse | null>(null);
+  /**
+   * The year list from `/api/home/years`, which lands long before `/api/home`.
+   *
+   * Its only job is to let the Dashboard start fetching cards without waiting on
+   * the KPI strip's fee scan. The server derives the SELECTED year by the same
+   * rule in both endpoints, so this never disagrees with `home` about which year
+   * the page is on — only about how many years the picker may offer, and only
+   * until the strip arrives.
+   */
+  const [serverYears, setServerYears] = useState<HomeYears | null>(null);
   const [homeLoading, setHomeLoading] = useState(false);
   /**
    * The reader's layout and theme colour (theme/dashboardTheme.ts). Held here
@@ -158,6 +170,26 @@ export function App(): JSX.Element {
     // load — a card showing 2025-26 under a strip that already says 2026-27 is
     // the page disagreeing with itself, which is worse than a skeleton.
     setPreviews({});
+    /**
+     * Fired beside `getHome`, never after it. Awaiting the strip to learn the
+     * year was the single longest dependency on this screen — every Dashboard
+     * card waited on a full scan of the fee ledger to be told a label.
+     *
+     * Only when the SCHOOLS changed. A year override reloads the strip for that
+     * year; the list of years the scope has is the same list it was a moment
+     * ago, and asking again would be a request whose answer is already on screen.
+     */
+    if (academicYear === undefined) {
+      getHomeYears(schoolIds)
+        .then((years) => { setServerYears(years); })
+        .catch(() => {
+          /**
+           * Silent on purpose: `home` carries the same year and its failure is
+           * already reported below. Two notices for one outage says the page is
+           * broken twice.
+           */
+        });
+    }
     getHome(schoolIds, academicYear)
       .then((data) => { setHome(data); })
       .catch((err: unknown) => {
@@ -254,12 +286,10 @@ export function App(): JSX.Element {
    * means the invalid state cannot be reached at all, rather than being tidied
    * up after the fact.
    */
+  const offeredYears = home?.academic_years ?? serverYears?.academic_years ?? [];
+  const resolvedYear = home?.academic_year ?? serverYears?.academic_year ?? null;
   const effectiveYear =
-    home === null
-      ? null
-      : chosenYear !== null && home.academic_years.includes(chosenYear)
-        ? chosenYear
-        : home.academic_year;
+    chosenYear !== null && offeredYears.includes(chosenYear) ? chosenYear : resolvedYear;
 
   /**
    * A module's own cards, fetched when the module is OPENED rather than with
@@ -345,7 +375,7 @@ export function App(): JSX.Element {
         selected={selected}
         onSelect={setSelected}
         academicYear={effectiveYear}
-        academicYears={home?.academic_years ?? []}
+        academicYears={offeredYears}
         onSelectYear={setChosenYear}
         dashboards={home?.dashboards ?? []}
         /**
@@ -494,13 +524,17 @@ export function App(): JSX.Element {
             onBack={() => { setRoute({ kind: 'my-reports' }); }}
             onDeleted={() => { setRoute({ kind: 'my-reports' }); }}
           />
-        ) : home === null ? (
-          <div className="flex-1 flex items-start justify-center pt-24">
-            <div className="animate-pulse text-[13px] text-[var(--color-muted)]">
-              Querying your schools…
-            </div>
-          </div>
         ) : (
+          /**
+           * Mounted before `/api/home` lands, not after.
+           *
+           * It used to wait behind a "Querying your schools…" placeholder, which
+           * meant the KPI strip's fee scan was in front of every card on the
+           * page — the cards could not even be REQUESTED until it returned. The
+           * cards do not need the strip: they carry their own figures and their
+           * own skeletons, and the strip's notices appear above them as it
+           * arrives.
+           */
           <Dashboard
             session={state.session}
             home={home}

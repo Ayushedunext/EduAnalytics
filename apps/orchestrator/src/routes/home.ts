@@ -18,7 +18,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import { resolveRequestedSchools } from '../middleware/scope.js';
-import { buildHomePreview, buildHomeSummary, gridSlot } from '../services/home.js';
+import { buildHomePreview, buildHomeSummary, gridSlot, resolveAcademicYears } from '../services/home.js';
 import { buildOverviewSlot, isOverviewSlot } from '../services/overview.js';
 import { isDashboardId } from '../services/dashboards.js';
 import { ACADEMIC_YEAR, AS_OF_DATE, isRealDate, today } from './report.js';
@@ -103,6 +103,39 @@ homeRouter.get('/api/home', (req: Request, res: Response, next: NextFunction): v
  * unavailable dashboard is not a failed request (ADR-011). An id that is not a
  * previewable dashboard at all IS an error — that is a caller bug, not a state.
  */
+/**
+ * GET /api/home/years -- which academic years this scope has, and which to open on.
+ *
+ * Split out of `/api/home` because it gates the entire Dashboard: no card can be
+ * requested until a year is known, and `/api/home` cannot answer in under a
+ * second (its fee statement is an unindexed scan). See `resolveAcademicYears`
+ * for why answering from the roll alone gives the same year by the same rule.
+ *
+ * Same scope treatment as every other read: the school set comes from the
+ * verified session via `resolveRequestedSchools`, never from the query string
+ * unchecked (ADR-007).
+ */
+homeRouter.get('/api/home/years', (req: Request, res: Response, next: NextFunction): void => {
+  void (async () => {
+    const session = req.session;
+    if (session === undefined) {
+      throw new PlatformError({
+        code: ERROR_CODES.SESSION_INVALID,
+        message: 'Please open Analytics from the ERP menu.',
+        correlationId: req.correlationId,
+      });
+    }
+
+    const schoolIds = await resolveRequestedSchools(req);
+    const years = await resolveAcademicYears({
+      session,
+      schoolIds,
+      correlationId: req.correlationId,
+    });
+    res.json(years);
+  })().catch(next);
+});
+
 homeRouter.get('/api/home/preview/:key', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     const session = req.session;

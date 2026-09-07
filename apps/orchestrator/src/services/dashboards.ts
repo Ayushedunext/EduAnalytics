@@ -1339,6 +1339,20 @@ export async function buildDashboard(args: {
    * know it was asked for less.
    */
   queryKeys?: readonly string[];
+  /**
+   * Internal, and set by exactly one caller: this function's own background
+   * rebuild. Not a route parameter and not reachable from a request — a reader
+   * who could ask for an uncached build could ask for a scan on demand.
+   *
+   * It exists because the rebuild is this same function. Without it the rebuild
+   * read the stale entry it was triggered to replace, found its own refresh
+   * already registered for the key, and returned that stale value as the
+   * rebuild's result: nothing was refreshed, ever. The entry then aged out of
+   * Redis entirely and the next reader paid a full cold build of a dashboard the
+   * cache had been holding all along. Serve-stale is only serve-stale if the
+   * rebuild path cannot see the cache.
+   */
+  skipCache?: boolean;
 }): Promise<DashboardResult> {
   const scope = await schoolNames(args.schoolIds);
   if (scope.length === 0) {
@@ -1380,7 +1394,7 @@ export async function buildDashboard(args: {
     filters: params,
   });
 
-  const hit = await cacheGet<DashboardResult>(key);
+  const hit = args.skipCache === true ? null : await cacheGet<DashboardResult>(key);
   if (hit !== null) {
     /**
      * A stale entry is served NOW and rebuilt behind the response
@@ -1392,7 +1406,7 @@ export async function buildDashboard(args: {
      */
     if (hit.stale) {
       refreshInBackground(key, async () =>
-        buildDashboard({ ...args, correlationId: `${args.correlationId}:refresh` }),
+        buildDashboard({ ...args, correlationId: `${args.correlationId}:refresh`, skipCache: true }),
       );
     }
     /**

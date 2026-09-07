@@ -1170,6 +1170,52 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    '/api/home/years': {
+      get: {
+        tags: ['Home'],
+        summary: 'The academic years this scope has, and the one to open on.',
+        description: [
+          'Split out of `/api/home` because it gates the entire Dashboard: no card can be requested',
+          'until a year is known, and `/api/home` cannot answer quickly — its arrears tile is an',
+          'unindexed scan of the fee ledger. Measured cold against the delivered extract (2026-09-06,',
+          'three schools): 40.7 s, during which the Dashboard could not send a single request.',
+          '',
+          'The SELECTED year is derived by the same rule `/api/home` uses (the roll, falling back to',
+          'the fee ledger only when the roll cannot be read at all), so the two never disagree about',
+          'which year the page is on. The LIST may be shorter here — it does not union years that',
+          'appear only in the fee ledger — which is why the SPA takes the picker’s options from',
+          '`/api/home` once that arrives and uses this list only to open with.',
+        ].join('\n'),
+        parameters: [schoolIdsParam],
+        responses: {
+          '200': {
+            description: 'The years, newest first, and the default. Both empty/null if none were found.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['academic_year', 'academic_years'],
+                  properties: {
+                    academic_year: {
+                      type: 'string',
+                      nullable: true,
+                      example: '2026-27',
+                      description: 'The year the page opens on; null when the scope reports none.',
+                    },
+                    academic_years: {
+                      type: 'array',
+                      items: { type: 'string', example: '2025-26' },
+                      description: 'Every year the roll reports, newest first.',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          ...COMMON_ERRORS,
+        },
+      },
+    },
     '/api/home/preview/{key}': {
       get: {
         tags: ['Home'],

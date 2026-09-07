@@ -31,7 +31,8 @@ import { useOverview } from './overview/useOverview';
 
 interface Props {
   session: SessionResponse;
-  home: HomeResponse;
+  /** Null until the KPI strip lands; the cards do not wait for it. */
+  home: HomeResponse | null;
   loading: boolean;
   /** The scope the cards are fetched with. */
   schoolIds: readonly string[];
@@ -43,13 +44,18 @@ interface Props {
 
 export function Dashboard({ session, home, loading, schoolIds, academicYear, layout, onOpen }: Props): JSX.Element {
   const states = useOverview(FORMAT_SLOTS[layout], schoolIds, academicYear);
-  const asOf = dateLabel(home.spec.meta.as_of ?? home.spec.meta.generated_at);
+  /**
+   * Null while the strip is still loading. Rendered as a dash rather than as
+   * today's date: "as of" is a claim about how current the data is, and the one
+   * thing this component must not do is invent one.
+   */
+  const asOf = home === null ? null : dateLabel(home.spec.meta.as_of ?? home.spec.meta.generated_at);
   const props = {
     states,
     session,
     year: academicYear,
     asOf,
-    scopeCount: home.spec.meta.scope.length,
+    scopeCount: home?.spec.meta.scope.length ?? schoolIds.length,
     onOpen,
   };
 
@@ -63,15 +69,15 @@ export function Dashboard({ session, home, loading, schoolIds, academicYear, lay
         </div>
       )}
       {/* ADR-011: a school that failed inside a fan-out is annotated, not dropped. */}
-      {home.degraded_schools.length > 0 && (
+      {home !== null && home.degraded_schools.length > 0 && (
         <div className="notice mb-4">
           Some schools could not be reached, so these totals are partial:{' '}
           {home.degraded_schools.map((d) => d.school_id).join(', ')}.
         </div>
       )}
-      {home.partial_metrics.map((metric) => (
+      {(home?.partial_metrics ?? []).map((metric) => (
         <div key={metric.label} className="notice mb-4">
-          {metric.label} for {home.academic_year ?? 'this year'} does not include{' '}
+          {metric.label} for {home?.academic_year ?? 'this year'} does not include{' '}
           {metric.schools.join(', ')} — no data is recorded there for that year yet.
         </div>
       ))}

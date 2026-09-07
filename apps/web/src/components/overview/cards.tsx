@@ -231,7 +231,7 @@ export function TilesCard({ state, ids = TILE_IDS, className, title, notes = tru
   );
 }
 
-export function RingsCard({ state, year, asOf, onOpen }: { state: SlotState | undefined; year: string | null; asOf: string; onOpen: (id: string) => void }): ReactElement {
+export function RingsCard({ state, year, asOf, onOpen }: { state: SlotState | undefined; year: string | null; asOf: string | null; onOpen: (id: string) => void }): ReactElement {
   const palette = usePalette();
   const [type, setType] = useState<ChartType>('donut');
   const slots = [3, 2, 0];
@@ -242,7 +242,7 @@ export function RingsCard({ state, year, asOf, onOpen }: { state: SlotState | un
       tools={
         <>
           <ReportButton onClick={() => { onOpen('fee-collection'); }} />
-          <span className="tinybtn dark"><Icon name="calendar" />AY {year ?? '—'} · as of {asOf}</span>
+          <span className="tinybtn dark"><Icon name="calendar" />AY {year ?? '—'} · as of {asOf ?? '—'}</span>
           <ChartTypeSelect value={type} onChange={setType} options={RING_FORMS} />
         </>
       }

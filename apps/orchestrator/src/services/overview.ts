@@ -29,13 +29,14 @@ import {
 } from '@sap/chart-spec';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
-import { withMcp } from '../mcp/client.js';
 import { schoolNames } from '../db/registry.js';
 import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
+import { coalesce } from '../cache/single-flight.js';
 import { config } from '../config.js';
-import { Merged, type PredefinedResult } from './dashboards.js';
+import { Merged } from './dashboards.js';
+import { OVERVIEW_REPORT_ID, runOverviewQueries } from './overview-queries.js';
 
-export const OVERVIEW_REPORT_ID = 'dashboard-overview';
+export { OVERVIEW_REPORT_ID };
 
 /**
  * Each slot and the query keys it runs. A slot lists exactly what it draws, so
@@ -63,6 +64,32 @@ export const OVERVIEW_SLOTS = {
 } as const;
 
 export type OverviewSlotKey = keyof typeof OVERVIEW_SLOTS;
+
+/**
+ * The cards a launch warms (services/warm.ts).
+ *
+ * This is the DEFAULT layout the SPA opens on — Format A in
+ * `apps/web/src/components/overview/formats.tsx`, which is what
+ * `theme/dashboardTheme.ts` falls back to when the reader has chosen no other.
+ * It is duplicated here rather than imported because the browser bundle and this
+ * service share no module, and the cost of the two drifting is bounded: a warm
+ * for a card nobody opens, or a card that opens cold. Neither is a wrong screen.
+ *
+ * Deliberately NOT every slot in `OVERVIEW_SLOTS`. Warming all seventeen would
+ * scan the fee ledger for two layouts nobody has asked for; the statements the
+ * other layouts share with this one are cached per statement
+ * (services/overview-queries.ts) and come warm anyway.
+ */
+export const WARM_SLOTS: readonly OverviewSlotKey[] = [
+  'tiles',
+  'rings',
+  'monthly',
+  'weekly_receipts',
+  'weekly_attendance',
+  'top_schools',
+  'fee_heads',
+];
+
 
 export function isOverviewSlot(value: string): value is OverviewSlotKey {
   return Object.hasOwn(OVERVIEW_SLOTS, value);
@@ -93,14 +120,83 @@ interface Built {
   readonly notes?: string[];
 }
 
-export async function buildOverviewSlot(args: {
-  session: SessionClaims;
-  schoolIds: readonly string[];
-  slot: OverviewSlotKey;
-  academicYear: string;
-  asOfDate: string;
-  correlationId: string;
-}): Promise<OverviewSlot> {
+export interface OverviewSlotArgs {
+  readonly session: SessionClaims;
+  readonly schoolIds: readonly string[];
+  readonly slot: OverviewSlotKey;
+  readonly academicYear: string;
+  readonly asOfDate: string;
+  readonly correlationId: string;
+}
+
+/** The four filters the overview report declares, for a year and an as-of day. */
+export function overviewParams(academicYear: string, asOfDate: string): Record<string, string> {
+  const window = academicYearWindow(academicYear);
+  return {
+    academic_year: academicYear,
+    as_of_date: asOfDate,
+    from_date: window.from,
+    to_date: window.to,
+  };
+}
+
+function slotCacheKey(args: OverviewSlotArgs, params: Record<string, string>): string {
+  return cacheKey({
+    kind: `overview:${args.slot}`,
+    schoolIds: args.schoolIds,
+    permissionClass: args.session.permission_class,
+    filters: params,
+  });
+}
+
+export async function buildOverviewSlot(args: OverviewSlotArgs): Promise<OverviewSlot> {
+  const params = overviewParams(args.academicYear, args.asOfDate);
+  const key = slotCacheKey(args, params);
+
+  const hit = await cacheGet<OverviewSlot>(key);
+  if (hit !== null) {
+    /**
+     * Served now, rebuilt behind the response — and the rebuild goes to
+     * `buildFresh`, NOT back through this function.
+     *
+     * It used to re-enter here, which meant the rebuild read the same stale
+     * entry it was supposed to replace, found a refresh already registered for
+     * the key, and returned the stale value as its own result. Nothing failed
+     * and nothing was ever refreshed: the entry simply aged out at the end of
+     * the stale window, and the reader who arrived after that paid the full cold
+     * cost of a card the cache had been holding all along. Serve-stale only
+     * works if the rebuild path cannot see the cache.
+     */
+    if (hit.stale) {
+      refreshInBackground(key, async () =>
+        buildFresh({ ...args, correlationId: `${args.correlationId}:refresh` }, params, key, {
+          requireFresh: true,
+        }),
+      );
+    }
+    return hit.value;
+  }
+
+  /**
+   * A cold key is built ONCE however many readers are waiting on it — the
+   * layout's seven simultaneous cards, two browsers opening together, or the
+   * reader arriving on top of the launch warm (cache/single-flight.ts).
+   */
+  return coalesce(key, async () => buildFresh(args, params, key));
+}
+
+/**
+ * Build the card from its statements and write it to the cache.
+ *
+ * Never throws: ADR-011, one card at a time — a dead card says why and its
+ * neighbours still draw.
+ */
+async function buildFresh(
+  args: OverviewSlotArgs,
+  params: Record<string, string>,
+  key: string,
+  options: { requireFresh?: boolean } = {},
+): Promise<OverviewSlot> {
   try {
     const scope = await schoolNames(args.schoolIds);
     if (scope.length === 0) {
@@ -110,37 +206,17 @@ export async function buildOverviewSlot(args: {
         correlationId: args.correlationId,
       });
     }
-    const window = academicYearWindow(args.academicYear);
-    const params: Record<string, string> = {
-      academic_year: args.academicYear,
-      as_of_date: args.asOfDate,
-      from_date: window.from,
-      to_date: window.to,
-    };
     const queryKeys = [...OVERVIEW_SLOTS[args.slot]];
-    const key = cacheKey({
-      kind: `overview:${args.slot}`,
-      schoolIds: args.schoolIds,
-      permissionClass: args.session.permission_class,
-      filters: params,
-    });
-    const hit = await cacheGet<OverviewSlot>(key);
-    if (hit !== null) {
-      if (hit.stale) {
-        refreshInBackground(key, async () =>
-          buildOverviewSlot({ ...args, correlationId: `${args.correlationId}:refresh` }),
-        );
-      }
-      return hit.value;
-    }
 
-    const result = await withMcp(args.session, args.correlationId, args.schoolIds, async (mcp) =>
-      mcp.call<PredefinedResult>('run_predefined', {
-        report_id: OVERVIEW_REPORT_ID,
-        school_ids: [...args.schoolIds],
+    const result = await runOverviewQueries(
+      {
+        session: args.session,
+        schoolIds: args.schoolIds,
         params,
-        query_keys: queryKeys,
-      }),
+        correlationId: args.correlationId,
+      },
+      queryKeys,
+      options,
     );
     const merged = new Merged(result);
     const built = BUILDERS[args.slot](merged, { year: args.academicYear, asOf: args.asOfDate, scope });

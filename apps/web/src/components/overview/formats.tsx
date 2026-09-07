@@ -36,7 +36,8 @@ interface FormatProps {
   states: Record<string, SlotState>;
   session: SessionResponse;
   year: string | null;
-  asOf: string;
+  /** Null until the KPI strip lands — the cards mount before it. */
+  asOf: string | null;
   scopeCount: number;
   onOpen: (reportId: string) => void;
 }
@@ -102,7 +103,7 @@ export function FormatC({ states, session, year, asOf, scopeCount, onOpen }: For
       <div className="dgh">
         <div>
           <h3>Money and presence</h3>
-          <div className="sub">Fee realisation and today’s attendance against the year · as of {asOf}</div>
+          <div className="sub">Fee realisation and today’s attendance against the year · as of {asOf ?? '—'}</div>
         </div>
         <span className="life">AY {year ?? '—'} <Icon name="clock" /></span>
       </div>

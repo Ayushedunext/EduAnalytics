@@ -27,6 +27,7 @@ import {
   sessionCookieOptions,
   sessionFromLaunchToken,
 } from '../auth/session.js';
+import { warmLandingScreen } from '../services/warm.js';
 
 export const launchRouter = Router();
 
@@ -117,6 +118,16 @@ launchRouter.post('/launch', (req: Request, res: Response, next: NextFunction): 
           school_count: session.school_ids.length,
         }),
       );
+
+      /**
+       * ⑤ Start building the landing screen now, behind the redirect.
+       *
+       * The browser still has to follow a 303, load the SPA, fetch its session
+       * and resolve a year before it asks for a single card; on a cold cache
+       * that first card costs tens of seconds (services/warm.ts). Nothing here
+       * waits on this and nothing fails because of it.
+       */
+      warmLandingScreen(session, req.correlationId);
 
       // ④ 303 so the browser follows with GET and the token leaves the history
       res.redirect(303, config.SPA_ORIGIN);

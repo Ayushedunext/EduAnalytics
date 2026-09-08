@@ -1,7 +1,8 @@
 /**
  * The Dashboard — the first screen a user sees after launch (docs/10 §2), laid
  * out card for card as the signed-off "AI Dashboard" artifact is, in the three
- * layouts it offers (docs/10 §1.5, adopted 2026-09-04).
+ * layouts it offers (docs/10 §1.5, adopted 2026-09-04) — plus My View, the
+ * reader's own board of charts they kept (docs/10 §1.6, MyViewBoard.tsx).
  *
  * -- Every number here is real -----------------------------------------------
  * Each card is one request to `/api/home/overview/:slot` (services/overview.ts):
@@ -26,7 +27,10 @@
 
 import type { HomeResponse, SessionResponse } from '../api/client';
 import type { DashboardLayout } from '../theme/dashboardTheme';
+import { useMyView } from '../myView';
 import { FORMAT_SLOTS, FormatA, FormatB, FormatC } from './overview/formats';
+import { MyViewBoard } from './overview/MyViewBoard';
+import { overviewCardOf } from './overview/registry';
 import { useOverview } from './overview/useOverview';
 
 interface Props {
@@ -43,7 +47,22 @@ interface Props {
 }
 
 export function Dashboard({ session, home, loading, schoolIds, academicYear, layout, onOpen }: Props): JSX.Element {
-  const states = useOverview(FORMAT_SLOTS[layout], schoolIds, academicYear);
+  const myView = useMyView();
+  /**
+   * Which cards to fetch. The three product layouts name theirs up front
+   * (`FORMAT_SLOTS`); My View's are whatever the reader kept, so its list is
+   * derived from the board — each card's slots, deduplicated, so four saved
+   * gauges are still one request (registry.tsx).
+   *
+   * A saved card whose key this build no longer knows contributes no slot,
+   * which is the right answer: the board says so in its place rather than
+   * fetching for a card it cannot draw.
+   */
+  const slots =
+    layout === 'MY'
+      ? [...new Set(myView.charts.flatMap((chart) => overviewCardOf(chart)?.slots ?? []))]
+      : FORMAT_SLOTS[layout];
+  const states = useOverview(slots, schoolIds, academicYear);
   /**
    * Null while the strip is still loading. Rendered as a dash rather than as
    * today's date: "as of" is a claim about how current the data is, and the one
@@ -83,7 +102,15 @@ export function Dashboard({ session, home, loading, schoolIds, academicYear, lay
       ))}
       {loading && <div className="pageContext" style={{ margin: '0 0 8px' }}>refreshing…</div>}
 
-      {layout === 'A' ? <FormatA {...props} /> : layout === 'B' ? <FormatB {...props} /> : <FormatC {...props} />}
+      {layout === 'MY' ? (
+        <MyViewBoard ctx={props} schoolIds={schoolIds} academicYear={academicYear} />
+      ) : layout === 'A' ? (
+        <FormatA {...props} />
+      ) : layout === 'B' ? (
+        <FormatB {...props} />
+      ) : (
+        <FormatC {...props} />
+      )}
 
       <p className="skFine">
         Scope comes from the launch token the ERP signed. It cannot be widened from this browser,

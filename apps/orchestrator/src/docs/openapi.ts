@@ -965,6 +965,72 @@ export const openApiDocument: OpenApiDocument = {
           },
         },
       },
+      ChartInsightRequest: {
+        type: 'object',
+        required: ['target', 'academic_year'],
+        description:
+          'Which chart to explain, and the filters it is being shown under. `target` mirrors the ' +
+          'SPA’s own chart identity (`ChartSource`, myView.ts): a Dashboard card is a slot plus a ' +
+          'widget id, a report panel is a report id plus a widget id.',
+        properties: {
+          target: {
+            oneOf: [
+              {
+                type: 'object',
+                required: ['kind', 'slot', 'widget_id'],
+                properties: {
+                  kind: { type: 'string', enum: ['overview'] },
+                  slot: { type: 'string', description: 'A Dashboard slot key — `years`, `rings`, `late_payers`, …' },
+                  widget_id: { type: 'string' },
+                },
+              },
+              {
+                type: 'object',
+                required: ['kind', 'report_id', 'widget_id'],
+                properties: {
+                  kind: {
+                    type: 'string',
+                    enum: ['report', 'custom'],
+                    description: '`report` is a predefined dashboard; `custom` is one of the reader’s own.',
+                  },
+                  report_id: { type: 'string' },
+                  widget_id: { type: 'string' },
+                },
+              },
+            ],
+          },
+          academic_year: { type: 'string', pattern: '^\\d{4}-\\d{2}$' },
+          as_of: { type: 'string', format: 'date', description: 'Defaults to today.' },
+          compare_year: {
+            type: 'string',
+            description: 'For a report that compares two years — the comparison the screen is showing.',
+          },
+        },
+      },
+      ChartInsight: {
+        type: 'object',
+        required: ['headline', 'points', 'model', 'generated_at', 'cached'],
+        properties: {
+          headline: { type: 'string', description: 'One plain sentence: what this chart says.' },
+          points: {
+            type: 'array',
+            minItems: 2,
+            maxItems: 5,
+            items: { type: 'string' },
+            description: 'Short observations, in the words a principal would use.',
+          },
+          caveat: {
+            type: 'string',
+            description: 'What the figures do not cover, where that matters. Often absent.',
+          },
+          model: { type: 'string', description: 'Which model answered — the org’s own, under BYOK.' },
+          generated_at: { type: 'string', format: 'date-time' },
+          cached: {
+            type: 'boolean',
+            description: 'True when this came back from cache rather than costing a model call.',
+          },
+        },
+      },
       AskAiRequest: {
         type: 'object',
         required: ['question'],
@@ -1767,6 +1833,52 @@ export const openApiDocument: OpenApiDocument = {
           '401': errorResponse('SESSION_INVALID.'),
           '403': errorResponse(
             'AI_NOT_ACTIVE — the org has no working key (Invariant 5). Also SCOPE_VIOLATION.',
+          ),
+        },
+      },
+    },
+    '/api/ai/insights': {
+      post: {
+        tags: ['Ask AI'],
+        summary: 'Explain one chart in plain language.',
+        description: [
+          'The "⋮ → Insights" action on any chart (docs/10 §1.6). Rebuilds the named chart through',
+          'the same cached serving path the screen used, reduces it to a digest of AGGREGATES, and',
+          'spends one model turn turning that into a headline and a few short points.',
+          '',
+          'No query is planned and no SQL is authored here — there is no tool loop and no MCP call on',
+          'this path at all, so the read-only data plane (Invariant 3) is unreachable from it, and a',
+          'warm chart costs a cache read rather than a replica scan (Invariant 1).',
+          '',
+          'ADR-030 applies unchanged: the model receives counts, sums, minima, maxima, first/last',
+          'values, donut shares and pre-formatted KPI figures — never a result row. A table',
+          'contributes its column names, its row count and per-column numeric aggregates and never a',
+          'cell, which is what keeps per-student data out of the org’s provider account.',
+          '',
+          'Answers are cached for an hour under the chart, the scope, the year and the permission',
+          'class, and coalesced in flight: two readers opening the same card is one model call, not',
+          'two charges on the org’s own key.',
+          '',
+          'Gated on `ai_status === "active"` here, on every request (Invariant 5). A POST for the same',
+          'reason `/api/ai/ask` is one: it spends the org’s budget.',
+        ].join('\n'),
+        parameters: [schoolIdsParam],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: ref('ChartInsightRequest') } },
+        },
+        responses: {
+          '200': {
+            description: 'The explanation.',
+            content: { 'application/json': { schema: ref('ChartInsight') } },
+          },
+          '400': errorResponse('VALIDATION_FAILED — no target, or a malformed year or as-of date.'),
+          '401': errorResponse('SESSION_INVALID.'),
+          '403': errorResponse(
+            'AI_NOT_ACTIVE — the org has no working key (Invariant 5). Also SCOPE_VIOLATION.',
+          ),
+          '404': errorResponse(
+            'REPORT_DEFINITION_NOT_FOUND — no such card, report, or widget inside it.',
           ),
         },
       },

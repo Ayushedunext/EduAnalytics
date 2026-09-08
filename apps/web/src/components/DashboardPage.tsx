@@ -5,13 +5,24 @@
  * spec) · ADR-019 / Invariant 6 (the Logic panel is part of the report) ·
  * ADR-018 (clone-to-edit).
  *
- * [MANDATORY] CODING_GUIDELINES §17: "Every report surface exposes the standard
- * affordances: 🧠 View logic, ⧉ Clone, ⬇ PDF, scope line. A new report surface
- * missing them is incomplete, not minimal." All four are real here.
+ * [MANDATORY] CODING_GUIDELINES §17: every report surface exposes the standard
+ * affordances — View logic, Clone, PDF, scope line. All four are real here, and
+ * since 2026-09-08 two of them are reached PER CHART rather than per page.
  *
- * ⧉ Clone posts today's filter values (the ones this screen is actually
- * showing) as the new report's starting values — cloning is meant to capture
- * "this view, editable", not reset to a blank form.
+ * -- Why View logic and Clone left this bar (docs/10 §1.6) --------------------
+ * Both were page-level: one panel of SQL for a report of eight charts, and one
+ * clone of the whole thing. Every chart now carries them in its own "⋮" menu
+ * (ChartMenu.tsx), which is a better answer to both questions a reader actually
+ * asks — "where does THIS number come from" and "let me keep THIS chart" — and
+ * keeping a second, page-wide copy of each would be two ways to the same place
+ * with different scope, one of them always the vaguer.
+ *
+ * Nothing is lost. The menu's logic panel shows the report's whole statement
+ * set with this chart's marked (Invariant 6 is unchanged: every statement is
+ * still one click away from every chart), and its clone offers "this chart" or
+ * "the whole report" — the second carrying today's filter values exactly as the
+ * page button did, because a clone is meant to capture "this view, editable",
+ * not reset to a blank form.
  *
  * Every widget is drawn by the shared renderer in `@sap/chart-spec/react` — the
  * same layer the PDF path will use (ADR-021), so screen and export cannot
@@ -23,18 +34,15 @@ import { ChartSpecView } from '@sap/chart-spec/react';
 import type { DrillTarget } from '@sap/chart-spec/react';
 import type { Widget } from '@sap/chart-spec';
 import {
-  cloneReport,
   getReport,
   reportPdfUrl,
-  ApiFailure,
   type DashboardResponse,
   type DrillStep,
   type SessionResponse,
 } from '../api/client';
 import { DrillTrail, useDrill, widgetIdOf } from './Drill';
-import { LogicPanel } from './LogicPanel';
-import { WidgetCloneButton } from './WidgetCloneButton';
-import { CLONEABLE_WIDGETS, WIDGET_BUCKET_OPTIONS } from '../reportWidgetClone';
+import { ChartMenu } from './ChartMenu';
+import { reportChartClone, reportChartLogic } from '../reportChartMenu';
 
 interface Props {
   session: SessionResponse;
@@ -58,8 +66,6 @@ export function DashboardPage({
   const [report, setReport] = useState<DashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showLogic, setShowLogic] = useState(false);
-  const [cloning, setCloning] = useState(false);
   /**
    * The "Compare with" year, for a report that takes one.
    *
@@ -171,8 +177,6 @@ export function DashboardPage({
     return { ...report, logic: { ...report.logic, queries: [...report.logic.queries, ...extra] } };
   }, [report, drills]);
 
-  const activeDrill = Object.values(drills)[0];
-
   return (
     <main className="flex-1 overflow-y-auto">
       {/* 1900px, not the 1180px "reading column" width other single-report
@@ -255,49 +259,8 @@ export function DashboardPage({
                   </select>
                 </label>
               )}
-              <button
-                type="button"
-                className="chipbtn"
-                onClick={() => { setShowLogic((v) => !v); }}
-                aria-expanded={showLogic}
-              >
-                🧠 {showLogic ? 'Hide logic' : 'View logic'}
-              </button>
-              <button
-                type="button"
-                className="chipbtn"
-                disabled={cloning || academicYear === null}
-                title="Clone this dashboard into My Reports, editable, without changing the original"
-                onClick={() => {
-                  if (academicYear === null) return;
-                  const name = window.prompt('Name this report', `${report?.spec.title ?? 'Report'} (copy)`);
-                  if (name === null || name.trim() === '') return;
-                  setCloning(true);
-                  setError(null);
-                  const asOfValue = report?.logic.filters.find((f) => f.label === 'As of')?.value;
-                  cloneReport({
-                    base_report_id: reportId,
-                    name: name.trim(),
-                    academic_year: academicYear,
-                    ...(asOfValue === undefined ? {} : { as_of: asOfValue }),
-                    /**
-                     * The comparison the screen is SHOWING, read off the logic
-                     * panel like the as-of date beside it — a clone captures
-                     * this view, and this view compares against a year the
-                     * reader may have chosen.
-                     */
-                    ...(shownCompareYear === null ? {} : { compare_year: shownCompareYear }),
-                    school_ids: schoolIds,
-                  })
-                    .then((cloned) => { onCloned(cloned.id); })
-                    .catch((err: unknown) => {
-                      setError(err instanceof ApiFailure ? err.message : 'Could not clone this report.');
-                    })
-                    .finally(() => { setCloning(false); });
-                }}
-              >
-                {cloning ? 'Cloning…' : '⧉ Clone & customise'}
-              </button>
+              {/* View logic and Clone & customise used to sit here. They are
+                  on every chart's own "⋮" menu now — see the header. */}
               {/**
                 * A link, not a fetch. The server sets `Content-Disposition`, so
                 * the browser handles the download itself -- with a real
@@ -381,11 +344,18 @@ export function DashboardPage({
               onDrill={(widget: Widget, target: DrillTarget) => {
                 navigateDrill(widget.id, [...(drills[widget.id]?.context ?? []), target]);
               }}
+              /**
+                * Every panel gets the same four-action menu (ChartMenu.tsx), on
+                * this screen exactly as on the Dashboard and inside a module.
+                * It used to be a "⧉" that appeared on the four widgets the
+                * clone endpoint would take on their own and on nothing else,
+                * which meant a reader learned an affordance that then vanished
+                * on the next chart.
+                */
               renderWidgetActions={(widget: Widget) => {
                 const drilled = drills[widget.id];
-                const cloneable =
-                  academicYear !== null && CLONEABLE_WIDGETS[reportId]?.has(widget.id) === true;
-                if (drilled === undefined && !cloneable) return undefined;
+                const asOfValue = report.logic.filters.find((f) => f.label === 'As of')?.value;
+                const logic = reportChartLogic(shownReport ?? report, reportId, widget.id);
                 return (
                   <>
                     {drilled !== undefined && (
@@ -398,25 +368,37 @@ export function DashboardPage({
                         }}
                       />
                     )}
-                    {cloneable && academicYear !== null && (
-                      <WidgetCloneButton
-                        baseReportId={reportId}
-                        widgetId={widget.id}
-                        widgetTitle={widget.title ?? report.spec.title}
-                        academicYear={academicYear}
-                        schoolIds={schoolIds}
-                        bucketOptions={WIDGET_BUCKET_OPTIONS[reportId]?.[widget.id]}
-                        onCloned={onCloned}
-                      />
-                    )}
+                    <ChartMenu
+                      title={widget.title ?? report.spec.title}
+                      source={{ kind: 'report', reportId, widgetId: widget.id }}
+                      widget={widget}
+                      clone={
+                        academicYear === null
+                          ? undefined
+                          : reportChartClone(reportId, widget.id, {
+                              reportTitle: report.spec.title,
+                              asOf: asOfValue,
+                              compareYear: shownCompareYear ?? undefined,
+                            })
+                      }
+                      /**
+                       * A drilled panel's logic is the LEVEL's statement, not
+                       * the report's top one — docs/06 §4.4 puts every level's
+                       * SQL in the panel with the active one marked, and the
+                       * level on screen is the active one.
+                       */
+                      logic={
+                        drilled === undefined
+                          ? logic
+                          : { ...logic, activeQueryKey: drilled.query.key }
+                      }
+                      compareYear={shownCompareYear ?? undefined}
+                    />
                   </>
                 );
               }}
             />
 
-            {showLogic && shownReport !== null && (
-              <LogicPanel report={shownReport} activeQueryKey={activeDrill?.query.key} />
-            )}
           </>
         )}
       </div>

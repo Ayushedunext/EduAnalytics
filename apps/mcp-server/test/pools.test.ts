@@ -42,13 +42,12 @@ function fakePool(): { query: ReturnType<typeof vi.fn>; end: ReturnType<typeof v
 
 const TENANT: ResolvedTenant = {
   school_id: 'stmarksmb',
-  school_name: 'St Marks Meera Bagh',
   org_id: 'stmarks',
   replica_host: '127.0.0.1',
   db_name: 'ai_analysis',
   schema_version: 'erp-v1',
-  status: 'active',
-} as ResolvedTenant;
+  tenant_key: null,
+};
 
 /** The seed's own scheme — resolved from the environment, never a real ARN. */
 const SECRET = 'env://SCHOOL_DB_CREDENTIALS';
@@ -81,7 +80,7 @@ describe('getPool', () => {
   it('shares one pool across schools on the same host, database and credential', async () => {
     // The consolidated local extract: three schools, one database (see the
     // module header). Keying by school_id would open three identical pools.
-    const second = { ...TENANT, school_id: 'stmarksj', school_name: 'St Marks Janakpuri' } as ResolvedTenant;
+    const second: ResolvedTenant = { ...TENANT, school_id: 'stmarksj' };
     await Promise.all([pools.getPool(TENANT, SECRET), pools.getPool(second, SECRET)]);
 
     expect(createPool).toHaveBeenCalledTimes(1);

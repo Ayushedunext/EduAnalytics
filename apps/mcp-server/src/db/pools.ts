@@ -32,8 +32,24 @@ import { ERROR_CODES, PlatformError, type ResolvedTenant } from '@sap/shared';
 import { config } from '../config.js';
 import { resolveCredentials } from './secrets.js';
 
+/**
+ * The map holds the PROMISE of a pool, not the pool.
+ *
+ * Opening one is asynchronous twice over — the credential, then `SHOW GRANTS` on
+ * the new pool — and a Dashboard cold-starts by firing every card's query at
+ * once. When the entry was only written after those awaits, all of those calls
+ * missed the map, each built a pool of its own, and the last write won: the
+ * others were never in the map, so nothing ever evicted, swept or closed them,
+ * and their connections were held until the process died. One page load could
+ * leave forty orphaned pools behind, and MySQL answered the next school with
+ * "Too many connections" — which the platform correctly, and uselessly, reported
+ * as every school being unreachable.
+ *
+ * Registering the in-flight promise makes the first caller the only one that
+ * opens anything; the rest await the same pool.
+ */
 interface PoolEntry {
-  readonly pool: mysql.Pool;
+  readonly pool: Promise<mysql.Pool>;
   lastUsedAt: number;
 }
 
@@ -57,6 +73,26 @@ export async function getPool(
     return existing.pool;
   }
 
+  /**
+   * Registered BEFORE the first await, so the burst behind this caller finds it.
+   * A creation that FAILS is removed again rather than cached: a school whose
+   * grants could not be read, or whose host was down for a second, must be
+   * retried on the next query and not remembered as broken for as long as the
+   * process lives.
+   */
+  const entry: PoolEntry = { pool: openPool(tenant, secretArn), lastUsedAt: Date.now() };
+  pools.set(key, entry);
+  try {
+    await entry.pool;
+  } catch (err) {
+    if (pools.get(key) === entry) pools.delete(key);
+    throw err;
+  }
+  await evictBeyondCap();
+  return entry.pool;
+}
+
+async function openPool(tenant: ResolvedTenant, secretArn: string): Promise<mysql.Pool> {
   const credentials = await resolveCredentials(secretArn);
   const pool = mysql.createPool({
     host: tenant.replica_host,
@@ -78,10 +114,18 @@ export async function getPool(
     queueLimit: 0,
   });
 
-  await assertReadOnlyGrants(pool, tenant);
+  /**
+   * A pool that fails its grant check is CLOSED here. It was never in the map,
+   * so nothing else would ever close it, and the connection it opened to ask
+   * `SHOW GRANTS` would be held for the life of the process.
+   */
+  try {
+    await assertReadOnlyGrants(pool, tenant);
+  } catch (err) {
+    await closeQuietly(pool);
+    throw err;
+  }
 
-  pools.set(key, { pool, lastUsedAt: Date.now() });
-  await evictBeyondCap();
   return pool;
 }
 
@@ -157,7 +201,7 @@ async function evictBeyondCap(): Promise<void> {
     if (oldestKey === undefined) return;
     const entry = pools.get(oldestKey);
     pools.delete(oldestKey);
-    if (entry !== undefined) await closeQuietly(entry.pool);
+    if (entry !== undefined) await closeEntry(entry);
   }
 }
 
@@ -171,10 +215,28 @@ export async function sweepIdlePools(now: number = Date.now()): Promise<number> 
   for (const [key, entry] of [...pools]) {
     if (entry.lastUsedAt > cutoff) continue;
     pools.delete(key);
-    await closeQuietly(entry.pool);
+    await closeEntry(entry);
     closed += 1;
   }
   return closed;
+}
+
+/**
+ * Close what an entry holds, waiting for a pool still being opened.
+ *
+ * An entry evicted or swept mid-creation is the case that matters: dropping it
+ * from the map without awaiting would leak the very pool the map was keeping
+ * track of. An entry whose creation FAILED has nothing to close, and the error
+ * has already been reported to the caller that triggered it.
+ */
+async function closeEntry(entry: PoolEntry): Promise<void> {
+  let pool: mysql.Pool;
+  try {
+    pool = await entry.pool;
+  } catch {
+    return;
+  }
+  await closeQuietly(pool);
 }
 
 /**
@@ -196,6 +258,6 @@ export function livePoolCount(): number {
 export async function closeAllPools(): Promise<void> {
   for (const [key, entry] of [...pools]) {
     pools.delete(key);
-    await closeQuietly(entry.pool);
+    await closeEntry(entry);
   }
 }

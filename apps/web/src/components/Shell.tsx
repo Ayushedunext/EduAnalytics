@@ -86,6 +86,10 @@ export function Shell({
       title: aiActive ? 'Ask AI about your schools' : 'Complete AI setup in Settings',
     },
     { id: 'my-reports', label: 'My Reports', icon: 'save', title: 'Your cloned dashboards and saved Ask AI reports' },
+    /* Beside Settings, and before it: scheduling a report is something a reader
+       does with a report, not a thing they configure once — but it shares the
+       messaging channels Settings owns, so the two sit together. */
+    { id: 'schedule', label: 'Schedule', icon: 'clock', title: 'Have a report delivered on the days and at the time you choose' },
     { id: 'settings', label: 'Settings', icon: 'gear' },
   ];
 

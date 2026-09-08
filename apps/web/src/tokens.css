@@ -2095,3 +2095,137 @@ body {
 .insightsSkeleton { min-height: 120px; border-radius: var(--radius-sm); }
 .insightsLocked { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .insightsLocked p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--color-text-secondary); }
+
+/* ---------- Schedule (docs/11 phase 4; components/Schedule.tsx) ----------
+ *
+ * A form of four questions and a list of the answers. It borrows the settings
+ * type scale rather than inventing one: this is the same kind of screen —
+ * something a person sets up once and comes back to twice a year — and it sits
+ * next to Settings in the menu.
+ */
+
+/* The strip at the foot that says nothing is being sent yet. Deliberately not
+   `.notice`: a warning colour would read as "something is wrong with your
+   schedule", when what is being said is "this half of the feature is still
+   being built". */
+.schedNote {
+  display: flex; gap: 12px; align-items: flex-start; margin: 18px 0 4px;
+  background: var(--color-locked-bg); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); padding: 13px 16px;
+  font-size: 12.5px; line-height: 1.6; color: var(--color-text-secondary);
+}
+.schedNoteIcon { font-size: 15px; line-height: 1.3; }
+
+/* The line that says the rows below are examples — above them, not under. */
+.schedPanelNote {
+  font-size: 12.5px; line-height: 1.6; color: var(--color-text-muted);
+  margin: -4px 0 10px;
+}
+
+.schedForm { padding: 19px 21px; }
+.schedField { margin-top: 18px; }
+.schedField:first-of-type { margin-top: 14px; }
+.schedLabel {
+  display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.03em;
+  text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 8px;
+}
+.schedSelect, .schedInput, .schedTime {
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  padding: 9px 11px; font-size: 13px; font-family: var(--font-sans);
+  color: var(--color-text-primary); background: var(--color-surface);
+}
+.schedSelect { width: 100%; max-width: 460px; }
+.schedInput { width: 100%; max-width: 340px; margin-top: 12px; }
+.schedTime { width: 130px; font-variant-numeric: tabular-nums; }
+.schedSelect:focus, .schedInput:focus, .schedTime:focus { outline: 2px solid var(--color-info); outline-offset: 1px; }
+
+/* Seven toggles, not a frequency dropdown -- "Mon and Thu" is a thing schools
+   ask for, and a list of canned frequencies cannot express it. */
+.schedDays { display: flex; flex-wrap: wrap; gap: 8px; }
+.schedDay {
+  min-width: 52px; padding: 9px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong); background: var(--color-surface);
+  font-size: 12.5px; font-weight: 600; font-family: var(--font-sans);
+  color: var(--color-text-secondary); cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+.schedDay:hover { background: var(--color-background); }
+.schedDay.on {
+  background: var(--color-primary); border-color: var(--color-primary); color: #fff;
+}
+.schedPresets { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+.schedPreset {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 12px; font-family: var(--font-sans); font-weight: 600;
+  color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px;
+}
+
+.schedTimeRow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.schedHint { font-size: 12px; color: var(--color-text-muted); line-height: 1.6; }
+
+.schedChannels { display: flex; flex-wrap: wrap; gap: 12px; }
+.schedChannel {
+  display: flex; align-items: center; gap: 11px; cursor: pointer;
+  flex: 1 1 260px; min-width: 0;
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
+  padding: 12px 14px; background: var(--color-surface);
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+.schedChannel.on { border-color: var(--color-primary); background: var(--color-primary-soft); }
+.schedChannelIcon { font-size: 17px; }
+.schedChannelBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.schedChannelBody b { font-size: 13.5px; color: var(--color-text-primary); }
+.schedChannelHint { font-size: 11.5px; color: var(--color-text-muted); line-height: 1.45; }
+
+/* What the reader just asked for, in their own words, before they commit. */
+.schedSummary {
+  margin: 18px 0 0; padding: 11px 14px; border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken); font-size: 13px; line-height: 1.55;
+  color: var(--color-text-secondary);
+}
+
+.schedList { display: flex; flex-direction: column; }
+.schedRow {
+  display: flex; align-items: flex-start; gap: 14px; padding: 15px 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+.schedRow:last-child { border-bottom: none; }
+/* Paused is dimmed, never hidden: a schedule nobody can see is a schedule
+   nobody remembers switching off. */
+.schedRow--paused { opacity: 0.62; }
+.schedRowIcon { font-size: 17px; line-height: 1.4; }
+.schedRowBody { flex: 1; min-width: 0; }
+.schedRowTitle {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13.5px; font-weight: 600; color: var(--color-text-primary);
+}
+.schedTag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  background: var(--color-surface-sunken); color: var(--color-text-muted);
+  border-radius: 999px; padding: 2px 8px;
+}
+.schedRowWhen {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--color-text-secondary); margin-top: 4px;
+}
+.schedRowWhen .i { width: 13px; height: 13px; }
+.schedRowMeta { font-size: 11.5px; color: var(--color-text-muted); margin-top: 3px; line-height: 1.5; }
+.schedRowWarn {
+  font-size: 11.5px; color: #8a5a0b; margin-top: 5px; line-height: 1.5;
+  border-left: 2px solid var(--color-amber); padding-left: 9px;
+}
+.schedRowActions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.schedRowActions .btn { padding: 6px 12px; font-size: 12px; }
+
+.schedLink {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--color-primary); font-weight: 600;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+
+/* One column below the split point: the actions under the row they act on,
+   rather than squeezed against a wrapping title. */
+@media (max-width: 860px) {
+  .schedRow { flex-wrap: wrap; }
+  .schedRowActions { width: 100%; padding-left: 31px; }
+}

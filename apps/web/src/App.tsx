@@ -35,6 +35,7 @@ import { ThemeControls } from './components/ThemeControls';
 import { useDashboardTheme } from './theme/dashboardTheme';
 import { DashboardPage } from './components/DashboardPage';
 import { Settings } from './components/Settings';
+import { Schedule } from './components/Schedule';
 import { AskAI } from './components/AskAI';
 import { MyReports } from './components/MyReports';
 import { ModulePage, ModulesIndex } from './components/Modules';
@@ -119,6 +120,8 @@ export function App(): JSX.Element {
     | { kind: 'home' }
     | { kind: 'report'; id: string }
     | { kind: 'settings' }
+    /** Scheduled delivery — components/Schedule.tsx. */
+    | { kind: 'schedule' }
     | { kind: 'ask'; seedQuestion?: string }
     | { kind: 'my-reports' }
     /** The Module Wise Analysis tiles, and one module opened. */
@@ -438,13 +441,15 @@ export function App(): JSX.Element {
               ? { kind: 'home' }
               : id === 'settings'
                 ? { kind: 'settings' }
-                : id === 'ask'
-                  ? { kind: 'ask' }
-                  : id === 'my-reports'
-                    ? { kind: 'my-reports' }
-                    : id === 'modules'
-                      ? { kind: 'modules' }
-                      : { kind: 'report', id },
+                : id === 'schedule'
+                  ? { kind: 'schedule' }
+                  : id === 'ask'
+                    ? { kind: 'ask' }
+                    : id === 'my-reports'
+                      ? { kind: 'my-reports' }
+                      : id === 'modules'
+                        ? { kind: 'modules' }
+                        : { kind: 'report', id },
           );
         }}
         /* The layout and colour controls are the Dashboard's; the choice they
@@ -472,6 +477,20 @@ export function App(): JSX.Element {
             onAiStatusChange={(ai_status) => {
               setState({ kind: 'ready', session: { ...state.session, ai_status } });
             }}
+          />
+        ) : route.kind === 'schedule' ? (
+          /**
+           * The catalog comes from `home` for the same reason the Shell's menu
+           * does: it is the SERVED list, already narrowed to what this session
+           * may open, so the picker can never offer a report the reader would
+           * be refused. The schools are the selection in force, which is what
+           * a new schedule records as its coverage.
+           */
+          <Schedule
+            session={state.session}
+            dashboards={home?.dashboards ?? []}
+            schoolIds={selected}
+            onOpenSettings={openSettings}
           />
         ) : route.kind === 'ask' ? (
           <AskAI

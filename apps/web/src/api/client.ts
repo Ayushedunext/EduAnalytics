@@ -1004,3 +1004,61 @@ export function getOverviewSlot(
   if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
   return request<OverviewSlot>(`/api/home/overview/${encodeURIComponent(slot)}?${query.toString()}`);
 }
+
+// -- Insights: "explain this chart" (docs/10 §1.6) ----------------------------
+
+/**
+ * Which chart to explain. The same identity the SPA already keys a saved chart
+ * by (`ChartSource`, myView.ts), spelled in the server's snake_case — a
+ * Dashboard card is a slot plus a widget id, a report panel a report id plus
+ * one, and `custom` says which of the two report endpoints holds it.
+ */
+export type ChartInsightTarget =
+  /**
+   * A Dashboard card names the widgets it DRAWS, each with its slot. Several,
+   * because half of them are arrangements — the concentric rings are three
+   * rings and a total, and the Data Graphic reads two slots — and explaining
+   * one of those from a single widget would explain a chart the reader is not
+   * looking at. A card drawing one widget names one part.
+   */
+  | { kind: 'overview'; parts: readonly { slot: string; widget_id: string }[] }
+  | { kind: 'report' | 'custom'; report_id: string; widget_id: string };
+
+export interface ChartInsight {
+  headline: string;
+  points: string[];
+  caveat?: string;
+  /** The org's own model, under BYOK — shown so the panel can say who wrote this. */
+  model: string;
+  generated_at: string;
+  /** True when the answer came from cache rather than costing a model call. */
+  cached: boolean;
+}
+
+/**
+ * One chart, explained in plain language.
+ *
+ * A POST, like `askAI`, because it spends the organisation's own AI budget —
+ * and gated server-side on `ai_status === 'active'` regardless of what this
+ * client believes (Invariant 5), so the menu's lock is cosmetic on top of a
+ * real 403.
+ */
+export function getChartInsight(body: {
+  target: ChartInsightTarget;
+  schoolIds: readonly string[];
+  academicYear: string;
+  asOf?: string | undefined;
+  compareYear?: string | undefined;
+}): Promise<ChartInsight> {
+  const query = new URLSearchParams();
+  if (body.schoolIds.length > 0) query.set('school_ids', body.schoolIds.join(','));
+  return request<ChartInsight>(`/api/ai/insights?${query.toString()}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      target: body.target,
+      academic_year: body.academicYear,
+      ...(body.asOf === undefined ? {} : { as_of: body.asOf }),
+      ...(body.compareYear === undefined ? {} : { compare_year: body.compareYear }),
+    }),
+  });
+}

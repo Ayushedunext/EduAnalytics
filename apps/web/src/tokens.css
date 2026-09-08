@@ -1982,3 +1982,116 @@ body {
    databases, so it shows the SAVED version — a reader who changed a level's
    chart and saw nothing move would otherwise conclude the control is broken. */
 .editorDirty { font-size: 11.5px; color: #7a5b06; }
+
+/* ---------- the per-chart ⋮ menu and its dialogs (docs/06 §3, ADR-019) ----------
+
+   Deliberately NOT under `.skin`: the dialogs portal to `document.body` so a
+   card's rounded, clipped box cannot cut the corner off an enlarged chart, and
+   `.skin`'s variables (`--card`, `--ink`, `--line`) do not resolve out there.
+   Everything below therefore reads the semantic `--color-*` tokens, which live
+   on the root ([MANDATORY] §4: tokens, never hexes). */
+
+.chartMenuWrap { position: relative; display: inline-flex; }
+.chartMenuBtn { cursor: pointer; }
+
+.chartMenu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: 258px;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-card-hover);
+  padding: 6px; display: flex; flex-direction: column; gap: 2px;
+}
+.chartMenuHead {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--color-text-muted); padding: 6px 8px 4px; line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chartMenuItem {
+  display: flex; align-items: flex-start; gap: 9px; width: 100%; text-align: left;
+  background: transparent; border: 0; border-radius: var(--radius-sm); padding: 7px 8px;
+  font-family: var(--font-sans); cursor: pointer; color: var(--color-text-primary);
+  transition: background-color 0.12s ease;
+}
+.chartMenuItem:hover:not(:disabled) { background: var(--color-primary-soft); }
+.chartMenuItem:disabled { cursor: not-allowed; color: var(--color-disabled); }
+.chartMenuIc { font-size: 13px; line-height: 1.4; width: 15px; flex: none; text-align: center; }
+.chartMenuText { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.chartMenuText b { font-size: 12.5px; font-weight: 600; }
+.chartMenuText small { font-size: 11px; color: var(--color-text-muted); line-height: 1.35; }
+.chartMenuItem:disabled .chartMenuText small { color: var(--color-disabled); }
+
+.chartModalScrim {
+  position: fixed; inset: 0; z-index: 100; background: rgba(13, 42, 49, 0.42);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.chartModal {
+  background: var(--color-surface); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card-hover); width: min(460px, 100%);
+  max-height: min(88vh, 900px); display: flex; flex-direction: column; overflow: hidden;
+}
+.chartModal--wide { width: min(1080px, 100%); }
+.chartModalHead {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; border-bottom: 1px solid var(--color-border); flex: none;
+}
+.chartModalHead h3 {
+  margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chartModalClose {
+  background: transparent; border: 0; font-size: 20px; line-height: 1; cursor: pointer;
+  color: var(--color-text-muted); padding: 0 4px; flex: none;
+}
+.chartModalClose:hover { color: var(--color-text-primary); }
+.chartModalBody { padding: 16px 18px 18px; overflow: auto; }
+.chartModalHint { font-size: 11.5px; color: var(--color-text-muted); margin: 0 0 4px; line-height: 1.45; }
+/* The enlarged chart. A floor rather than a fixed height: a table panel is as
+   tall as its rows, and forcing 420px on it would print a band of empty card. */
+.chartEnlargeBody { min-height: 380px; }
+.chartEnlargeBody .specPanel { box-shadow: none; border: 0; padding: 0; }
+.logicPanel--inModal { padding: 0; border: 0; box-shadow: none; background: transparent; }
+.cloneForm { display: flex; flex-direction: column; gap: 9px; }
+
+/* A card whose ⋮ menu is OPEN paints above its neighbours.
+   Every card surface in this product is `position: relative` and none of them
+   carry a z-index, so the cards after it in DOM order would otherwise draw over
+   the dropdown — which is what a menu that appears half-hidden behind the next
+   chart looks like. Scoped by `:has` so the raise lasts exactly as long as the
+   menu does; a card with a closed menu is left in flow as it was. */
+:where(.card, .ovCard, .specPanel, .pcard):has(.chartMenu) { position: relative; z-index: 30; }
+
+/* "This chart / The whole report" in the clone dialog (ChartMenu.tsx). Segmented
+   rather than a select: two options a reader compares side by side, not a list. */
+.cloneWhat {
+  display: inline-flex; background: var(--color-surface-sunken); border-radius: var(--radius-sm);
+  padding: 3px; gap: 3px; align-self: flex-start;
+}
+.cloneWhat button {
+  border: 0; background: transparent; color: var(--color-text-secondary);
+  font-family: var(--font-sans); font-size: 11.5px; font-weight: 600;
+  padding: 5px 11px; border-radius: 4px; cursor: pointer;
+}
+.cloneWhat button.on { background: var(--color-surface); color: var(--color-text-primary); box-shadow: var(--shadow-xs); }
+
+/* ---------- ⋮ → Insights (docs/10 §1.6) ---------- */
+
+.insightsBody { display: flex; flex-direction: column; gap: 12px; }
+.insightsHeadline {
+  margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45;
+  color: var(--color-text-primary); letter-spacing: -0.005em;
+}
+.insightsPoints { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+.insightsPoints li { font-size: 13px; line-height: 1.55; color: var(--color-text-secondary); }
+/* The caveat is set apart, not tucked under. It is the sentence that says what
+   the figures do NOT cover, and a reader skimming three bullets must not miss
+   it (§10: a limitation stated quietly is a limitation not stated). */
+.insightsCaveat {
+  margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--color-text-secondary);
+  border-left: 2px solid var(--color-amber); padding-left: 10px;
+}
+.insightsFine {
+  margin: 4px 0 0; font-size: 11px; line-height: 1.5; color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border); padding-top: 10px;
+}
+.insightsSkeleton { min-height: 120px; border-radius: var(--radius-sm); }
+.insightsLocked { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.insightsLocked p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--color-text-secondary); }

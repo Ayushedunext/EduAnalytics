@@ -51,6 +51,8 @@ import {
 } from '../api/client';
 import { DrillTrail, useDrill, widgetIdOf } from './Drill';
 import { LogicPanel } from './LogicPanel';
+import { ChartMenu } from './ChartMenu';
+import { NO_CLONE_REASON, reportChartClone, reportChartLogic } from '../reportChartMenu';
 import { AskAiPanel } from './AskAiPanel';
 
 interface Props {
@@ -203,7 +205,7 @@ export function ReportEditor({ session, id, schoolIds, startEditing = false, onB
         renderWidgetActions={(widget: Widget) => {
           const drilled = drills[widget.id];
           const askable = report.is_owner;
-          if (drilled === undefined && !askable) return undefined;
+          const logic = reportChartLogic(report, report.base_report_id, widget.id);
           return (
             <>
               {drilled !== undefined && (
@@ -235,6 +237,19 @@ export function ReportEditor({ session, id, schoolIds, startEditing = false, onB
                   ✦ Ask AI
                 </button>
               )}
+              {/* The same four-action menu every other chart in the product
+                  carries (ChartMenu.tsx). Clone points at the report this one
+                  was cloned FROM, because that is what the clone endpoint
+                  takes; an AI-saved report has no base and says so on the
+                  disabled item. */}
+              <ChartMenu
+                title={widget.title ?? report.name}
+                source={{ kind: 'report', reportId: report.id, widgetId: widget.id, custom: true }}
+                widget={widget}
+                clone={reportChartClone(report.base_report_id, widget.id, { reportTitle: report.name })}
+                cloneReason={NO_CLONE_REASON}
+                logic={drilled === undefined ? logic : { ...logic, activeQueryKey: drilled.query.key }}
+              />
             </>
           );
         }}

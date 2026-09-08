@@ -152,7 +152,9 @@ export function Shell({
     </header>
   );
 
-  if (layout === 'B') {
+  /* My View is the reader's own board and has no frame of its own; it takes
+     View 1's plain shell rather than inventing a fourth chrome for it. */
+  if (layout === 'B' || layout === 'MY') {
     return (
       <div className="app">
         {controls}

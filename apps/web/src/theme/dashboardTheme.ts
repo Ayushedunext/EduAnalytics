@@ -1,6 +1,10 @@
 /**
- * The Dashboard's look: which of the three layouts is on screen, and which
- * palette the charts and chrome are painted in (docs/10 §1.5, 2026-09-04).
+ * The Dashboard's look: which layout is on screen, and which palette the charts
+ * and chrome are painted in (docs/10 §1.5, 2026-09-04).
+ *
+ * Four tabs since 2026-09-08 (docs/10 §1.6): the artifact's three layouts, plus
+ * My View — the reader's own board, which is a layout only in the sense that it
+ * is the fourth thing this control switches between.
  *
  * -- Where the values come from ------------------------------------------------
  * Both are the reader's choice and nothing else: no server round-trip, no
@@ -22,14 +26,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { derivePalette, type ChartPalette } from '@sap/chart-spec/react';
 
-export type DashboardLayout = 'A' | 'B' | 'C';
+export type DashboardLayout = 'A' | 'B' | 'C' | 'MY';
 
 /**
  * The bar's order, left to right. The ids are the formats as they were drawn;
  * the labels are what a reader sees. View 1 is format B — the one a reader
  * lands on at launch (DEFAULT_LAYOUT) — so the order here is B, A, C.
+ *
+ * `MY` leads the row, left of View 1, because it is the reader's OWN board: the
+ * three views are arrangements the product chose, and this is the one they
+ * chose themselves (myView.ts). It is still never the default — an empty board
+ * is a bad first screen, so a reader lands on View 1 and arrives here only by
+ * having put something on it, or by asking for it.
  */
 export const LAYOUTS: readonly { id: DashboardLayout; label: string }[] = [
+  { id: 'MY', label: 'My View' },
   { id: 'B', label: 'View 1' },
   { id: 'A', label: 'View 2' },
   { id: 'C', label: 'View 3' },
@@ -38,11 +49,19 @@ export const LAYOUTS: readonly { id: DashboardLayout; label: string }[] = [
 /** What a reader gets before they have picked anything: View 1. */
 export const DEFAULT_LAYOUT: DashboardLayout = 'B';
 
-/** Each layout's own palette, as the reference designs were drawn. */
+/**
+ * Each layout's own palette, as the reference designs were drawn.
+ *
+ * My View takes View 1's set. It has no reference design of its own — it is
+ * whatever the reader put on it — and inventing a fourth palette for it would
+ * mean the same chart changed colour when it was saved, which reads as a
+ * different chart.
+ */
 export const LAYOUT_PALETTES: Record<DashboardLayout, ChartPalette> = {
   A: { colours: ['#1fa0e8', '#37c979', '#f0508a', '#f5a623', '#8e6bf0', '#12b5a5'], gradient: ['#3dbe6c', '#1e7be0'] },
   B: { colours: ['#3c7cff', '#3ee0a0', '#ff4d8d', '#ffc940', '#ff8a3d', '#7b5cff'], gradient: ['#3c7cff', '#7b5cff'] },
   C: { colours: ['#f5a623', '#1e3a8a', '#2f7de1', '#12b5a5', '#3abf5e', '#e5484d'], gradient: ['#12b5a5', '#1e7be0'] },
+  MY: { colours: ['#3c7cff', '#3ee0a0', '#ff4d8d', '#ffc940', '#ff8a3d', '#7b5cff'], gradient: ['#3c7cff', '#7b5cff'] },
 };
 
 /** The seven quick picks beside the free colour input. */
@@ -65,7 +84,7 @@ interface Stored {
 }
 
 function isLayout(value: unknown): value is DashboardLayout {
-  return value === 'A' || value === 'B' || value === 'C';
+  return value === 'A' || value === 'B' || value === 'C' || value === 'MY';
 }
 
 function isHex(value: unknown): value is string {

@@ -25,6 +25,7 @@ import type { KpiWidget, TableWidget, Widget } from '@sap/chart-spec';
 import type { OverviewSlot } from '../../api/client';
 import { Icon } from '../Icon';
 import type { SlotState } from './useOverview';
+import { ChartMenu, type ChartLogic } from '../ChartMenu';
 import { donutOf, initialsOf, kpiOf, lineOf, partOf, rateOf, tableOf, validWidgets } from './widgets';
 
 /** Forms three rates can take in a 150px box; two-value gauges take fewer (see ChartTypeSelect). */
@@ -99,6 +100,85 @@ export function Slot({
 
 function notesOf(state: SlotState | undefined): string[] | undefined {
   return state?.kind === 'ready' && state.slot.notes.length > 0 ? state.slot.notes : undefined;
+}
+
+/**
+ * A card's own logic (Invariant 6), read straight off the slot the server
+ * answered with: its notes, its as-of date, and the vetted statements it ran
+ * (services/overview.ts returns them on every slot for exactly this).
+ *
+ * Nothing is derived. A card that has not loaded has no logic to show, and the
+ * menu then offers "View logic" disabled rather than an empty panel — a panel
+ * that said "Source: —" would be this screen inventing a claim about where a
+ * number came from, which is the one thing Invariant 6 exists to stop.
+ */
+function logicOf(state: SlotState | undefined): ChartLogic | undefined {
+  if (state?.kind !== 'ready') return undefined;
+  return {
+    source: 'Dashboard card — vetted SQL, read-only, on the read replica',
+    notes: state.slot.notes,
+    queries: state.slot.queries,
+    asOf: state.slot.as_of,
+  };
+}
+
+/**
+ * The "⋮" menu for a Dashboard card (ChartMenu.tsx).
+ *
+ * `reportId` is the report this card OPENS, where it has one, and it is the
+ * only thing that makes Clone offerable here: the clone endpoint takes a report
+ * id and a Dashboard slot is not one (services/dashboards.ts). A card with no
+ * report behind it still LISTS Clone, disabled, with that reason on it.
+ *
+ * `widget` is passed where the card draws ONE chart-spec widget, which Enlarge
+ * can then redraw at full size on its own. Where the card is an arrangement the
+ * platform composes — the concentric rings, a gauge, a table of people — the
+ * card hands `renderLarge` its own body instead, so what enlarges is what was
+ * on screen rather than a different chart of the same numbers.
+ */
+function CardMenu({
+  state,
+  slot,
+  id,
+  title,
+  reportId,
+  widget,
+  chartType,
+  chartSlot,
+  renderLarge,
+  draws,
+}: {
+  state: SlotState | undefined;
+  slot: string;
+  id: string;
+  title: string;
+  reportId?: string | undefined;
+  widget?: unknown;
+  chartType?: ChartType | undefined;
+  chartSlot?: number | undefined;
+  renderLarge?: (() => ReactNode) | undefined;
+  /**
+   * For a card whose `id` names an ARRANGEMENT rather than a widget — the
+   * concentric rings, the Data Graphic's pair of gauges — the widgets it
+   * actually draws, so Insights explains the card rather than failing to find
+   * a widget by that name. Absent means `id` is itself the widget.
+   */
+  draws?: readonly { slot: string; widgetId: string }[] | undefined;
+}): ReactElement {
+  return (
+    <ChartMenu
+      title={title}
+      source={{ kind: 'overview', slot, widgetId: id, ...(reportId === undefined ? {} : { reportId }) }}
+      widget={widget}
+      chartType={chartType}
+      slot={chartSlot}
+      renderLarge={renderLarge}
+      insightParts={draws}
+      clone={reportId === undefined ? undefined : { baseReportId: reportId }}
+      cloneReason="This card is built from the Dashboard's own query rather than from a report, so there is nothing for the clone endpoint to copy."
+      logic={logicOf(state)}
+    />
+  );
 }
 
 function ReportButton({ onClick, label = 'Report' }: { onClick: () => void; label?: string }): ReactElement {
@@ -234,7 +314,17 @@ export function TilesCard({ state, ids = TILE_IDS, className, title, notes = tru
 export function RingsCard({ state, year, asOf, onOpen }: { state: SlotState | undefined; year: string | null; asOf: string | null; onOpen: (id: string) => void }): ReactElement {
   const palette = usePalette();
   const [type, setType] = useState<ChartType>('donut');
-  const slots = [3, 2, 0];
+  /**
+   * The card's body, at either size. Written once and called twice — in the
+   * card, and again inside Enlarge — because the enlarged view has to be THIS
+   * card drawn bigger, not a second drawing of the same figures free to
+   * disagree with it about which ring is which colour.
+   */
+  const body = (large: boolean): ReactNode => (
+    <Slot state={state}>
+      {(widgets) => <RingsBody widgets={widgets} palette={palette} type={type} large={large} />}
+    </Slot>
+  );
   return (
     <Card
       className="slotRings"
@@ -244,52 +334,69 @@ export function RingsCard({ state, year, asOf, onOpen }: { state: SlotState | un
           <ReportButton onClick={() => { onOpen('fee-collection'); }} />
           <span className="tinybtn dark"><Icon name="calendar" />AY {year ?? '—'} · as of {asOf ?? '—'}</span>
           <ChartTypeSelect value={type} onChange={setType} options={RING_FORMS} />
+          <CardMenu
+            state={state}
+            slot="rings"
+            id="rings"
+            title="Attendance and fee realisation"
+            reportId="fee-collection"
+            renderLarge={() => body(true)}
+            draws={[
+              { slot: 'rings', widgetId: 'ring-attendance' },
+              { slot: 'rings', widgetId: 'ring-realisation' },
+              { slot: 'rings', widgetId: 'ring-staff' },
+              { slot: 'rings', widgetId: 'ring-total' },
+            ]}
+          />
         </>
       }
       notes={notesOf(state)}
     >
-      <Slot state={state}>
-        {(widgets) => {
-          const rings = [kpiOf(widgets, 'ring-attendance'), kpiOf(widgets, 'ring-realisation'), kpiOf(widgets, 'ring-staff')];
-          const total = kpiOf(widgets, 'ring-total');
-          const points = rings.flatMap((k, i) => (k === undefined ? [] : [{ name: k.label, value: rateOf(k) ?? 0, slot: slots[i] ?? 0 }]));
-          return (
-            <div className="ringrow">
-              <div>
-                <div className="chart">
-                  {type === 'donut' ? (
-                    <RingsSvg rings={points.map((p) => ({ pct: p.value, colour: paletteColour(palette, p.slot) }))} />
-                  ) : (
-                    <VividChart model={pointsModel(points)} type={type} palette={palette} compact spark height={150} />
-                  )}
-                </div>
-                <div className="ringval">{total?.value ?? '—'}</div>
-                <div className="ovHead" style={{ justifyContent: 'center', marginBottom: 0 }}><div className="sub">{total?.label ?? ''}</div></div>
-              </div>
-              <div className="bars-list">
-                {points.map((p) => (
-                  <div className="row" key={p.name}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{p.name}</span>
-                      <span style={{ color: 'var(--ink-3)' }}>{p.value}%</span>
-                    </div>
-                    <div className="track">
-                      <div className="fill" style={{ width: `${String(p.value)}%`, color: paletteColour(palette, p.slot) }} />
-                    </div>
-                  </div>
-                ))}
-                {total?.breakdown?.map((p) => (
-                  <div className="row" key={p.label} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink-2)' }}>
-                    <span>{p.label}</span>
-                    <b>{p.value}</b>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        }}
-      </Slot>
+      {body(false)}
     </Card>
+  );
+}
+
+/** The three rates as concentric rings (or in the chosen form), with the bars beside them. */
+function RingsBody({ widgets, palette, type, large }: { widgets: Widget[]; palette: ChartPalette; type: ChartType; large: boolean }): ReactElement {
+  const slots = [3, 2, 0];
+  const rings = [kpiOf(widgets, 'ring-attendance'), kpiOf(widgets, 'ring-realisation'), kpiOf(widgets, 'ring-staff')];
+  const total = kpiOf(widgets, 'ring-total');
+  const points = rings.flatMap((k, i) => (k === undefined ? [] : [{ name: k.label, value: rateOf(k) ?? 0, slot: slots[i] ?? 0 }]));
+  const size = large ? 280 : 150;
+  return (
+    <div className="ringrow">
+      <div>
+        <div className="chart" style={large ? { height: size } : undefined}>
+          {type === 'donut' ? (
+            <RingsSvg rings={points.map((p) => ({ pct: p.value, colour: paletteColour(palette, p.slot) }))} size={size} />
+          ) : (
+            <VividChart model={pointsModel(points)} type={type} palette={palette} compact spark height={size} />
+          )}
+        </div>
+        <div className="ringval">{total?.value ?? '—'}</div>
+        <div className="ovHead" style={{ justifyContent: 'center', marginBottom: 0 }}><div className="sub">{total?.label ?? ''}</div></div>
+      </div>
+      <div className="bars-list">
+        {points.map((p) => (
+          <div className="row" key={p.name}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>{p.name}</span>
+              <span style={{ color: 'var(--ink-3)' }}>{p.value}%</span>
+            </div>
+            <div className="track">
+              <div className="fill" style={{ width: `${String(p.value)}%`, color: paletteColour(palette, p.slot) }} />
+            </div>
+          </div>
+        ))}
+        {total?.breakdown?.map((p) => (
+          <div className="row" key={p.label} style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink-2)' }}>
+            <span>{p.label}</span>
+            <b>{p.value}</b>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -304,6 +411,7 @@ export function MonthlyCard({ state, onOpen }: { state: SlotState | undefined; o
         <>
           <button type="button" className="tinybtn dark" onClick={() => { onOpen('fee-collection'); }}><Icon name="calendar" />Monthly</button>
           <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot="monthly" id="bar-month" title="Monthly fee receipts" reportId="fee-collection" widget={widget} chartType={type} chartSlot={0} />
         </>
       }
       notes={notesOf(state)}
@@ -340,6 +448,7 @@ export function AdmissionsCard({ state, onOpen }: { state: SlotState | undefined
         <>
           <ReportButton onClick={() => { onOpen('admissions-funnel'); }} />
           <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot="admissions_by_school" id="bar-school-admissions" title="New admissions" reportId="admissions-funnel" widget={widget} chartType={type} chartSlot={2} />
         </>
       }
       notes={notesOf(state)}
@@ -352,11 +461,21 @@ export function AdmissionsCard({ state, onOpen }: { state: SlotState | undefined
 }
 
 /** Weekly Sales / Weekly Orders / Customer Analytics: a figure over a sparkline. */
-export function SparkCard({ state, kpiId, lineId, className, slot, title }: { state: SlotState | undefined; kpiId: string; lineId: string; className?: string; slot: number; title: string }): ReactElement {
+export function SparkCard({ state, kpiId, lineId, className, slot, title, slotKey, reportId }: { state: SlotState | undefined; kpiId: string; lineId: string; className?: string; slot: number; title: string; slotKey: string; reportId?: string }): ReactElement {
   const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === lineId) : undefined;
   const [type, setType] = useState<ChartType>('area');
   return (
-    <Card className={`spark sparkChart ${className ?? ''}`} title={title} tools={<ChartTypeSelect value={type} onChange={setType} />} notes={notesOf(state)}>
+    <Card
+      className={`spark sparkChart ${className ?? ''}`}
+      title={title}
+      tools={
+        <>
+          <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot={slotKey} id={lineId} title={title} reportId={reportId} widget={widget} chartType={type} chartSlot={slot} />
+        </>
+      }
+      notes={notesOf(state)}
+    >
       <Slot state={state}>
         {(widgets) => {
           const k = kpiOf(widgets, kpiId);
@@ -383,33 +502,51 @@ export function SparkCard({ state, kpiId, lineId, className, slot, title }: { st
 
 export function TopSchoolsCard({ state, onOpen }: { state: SlotState | undefined; onOpen: (id: string) => void }): ReactElement {
   const palette = usePalette();
+  const body = (
+    <Slot state={state}>
+      {(widgets) => {
+        const table = tableOf(widgets, 'table-schools');
+        if (table === undefined || table.rows.length === 0) return <span className="ovMuted">No fee ledger for the selected schools.</span>;
+        return <TopSchoolsList table={table} palette={palette} />;
+      }}
+    </Slot>
+  );
   return (
-    <Card className="slotUsers" title="Top schools" sub="By fee collected this year" tools={<ReportButton onClick={() => { onOpen('fee-comparative'); }} label="Compare" />} notes={notesOf(state)}>
-      <Slot state={state}>
-        {(widgets) => {
-          const table = tableOf(widgets, 'table-schools');
-          if (table === undefined || table.rows.length === 0) return <span className="ovMuted">No fee ledger for the selected schools.</span>;
-          return (
-            <div>
-              {table.rows.map((row, i) => {
-                const name = String(row['school'] ?? '');
-                const colour = paletteColour(palette, [0, 2, 4, 1, 5, 3][i % 6] ?? i);
-                return (
-                  <div className="userrow" key={String(row['school_id'] ?? i)}>
-                    <span className="skAvatar" style={{ background: `linear-gradient(135deg, ${lighten(colour, 0.14)}, ${colour})` }}>{initialsOf(name)}</span>
-                    <div style={{ minWidth: 0 }}>
-                      <b>{name}</b>
-                      <small>Realised {String(row['realisation'] ?? '—')}</small>
-                    </div>
-                    <span className="pill" style={{ background: paletteColour(palette, 1) }}>{String(row['collected'] ?? '')}</span>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        }}
-      </Slot>
+    <Card
+      className="slotUsers"
+      title="Top schools"
+      sub="By fee collected this year"
+      tools={
+        <>
+          <ReportButton onClick={() => { onOpen('fee-comparative'); }} label="Compare" />
+          <CardMenu state={state} slot="top_schools" id="table-schools" title="Top schools" reportId="fee-comparative" renderLarge={() => body} />
+        </>
+      }
+      notes={notesOf(state)}
+    >
+      {body}
     </Card>
+  );
+}
+
+function TopSchoolsList({ table, palette }: { table: TableWidget; palette: ChartPalette }): ReactElement {
+  return (
+    <div>
+      {table.rows.map((row, i) => {
+        const name = String(row['school'] ?? '');
+        const colour = paletteColour(palette, [0, 2, 4, 1, 5, 3][i % 6] ?? i);
+        return (
+          <div className="userrow" key={String(row['school_id'] ?? i)}>
+            <span className="skAvatar" style={{ background: `linear-gradient(135deg, ${lighten(colour, 0.14)}, ${colour})` }}>{initialsOf(name)}</span>
+            <div style={{ minWidth: 0 }}>
+              <b>{name}</b>
+              <small>Realised {String(row['realisation'] ?? '—')}</small>
+            </div>
+            <span className="pill" style={{ background: paletteColour(palette, 1) }}>{String(row['collected'] ?? '')}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -433,7 +570,27 @@ export function FeeHeadsCard({ state }: { state: SlotState | undefined }): React
       className="slotDonut"
       title="Fee position"
       sub={state?.kind === 'ready' ? billedLine(validWidgets(state.slot.widgets)) : undefined}
-      tools={<ChartTypeSelect value={type} onChange={setType} />}
+      tools={
+        <>
+          <ChartTypeSelect value={type} onChange={setType} />
+          {/* The card is a donut AND four monthly sparklines; the insight covers
+              all five, though Enlarge still draws the donut it is anchored on. */}
+          <CardMenu
+            state={state}
+            slot="fee_heads"
+            id="donut-heads"
+            title="Fee position"
+            reportId="fee-collection"
+            widget={donut}
+            chartType={type}
+            chartSlot={1}
+            draws={[
+              { slot: 'fee_heads', widgetId: 'donut-heads' },
+              ...ACTIVITY.map(([lineId]) => ({ slot: 'fee_heads', widgetId: lineId })),
+            ]}
+          />
+        </>
+      }
       notes={notesOf(state)}
     >
       <Slot state={state}>
@@ -469,7 +626,7 @@ function billedLine(widgets: readonly Widget[]): string | undefined {
 // -- Format B ----------------------------------------------------------------------
 
 /** A "big" chart card of the B row: title, type menu, kebab, chart. */
-export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId }: { state: SlotState | undefined; widgetId: string; title: string; slot: number; onOpen: (id: string) => void; reportId: string }): ReactElement {
+export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId, slotKey }: { state: SlotState | undefined; widgetId: string; title: string; slot: number; onOpen: (id: string) => void; reportId: string; slotKey: string }): ReactElement {
   const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === widgetId) : undefined;
   const [type, setType] = useChartType(widget);
   return (
@@ -478,8 +635,14 @@ export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId }:
       title={title}
       tools={
         <>
+          {/* The kebab used to BE the way to the report; it is the standard
+              per-chart menu now (ChartMenu.tsx), so the way through gets a
+              control of its own — the same "Report" chip the other cards on
+              this Dashboard already carry, rather than a fifth item that would
+              make this one card's menu different from every other card's. */}
+          <ReportButton onClick={() => { onOpen(reportId); }} />
           <ChartTypeSelect value={type} onChange={setType} />
-          <button type="button" className="kebab" title={`Open ${reportId}`} aria-label="Open the full report" onClick={() => { onOpen(reportId); }}>⋮</button>
+          <CardMenu state={state} slot={slotKey} id={widgetId} title={title} reportId={reportId} widget={widget} chartType={type} chartSlot={slot} />
         </>
       }
       notes={notesOf(state)}
@@ -535,16 +698,30 @@ export function GaugeCards({ state }: { state: SlotState | undefined }): ReactEl
       {GAUGES.map(([rateId, countId, slot]) => (
         <GaugeCard key={countId} state={state} rateId={rateId} countId={countId} slot={slot} />
       ))}
+
     </>
   );
 }
 
-function GaugeCard({ state, rateId, countId, slot }: { state: SlotState | undefined; rateId: string; countId: string; slot: number }): ReactElement {
+export function GaugeCard({ state, rateId, countId, slot }: { state: SlotState | undefined; rateId: string; countId: string; slot: number }): ReactElement {
   const palette = usePalette();
   const [type, setType] = useState<ChartType>('donut');
   const colour = paletteColour(palette, slot);
+  const label = state?.kind === 'ready' ? kpiOf(validWidgets(state.slot.widgets), countId)?.label ?? '' : '';
   return (
-    <Card className="gaugeCard" title={state?.kind === 'ready' ? kpiOf(validWidgets(state.slot.widgets), countId)?.label ?? '' : ''} tools={<ChartTypeSelect value={type} onChange={setType} options={GAUGE_FORMS} />}>
+    <Card
+      className="gaugeCard"
+      title={label}
+      tools={
+        <>
+          <ChartTypeSelect value={type} onChange={setType} options={GAUGE_FORMS} />
+          {/* No report behind a gauge: it is the Dashboard's own reading of the
+              roll and the register, so Clone is listed disabled with that
+              reason rather than pointing at a report it did not come from. */}
+          <CardMenu state={state} slot="gauges" id={countId} title={label === '' ? 'Gauge' : label} />
+        </>
+      }
+    >
       <Slot state={state}>
         {(widgets) => {
           const rate = kpiOf(widgets, rateId);
@@ -583,15 +760,31 @@ const STATUS_SLOT: Record<string, number> = { 'Late & unpaid': 2, 'Pays late': 3
 
 export function LatePayersCard({ state }: { state: SlotState | undefined }): ReactElement {
   const palette = usePalette();
+  const body = (
+    <Slot state={state}>
+      {(widgets) => {
+        const table = tableOf(widgets, 'table-late-payers');
+        if (table === undefined || table.rows.length === 0) return <span className="ovMuted">No late or unpaid fees for the selected schools this year.</span>;
+        return <LatePayersTable table={table} palette={palette} />;
+      }}
+    </Slot>
+  );
   return (
-    <Card title="Students paying late or not paying" tools={<span className="kebab" aria-hidden="true">⋮</span>} notes={notesOf(state)}>
-      <Slot state={state}>
-        {(widgets) => {
-          const table = tableOf(widgets, 'table-late-payers');
-          if (table === undefined || table.rows.length === 0) return <span className="ovMuted">No late or unpaid fees for the selected schools this year.</span>;
-          return <LatePayersTable table={table} palette={palette} />;
-        }}
-      </Slot>
+    <Card
+      title="Students paying late or not paying"
+      tools={
+        <CardMenu
+          state={state}
+          slot="late_payers"
+          id="table-late-payers"
+          title="Students paying late or not paying"
+          reportId="fee-defaulters"
+          renderLarge={() => body}
+        />
+      }
+      notes={notesOf(state)}
+    >
+      {body}
     </Card>
   );
 }
@@ -649,33 +842,54 @@ function LatePayersTable({ table, palette }: { table: TableWidget; palette: Char
 
 export function InboxCard({ state }: { state: SlotState | undefined }): ReactElement {
   const palette = usePalette();
+  const body = (
+    <Slot state={state}>
+      {(widgets) => {
+        const table = tableOf(widgets, 'table-pending');
+        if (table === undefined || table.rows.length === 0) return <span className="ovMuted">Nothing pending for the selected schools.</span>;
+        return <PendingList table={table} palette={palette} />;
+      }}
+    </Slot>
+  );
   return (
-    <Card title="Pending fees" sub="Top 10 students by balance" tools={<span className="kebab" aria-hidden="true">⋮</span>} notes={notesOf(state)}>
-      <Slot state={state}>
-        {(widgets) => {
-          const table = tableOf(widgets, 'table-pending');
-          if (table === undefined || table.rows.length === 0) return <span className="ovMuted">Nothing pending for the selected schools.</span>;
-          return (
-            <div>
-              {table.rows.map((row, i) => {
-                const name = String(row['student'] ?? '');
-                const colour = paletteColour(palette, [0, 2, 4, 1, 5, 3][i % 6] ?? i);
-                return (
-                  <div className="msg" key={`${String(row['enrollment'])}-${String(i)}`}>
-                    <span className="skAvatar" style={{ background: `linear-gradient(135deg, ${lighten(colour, 0.14)}, ${colour})` }}>{initialsOf(name)}</span>
-                    <div style={{ minWidth: 0 }}>
-                      <b>{name}</b>
-                      <small>Class {String(row['class'] ?? '—')} · overdue {String(row['overdue'] ?? '—')}</small>
-                    </div>
-                    <time>{String(row['pending'] ?? '')}</time>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        }}
-      </Slot>
+    <Card
+      title="Pending fees"
+      sub="Top 10 students by balance"
+      tools={
+        <CardMenu
+          state={state}
+          slot="pending_top"
+          id="table-pending"
+          title="Pending fees"
+          reportId="fee-defaulters"
+          renderLarge={() => body}
+        />
+      }
+      notes={notesOf(state)}
+    >
+      {body}
     </Card>
+  );
+}
+
+function PendingList({ table, palette }: { table: TableWidget; palette: ChartPalette }): ReactElement {
+  return (
+    <div>
+      {table.rows.map((row, i) => {
+        const name = String(row['student'] ?? '');
+        const colour = paletteColour(palette, [0, 2, 4, 1, 5, 3][i % 6] ?? i);
+        return (
+          <div className="msg" key={`${String(row['enrollment'])}-${String(i)}`}>
+            <span className="skAvatar" style={{ background: `linear-gradient(135deg, ${lighten(colour, 0.14)}, ${colour})` }}>{initialsOf(name)}</span>
+            <div style={{ minWidth: 0 }}>
+              <b>{name}</b>
+              <small>Class {String(row['class'] ?? '—')} · overdue {String(row['overdue'] ?? '—')}</small>
+            </div>
+            <time>{String(row['pending'] ?? '')}</time>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -687,15 +901,32 @@ const AREA_SERIES = [
   ['line-attendance', 'Student attendance %', 2],
 ] as const;
 
-export function AreaCard({ state }: { state: SlotState | undefined }): ReactElement {
+export function AreaCard({ state, series }: { state: SlotState | undefined; series?: string }): ReactElement {
   const palette = usePalette();
-  const [active, setActive] = useState(0);
+  /**
+   * Which series the card opens on. The Dashboard opens on the first; My View
+   * opens on the one that was SAVED, because the reader kept a line, not a
+   * card with three lines behind it (myView.ts).
+   */
+  const [active, setActive] = useState(() => {
+    const found = AREA_SERIES.findIndex(([id]) => id === series);
+    return found < 0 ? 0 : found;
+  });
   const [type, setType] = useState<ChartType>('area');
   const current = AREA_SERIES[active] ?? AREA_SERIES[0];
   return (
     <Card
       className="slotArea"
-      tools={<ChartTypeSelect value={type} onChange={setType} />}
+      tools={
+        <>
+          <ChartTypeSelect value={type} onChange={setType} />
+          {/* Identified by the series ON SCREEN, not by the card: a reader who
+              keeps "Student attendance %" wants that line on their board, and
+              saving "the area card" would put whichever series happened to be
+              selected there instead. */}
+          <CardMenu state={state} slot="area" id={current[0]} title={current[1]} chartSlot={current[2]} />
+        </>
+      }
       title={
         <span className="legendBtns">
           {AREA_SERIES.map(([id, label, slot], i) => (
@@ -722,8 +953,9 @@ export function ModesCard({ state, onOpen }: { state: SlotState | undefined; onO
       title="Payment modes"
       tools={
         <>
+          <ReportButton onClick={() => { onOpen('fee-collection'); }} />
           <ChartTypeSelect value={type} onChange={setType} />
-          <button type="button" className="kebab" aria-label="Open Fee Collection" onClick={() => { onOpen('fee-collection'); }}><Icon name="gear" /></button>
+          <CardMenu state={state} slot="modes" id="donut-mode" title="Payment modes" reportId="fee-collection" widget={widget} chartType={type} chartSlot={0} />
         </>
       }
       notes={notesOf(state)}
@@ -748,6 +980,28 @@ export function GaugesCCard({ rings, tiles }: { rings: SlotState | undefined; ti
   ];
   return (
     <div className="card ovCard slotGauges">
+      {/* This card has no head to hang the menu in — it is two gauges and
+          nothing else — so the menu floats in its corner instead. Anchored on
+          the RINGS slot, which is where the realisation figure comes from; the
+          attendance gauge beside it reads the tiles slot, and both are listed
+          in the logic panel because both are behind what is drawn. */}
+      <span className="cardMenuFloat">
+        {/* The one card that reads two slots: fee realisation from the rings,
+            today's attendance from the tiles. Both are named, so the insight
+            covers the card rather than half of it. */}
+        <CardMenu
+          state={rings}
+          slot="rings"
+          id="gauges-c"
+          title="Money and presence"
+          reportId="fee-collection"
+          draws={[
+            { slot: 'rings', widgetId: 'ring-realisation' },
+            { slot: 'rings', widgetId: 'ring-total' },
+            { slot: 'tiles', widgetId: 'tile-attendance' },
+          ]}
+        />
+      </span>
       {!ready && rings?.kind !== 'failed' && tiles?.kind !== 'failed' ? <div className="skeleton" /> : null}
       {ready &&
         gauges.map((g, i) => (
@@ -795,7 +1049,12 @@ export function CustomerCard({ state }: { state: SlotState | undefined }): React
       className="slotCust cust sparkChart"
       title={<span className="v">{k?.value ?? '—'}</span>}
       sub={k?.label ?? 'Students paying late'}
-      tools={<ChartTypeSelect value={type} onChange={setType} />}
+      tools={
+        <>
+          <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot="late_weekly" id="line-late-week" title={k?.label ?? 'Students paying late'} reportId="fee-defaulters" widget={widget} chartType={type} chartSlot={2} />
+        </>
+      }
       notes={notesOf(state)}
     >
       <Slot state={state}>{() => <div className="chart"><Chart widget={widget} type={type} slot={2} spark /></div>}</Slot>

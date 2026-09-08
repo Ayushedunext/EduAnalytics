@@ -32,8 +32,10 @@ import {
   type DrillTarget,
 } from '@sap/chart-spec/react';
 import type { Widget } from '@sap/chart-spec';
-import type { HomePreview, DashboardCard } from '../api/client';
+import { getReport, type HomePreview, type DashboardCard } from '../api/client';
 import { DrillTrail, useDrill, widgetIdOf } from './Drill';
+import { ChartMenu } from './ChartMenu';
+import { reportChartClone, reportChartLogic } from '../reportChartMenu';
 
 /**
  * A dashboard's own lead CHART, live -- the same bar/line/donut
@@ -114,11 +116,50 @@ export function PreviewCard({
           </h3>
           {subtitle !== null && <div className="sub">{subtitle}</div>}
         </div>
-        <div className="tools">
+        {/**
+          * The head opens the report, so the menu has to stop the click from
+          * reaching it — otherwise choosing "Enlarge" would also navigate away
+          * from the card it enlarged. Same reasoning as the body/head split
+          * above, one control further in.
+          */}
+        <div
+          className="tools"
+          onClick={(event) => { event.stopPropagation(); }}
+          onKeyDown={(event) => { event.stopPropagation(); }}
+        >
           {type !== null && (
             <ChartTypeSelect value={type} onChange={(next) => { setChartType(next); }} />
           )}
-          <span className="tinybtn dark">Report →</span>
+          {/* The head's click no longer reaches here, so the way through is a
+              real button rather than the label it used to be. */}
+          <button type="button" className="tinybtn dark" onClick={() => { onOpen(card.id); }}>
+            Report →
+          </button>
+          {baseId !== null && (
+            <ChartMenu
+              title={subtitle ?? card.title}
+              source={{ kind: 'report', reportId: card.id, widgetId: baseId }}
+              widget={shown}
+              chartType={type ?? undefined}
+              slot={slot}
+              clone={reportChartClone(card.id, baseId, { reportTitle: card.title })}
+              /**
+                * A preview card holds ONE widget, not the report behind it
+                * (`getHomePreview`), so its statements are fetched when a reader
+                * asks for them rather than on every card of every module page —
+                * see `logicLoader` in ChartMenu.tsx.
+                */
+              logicLoader={
+                academicYear === null
+                  ? undefined
+                  : () =>
+                      getReport(card.id, schoolIds, academicYear).then((report) =>
+                        reportChartLogic(report, card.id, baseId),
+                      )
+              }
+              logicReason="The academic year is still loading."
+            />
+          )}
         </div>
       </div>
       <div className="pcardBody">

@@ -15,7 +15,7 @@
  * server has told it which ones exist.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ApiFailure,
   getHome,
@@ -28,6 +28,7 @@ import {
   type SessionResponse,
 } from './api/client';
 import { ChartPaletteProvider } from '@sap/chart-spec/react';
+import { ChartMenuProvider } from './components/chartMenuEnv';
 import { Shell } from './components/Shell';
 import { Dashboard } from './components/Dashboard';
 import { ThemeControls } from './components/ThemeControls';
@@ -136,6 +137,18 @@ export function App(): JSX.Element {
    * data. Folding it into `{ kind: 'report' }` would have made them two.
    */
   const [cameFromModule, setCameFromModule] = useState<string | null>(null);
+
+  /**
+   * A chart's "⋮ → Clone and customise" landed. Same destination as the
+   * page-level clone button: the editor, open on the copy, because a clone
+   * nobody is taken to is a clone nobody knows was made.
+   *
+   * Stable across renders so the menu's context (chartMenuEnv.tsx) does not
+   * change identity on every keystroke elsewhere in this component.
+   */
+  const openCloned = useCallback((id: string) => { setRoute({ kind: 'report-edit', id }); }, []);
+  /** The path off a locked "Insights" — docs/10 §3's "locked ≠ hidden". */
+  const openSettings = useCallback(() => { setRoute({ kind: 'settings' }); }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -286,6 +299,18 @@ export function App(): JSX.Element {
    * means the invalid state cannot be reached at all, rather than being tidied
    * up after the fact.
    */
+  /**
+   * The selected schools by NAME, for the scope line a chart's logic panel
+   * prints. Read off the session's scope rather than off `home`, so it is right
+   * before the KPI strip has landed and stays right while it reloads.
+   */
+  const scopeNames = useMemo(
+    () =>
+      state.kind === 'ready'
+        ? state.session.scope.filter((s) => selected.includes(s.school_id)).map((s) => s.school_name)
+        : [],
+    [state, selected],
+  );
   const offeredYears = home?.academic_years ?? serverYears?.academic_years ?? [];
   const resolvedYear = home?.academic_year ?? serverYears?.academic_year ?? null;
   const effectiveYear =
@@ -368,6 +393,18 @@ export function App(): JSX.Element {
      * and every chart read one value.
      */
     <ChartPaletteProvider palette={theme.palette}>
+      {/* The three things every per-chart menu needs and no chart knows: the
+          scope and year in force, and where a clone should land. Outside the
+          shell so a menu's dialog, which portals to the body, still resolves
+          them (chartMenuEnv.tsx). */}
+      <ChartMenuProvider
+        schoolIds={selected}
+        academicYear={effectiveYear}
+        scopeNames={scopeNames}
+        aiActive={state.kind === 'ready' && state.session.ai_status === 'active'}
+        onOpenSettings={openSettings}
+        onCloned={openCloned}
+      >
       <div className={`skin skin--${theme.layout}`}>
       <Shell
         layout={theme.layout}
@@ -547,6 +584,7 @@ export function App(): JSX.Element {
         )}
       </Shell>
       </div>
+      </ChartMenuProvider>
     </ChartPaletteProvider>
   );
 }

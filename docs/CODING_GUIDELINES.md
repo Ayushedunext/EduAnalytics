@@ -151,7 +151,7 @@ Formal WCAG target: *not decided* (§23). Minimum bar from the established UX (d
 ## 17. UI / design-system consistency
 
 - Tokens, type scale, and components from docs/10 are the binding spec; the HTML prototype and deck are references, not sources of truth.
-- Every report surface exposes the standard affordances: 🧠 View logic, ⧉ Clone, ⬇ PDF, scope line (docs/10 §3; ADR-018/019). A new report surface missing them is incomplete, not minimal.
+- Every report surface exposes the standard affordances: Insights, View logic, Clone, PDF, scope line (docs/10 §3, §1.6–1.7; ADR-018/019). A new report surface missing them is incomplete, not minimal. **Amended 2026-09-08:** *where* two of them live moved, and the rule did not. View logic and Clone are reached from each chart's own "⋮" menu (docs/10 §1.6, `components/ChartMenu.tsx`), which is present on every chart on every surface; PDF and the scope line stay page-level, because a PDF is of a page and scope is a property of the whole screen. A report page that draws its charts through `ChartSpecView` gets the first two for free and must not re-add a page-wide copy of either — two ways to the same place with different scope, one of them always the vaguer. What is still `[MANDATORY]` is that all four are reachable, and that the logic panel shows the report's whole statement set with the chart's own marked, so Invariant 6 is one click from every chart rather than one click from every page.
 - Drill UX elements (chip, hover hint, breadcrumb, Back/Reset, level indicator, slice total) are one shared component set — never re-implemented per dashboard (ADR-020 UX).
 
 ## 18. Reusability & component boundaries
@@ -189,7 +189,7 @@ Before requesting review (or, for Claude Code, before declaring a task complete)
 8. Audit events written for every chokepoint this change touches (§13).
 9. Contract changes have their ADR + doc update in the same change set (§20).
 10. Errors fail loud / degrade soft per §10; partial failure annotated, not swallowed.
-11. UX affordances (logic, clone, scope, locked-state) present on any new report surface (§17).
+11. UX affordances (logic, clone, scope, locked-state) present on any new report surface (§17) — logic and clone via the per-chart "⋮" menu, not a second page-level copy.
 12. No new dependency that duplicates the fixed stack (§19).
 
 ## 23. Intentionally unspecified (not yet decided — do not assume)

@@ -149,3 +149,43 @@
 /* A chart that fills a tall card (the artifact's two-row Monthly Revenue). */
 .skin .ovCard.fillChart .specPanelCompact { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 .skin .ovCard.fillChart .recharts-responsive-container { flex: 1 1 auto; min-height: 230px; }
+
+/* ───────── My View — the reader's own board (myView.ts, MyViewBoard.tsx) ───────── */
+
+.skin .myViewBar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px; font-size: 11.5px; color: var(--ink-3);
+}
+
+/* Twelve columns, the same bento the report page uses, so a card kept from
+   View 1 sits at the width it was drawn for (`span` in registry.tsx). */
+.skin .myViewGrid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.skin .myViewItem { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.skin .myViewItem > .card { flex: 1 1 auto; min-height: 220px; }
+/* Outside `.mainC` the Data Graphic has no row rule of its own, so it is given
+   one here rather than inheriting the column stack every other card wants. */
+.skin .myViewItem > .slotGauges { flex-direction: row; gap: 22px; align-items: center; justify-content: space-around; flex-wrap: wrap; }
+
+.skin .myViewItemBar { display: flex; align-items: center; gap: 4px; padding: 0 2px; min-width: 0; }
+.skin .myViewItemName {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-3); margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.skin .myViewItemBtn {
+  border: 0; background: transparent; color: var(--ink-3); font: inherit; font-size: 12px;
+  line-height: 1; padding: 3px 6px; border-radius: 6px; cursor: pointer;
+}
+.skin .myViewItemBtn:hover:not(:disabled) { background: var(--soft); color: var(--ink); }
+.skin .myViewItemBtn:disabled { opacity: .35; cursor: not-allowed; }
+
+.skin .myViewEmpty { padding: 28px 30px; max-width: 720px; }
+.skin .myViewEmpty h2 { margin: 0 0 8px; font-size: 15px; font-weight: 700; color: var(--ink); }
+.skin .myViewEmpty p { margin: 0 0 10px; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+.skin .myViewEmptyFine { font-size: 11.5px !important; color: var(--ink-3) !important; }
+
+/* A card with no head to hang the menu in (the Data Graphic) puts it here. */
+.skin .cardMenuFloat { position: absolute; top: 10px; right: 12px; z-index: 5; }
+
+@media (max-width: 1100px) {
+  .skin .myViewItem { grid-column: span 12 !important; }
+}

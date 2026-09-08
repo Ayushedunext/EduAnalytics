@@ -34,3 +34,43 @@ export const WIDGET_BUCKET_OPTIONS: Partial<Record<string, Readonly<Record<strin
     'line-month': ['week', 'month', 'quarter', 'year'],
   },
 };
+
+/**
+ * Which SQL statement feeds which panel, for the per-chart "View logic"
+ * (ChartMenu.tsx) — mirroring `WIDGET_QUERY_KEYS` in
+ * apps/orchestrator/src/services/dashboards.ts.
+ *
+ * A DISPLAY hint and nothing more: the report response already carries every
+ * statement behind the page (Invariant 6, `logic.queries`), and the menu shows
+ * all of them. This table only says which one to mark as "this chart", so a
+ * widget missing here loses a highlight, never a statement. That is why the
+ * mirror drifting apart from the server's table is harmless in a way the clone
+ * table's drift also is: the failure mode is a missing emphasis, not a wrong
+ * or hidden SQL.
+ *
+ * It is deliberately the same three reports and the same widgets as
+ * `CLONEABLE_WIDGETS` above, because both answer the same question — which
+ * panels ONE query answers on their own. Panels that read several result sets
+ * together (the year-by-year table, the highlights, the KPI strip) have no
+ * single statement to point at, and the menu lists all of them for those.
+ */
+export const WIDGET_QUERY_KEYS: Partial<Record<string, Readonly<Record<string, string>>>> = {
+  'trend-analysis': {
+    'line-collection': 'collection_by_month',
+    'line-seasonality': 'collection_by_month',
+    'bar-mode': 'collection_by_month',
+    'bar-school': 'collection_by_month',
+  },
+  'fee-comparative': {
+    'bar-period': 'demand_by_period',
+    'line-recovery': 'demand_by_period',
+    'bar-outstanding': 'demand_by_period',
+    'bar-school': 'demand_by_period',
+  },
+  'fee-collection': {
+    'line-month': 'by_month',
+    'bar-class': 'by_class',
+    'donut-mode': 'by_mode',
+    'table-component': 'by_component',
+  },
+};

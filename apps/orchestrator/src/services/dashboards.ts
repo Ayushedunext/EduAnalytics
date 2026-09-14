@@ -4841,7 +4841,7 @@ function buildTrendAnalysis(merged: Merged, { asOf, scope }: BuildContext): Dash
       widgets.push({
         id: 'kpi-students',
         type: 'kpi',
-        label: `Students on roll · ${academicYearLabel(latestAy)}`,
+        label: `Students enrolled · ${academicYearLabel(latestAy)}`,
         value: count(now.students),
         ...(delta === null
           ? {}
@@ -5225,7 +5225,7 @@ function buildTrendAnalysis(merged: Merged, { asOf, scope }: BuildContext): Dash
     widgets.push({
       id: 'bar-enrollment',
       type: 'bar',
-      title: `Students on roll · ${academicYearLabel(earliestAy ?? 0)} to ${academicYearLabel(latestAy ?? 0)}`,
+      title: `Students enrolled · ${academicYearLabel(earliestAy ?? 0)} to ${academicYearLabel(latestAy ?? 0)}`,
       x: 'ay',
       y: 'girls',
       series: enrollmentSeries,
@@ -5579,6 +5579,9 @@ function buildTrendAnalysis(merged: Merged, { asOf, scope }: BuildContext): Dash
   }
   notes.push(
     'Students are counted once per school per year. Student ids repeat across schools in this ERP, so each school counts its own and the totals are added — a single query across schools would undercount.',
+  );
+  notes.push(
+    'Enrollment counts every student on the roll at any point in the year, including students who have since left — it is a historical total, not a live headcount. For the current active roll, see Enrollment Overview.',
   );
   notes.push(
     'Departures exclude Class XII completion, which is counted separately: it is the majority of all departures and it is the school working as intended, not attrition.',

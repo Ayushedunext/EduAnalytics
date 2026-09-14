@@ -2895,6 +2895,23 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         'ORDER BY present_days / marked_days DESC, marked_days DESC, enrollmentno LIMIT 4',
     },
     {
+      /** Same floor as `top_attendance` immediately above, only the ranking flips. */
+      key: 'lowest_attendance',
+      description:
+        "Students with the lowest attendance over the window, above a floor set from the school's own register (half the best-covered student's marked days, capped at 20, never below 5)",
+      sql:
+        'SELECT studentname, enrollmentno, classname, sectionname, marked_days, present_days, min_marked_days FROM ' +
+        '(SELECT s.studentname, s.enrollmentno, s.classname, s.sectionname, s.marked_days, s.present_days, ' +
+        'LEAST(20, GREATEST(5, FLOOR(MAX(s.marked_days) OVER () / 2))) AS min_marked_days FROM ' +
+        '(SELECT a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname, ' +
+        'COUNT(*) AS marked_days, ' +
+        "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' + STUDENT_DAYS +
+        ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname) s) t ' +
+        'WHERE marked_days >= min_marked_days ' +
+        'ORDER BY present_days / marked_days ASC, marked_days DESC, enrollmentno LIMIT 4',
+    },
+    {
       key: 'late_payers',
       description: 'Students with two or more receipts paid after the instalment ended',
       sql:

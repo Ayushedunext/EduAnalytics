@@ -652,14 +652,14 @@ export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId, s
   );
 }
 
-export function TeamCards({ state }: { state: SlotState | undefined }): ReactElement {
+export function TeamCards({ state, widgetId = 'table-top-attendance' }: { state: SlotState | undefined; widgetId?: string }): ReactElement {
   const palette = usePalette();
   if (state === undefined || state.kind === 'loading') {
     return <>{[0, 1, 2, 3].map((i) => <div key={i} className="card ovCard member"><div className="skeleton" style={{ minHeight: 48 }} /></div>)}</>;
   }
   if (state.kind === 'failed') return <div className="card ovCard"><span className="ovMuted">{state.message}</span></div>;
   if (state.slot.status !== 'ok') return <div className="card ovCard"><span className="ovMuted">{state.slot.reason}</span></div>;
-  const table = tableOf(validWidgets(state.slot.widgets), 'table-top-attendance');
+  const table = tableOf(validWidgets(state.slot.widgets), widgetId);
   const rows = table?.rows ?? [];
   if (rows.length === 0) {
     return <div className="card ovCard"><span className="ovMuted">Too few days have been marked this year to rank anyone yet.</span></div>;

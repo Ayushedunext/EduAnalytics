@@ -125,7 +125,7 @@ export const OVERVIEW_CARDS: Readonly<Record<string, OverviewCardDef>> = {
     slots: ['students_by_year'],
     span: 6,
     render: (c) => (
-      <BigChartCard state={c.states['students_by_year']} widgetId="bar-years" title="Students on roll, year by year" slot={2} onOpen={c.onOpen} reportId="trend-analysis" slotKey="students_by_year" />
+      <BigChartCard state={c.states['students_by_year']} widgetId="bar-years" title="Students enrolled, year by year" slot={2} onOpen={c.onOpen} reportId="trend-analysis" slotKey="students_by_year" />
     ),
   },
   'att_status:donut-status': {

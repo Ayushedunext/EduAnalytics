@@ -460,6 +460,36 @@ export function AdmissionsCard({ state, onOpen }: { state: SlotState | undefined
   );
 }
 
+/**
+ * Students per staff member, one bar per school -- the entry level of the
+ * Student-Staff Ratio drill path, on the Dashboard. Not clickable here, for
+ * the same reason `AdmissionsCard` above is not: the Dashboard's slot API
+ * cannot drill, so the descent is behind the Report button, which opens
+ * Student-Staff Ratio where a school breaks down into departments.
+ */
+export function StaffRatioCard({ state, onOpen }: { state: SlotState | undefined; onOpen: (id: string) => void }): ReactElement {
+  const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === 'bar-staff-ratio') : undefined;
+  const [type, setType] = useChartType(widget);
+  return (
+    <Card
+      className="fillChart"
+      title="Students per staff member"
+      tools={
+        <>
+          <ReportButton onClick={() => { onOpen('student-staff-ratio'); }} />
+          <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot="staff_ratio" id="bar-staff-ratio" title="Students per staff member" reportId="student-staff-ratio" widget={widget} chartType={type} chartSlot={0} />
+        </>
+      }
+      notes={notesOf(state)}
+    >
+      <Slot state={state}>
+        {(widgets) => <Chart widget={widgets.find((w) => (w as { id?: unknown }).id === 'bar-staff-ratio')} type={type} slot={0} fill />}
+      </Slot>
+    </Card>
+  );
+}
+
 /** Weekly Sales / Weekly Orders / Customer Analytics: a figure over a sparkline. */
 export function SparkCard({ state, kpiId, lineId, className, slot, title, slotKey, reportId }: { state: SlotState | undefined; kpiId: string; lineId: string; className?: string; slot: number; title: string; slotKey: string; reportId?: string }): ReactElement {
   const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === lineId) : undefined;

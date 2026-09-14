@@ -84,6 +84,7 @@ export const DASHBOARD_IDS = [
   'fee-defaulters',
   'fee-by-student',
   'staff-overview',
+  'student-staff-ratio',
   'staff-attendance',
   'admissions-funnel',
   'attendance-analytics',
@@ -150,6 +151,13 @@ export const REPORT_FILTERS: Record<
    */
   'fee-by-student': { academicYear: true, asOf: false, dateWindow: false, compareYear: false },
   'staff-overview': { academicYear: false, asOf: true, dateWindow: false, compareYear: false },
+  /**
+   * Both bound, against two different tables, because the ratio needs one
+   * number from each: `students_data_set` answers to an academic year,
+   * `employees_data_set` to an as-of date, and neither can answer for the
+   * other (the same reasoning Attendance's pair of filters follows).
+   */
+  'student-staff-ratio': { academicYear: true, asOf: true, dateWindow: false, compareYear: false },
   /**
    * A date WINDOW and nothing else. Staff are not enrolled in an academic year,
    * so there is none to bind (the same reason Staff Overview declares none);
@@ -408,6 +416,7 @@ export const DASHBOARD_LEAD_QUERY: Record<DashboardId, string> = {
   'fee-defaulters': 'aging',
   'fee-by-student': 'by_class',
   'staff-overview': 'by_department',
+  'student-staff-ratio': 'ratio',
   'staff-attendance': 'by_month',
   'admissions-funnel': 'funnel',
   'attendance-analytics': 'by_month',
@@ -459,6 +468,7 @@ export const DASHBOARD_DRILL_QUERY: Partial<Record<DashboardId, string>> = {
   'fee-by-student': 'dues',
   'attendance-analytics': 'summary',
   'staff-overview': 'by_department',
+  'student-staff-ratio': 'ratio',
   'staff-attendance': 'summary',
   'transport-analytics': 'by_pickup_route',
 };
@@ -1234,6 +1244,46 @@ export const DRILL_PATHS: Partial<Record<DashboardId, DrillPath>> = {
   },
 
   /**
+   * Student-Staff Ratio: school → department. Two levels, not three — see the
+   * report's own header comment (mcp-server/reports/catalog.ts) for why a
+   * class level is not offered: staff have no class/section link in this ERP,
+   * so a class-level ratio would mean inventing a per-class staff count.
+   *
+   * Level 2 draws a DIFFERENT measure than level 1 (headcount, not a ratio) —
+   * students_data_set has no department column, so there is no honest
+   * per-department ratio either. This level answers "which department is the
+   * staff concentrated in", a related but distinct question from the entry
+   * chart's "which school is thin on staff", said in the level's own note.
+   *
+   * `by_department` is the same query Staff Overview's own drill uses,
+   * reused verbatim by name (not shared code — each report's catalog entry
+   * owns its own copy — but identical SQL, so a reader who has seen one
+   * report's department breakdown is not surprised by the other's).
+   */
+  'student-staff-ratio': {
+    widget_id: 'bar-school-ratio',
+    measures: [{ field: 'staff', label: 'Staff on roll' }],
+    levels: [
+      {
+        x: 'school_name',
+        drill_dim: 'school',
+        drill_value_field: 'school_id',
+        title: 'Students per staff member, by school',
+        group_by: 'school',
+      },
+      {
+        x: 'departmentname',
+        query: 'by_department',
+        narrow: { kind: 'scope' },
+        title: 'Staff on roll by department · {context}',
+        group_by: 'department',
+        note: 'This is a headcount, not a ratio — students are not linked to a department in this ERP, so there is no honest per-department student count to divide by.',
+        /** The leaf: no `drill_dim`, so this chart is not clickable. */
+      },
+    ],
+  },
+
+  /**
    * Staff attendance: school → quarter → department.
    *
    * A quarter IS available here, unlike on Staff Overview, and the difference
@@ -1620,6 +1670,7 @@ export const BUILDERS: Record<DashboardId, (merged: Merged, ctx: BuildContext) =
   'fee-defaulters': buildFeeDefaulters,
   'fee-by-student': buildFeeByStudent,
   'staff-overview': buildStaffOverview,
+  'student-staff-ratio': buildStudentStaffRatio,
   'staff-attendance': buildStaffAttendance,
   'admissions-funnel': buildAdmissionsFunnel,
   'attendance-analytics': buildAttendance,
@@ -3392,6 +3443,90 @@ function buildStaffOverview(merged: Merged, { asOf, scope }: BuildContext): Dash
       'There is no teaching versus non-teaching split here because the ERP data cannot support one: designations are free text and the staff-type column mixes employment types with internal codes. Headcount is reported for everyone, by department and by employment type, rather than published as a teacher count that would be quietly wrong.',
       'The 15 largest designations are listed; smaller ones are summarised in the department chart rather than dropped from it.',
     ],
+  };
+}
+
+/**
+ * Student-Staff Ratio — a planning metric built from one query (`ratio`) that
+ * folds both totals into a single row per school, the same scalar-subquery
+ * shape Attendance Analytics' `expected_days` already uses to combine two
+ * tables (mcp-server/reports/catalog.ts).
+ *
+ * A school contributes a bar only when it reported a positive staff count —
+ * `sumPerSchool` already drops a school whose query failed or was denied, and
+ * a school with students but zero staff on record gets a note instead of a
+ * divide-by-zero, the same "no zero standing in for unknown" rule the rest of
+ * this file follows.
+ */
+function buildStudentStaffRatio(merged: Merged, { scope }: BuildContext): DashboardBuild {
+  const widgets: Widget[] = [];
+  const notes: string[] = [];
+  const path = DRILL_PATHS['student-staff-ratio'] as DrillPath;
+  const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+
+  const perSchool = merged.sumPerSchool('ratio', ['staff', 'students']);
+  const noRatio = perSchool.filter((entry) => (entry.totals['staff'] ?? 0) === 0);
+
+  const rows = perSchool
+    .filter((entry) => (entry.totals['staff'] ?? 0) > 0)
+    .map((entry) => {
+      const students = entry.totals['students'] ?? 0;
+      const staff = entry.totals['staff'] ?? 0;
+      return {
+        school_id: entry.school_id,
+        school_name: schoolName.get(entry.school_id) ?? entry.school_id,
+        students,
+        staff,
+        ratio: Math.round((students / staff) * 10) / 10,
+      };
+    });
+
+  if (rows.length > 0) {
+    widgets.push({
+      id: path.widget_id,
+      type: 'bar',
+      title: path.levels[0].title,
+      x: 'school_name',
+      y: 'ratio',
+      x_title: 'School',
+      y_title: 'Students per staff member',
+      data: rows.map(({ school_id, school_name: name, ratio }) => ({ school_id, school_name: name, ratio })),
+      drillable: true,
+      drill_dim: 'school',
+      drill_value_field: 'school_id',
+      drill_context: [],
+    });
+    widgets.push({
+      id: 'table-ratio',
+      type: 'table',
+      title: 'Students, staff and ratio by school',
+      columns: [
+        { field: 'school_name', label: 'School' },
+        { field: 'students', label: 'Students on roll', align: 'right' },
+        { field: 'staff', label: 'Staff on roll', align: 'right' },
+        { field: 'ratio', label: 'Students per staff', align: 'right' },
+      ],
+      rows: rows
+        .slice()
+        .sort((a, b) => b.ratio - a.ratio)
+        .map(({ school_name: name, students, staff, ratio }) => ({ school_name: name, students, staff, ratio })),
+    });
+  }
+
+  if (noRatio.length > 0) {
+    const affected = noRatio.map((entry) => schoolName.get(entry.school_id) ?? entry.school_id);
+    notes.push(
+      `${affected.join(', ')} ${affected.length === 1 ? 'has' : 'have'} no staff on record as of the date, so no ratio is shown for ${affected.length === 1 ? 'it' : 'them'} rather than a divide-by-zero.`,
+    );
+  }
+  notes.push(
+    'Staff are not linked to a class, section or wing in this ERP, so a school’s ratio cannot be broken down further than department — clicking a school shows how its staff are distributed by department, not by class.',
+  );
+
+  return {
+    widgets,
+    groupBy: ['school', 'department'],
+    notes,
   };
 }
 

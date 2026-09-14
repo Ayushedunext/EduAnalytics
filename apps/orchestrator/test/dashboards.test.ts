@@ -27,7 +27,7 @@
 import './env-defaults.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlatformError } from '@sap/shared';
-import type { ChartSpec, KpiWidget, TableWidget } from '@sap/chart-spec';
+import type { BarWidget, ChartSpec, KpiWidget, TableWidget } from '@sap/chart-spec';
 
 interface QueryResult {
   key: string;
@@ -132,6 +132,10 @@ function kpi(spec: ChartSpec, id: string): KpiWidget | undefined {
 
 function table(spec: ChartSpec, id: string): TableWidget | undefined {
   return spec.widgets.find((w): w is TableWidget => w.type === 'table' && w.id === id);
+}
+
+function bar(spec: ChartSpec, id: string): BarWidget | undefined {
+  return spec.widgets.find((w): w is BarWidget => w.type === 'bar' && w.id === id);
 }
 
 beforeEach(() => {
@@ -716,6 +720,63 @@ describe('Staff Overview', () => {
   it('says on screen that staff records carry no academic year', async () => {
     const built = await build('staff-overview');
     expect(built.logic.notes.join(' ')).toContain('no academic year');
+  });
+});
+
+describe('Student-Staff Ratio', () => {
+  it('divides the roll by the headcount, per school', async () => {
+    response = result({
+      reportId: 'student-staff-ratio',
+      title: 'Student-Staff Ratio',
+      schools: [
+        { school_id: 'stmarksmb', queries: [query('ratio', [{ staff: 90, students: 900 }])] },
+        { school_id: 'stmarksj', queries: [query('ratio', [{ staff: 40, students: 600 }])] },
+      ],
+    });
+    const built = await build('student-staff-ratio', ['stmarksmb', 'stmarksj']);
+    const chart = bar(built.spec, 'bar-school-ratio');
+    expect(chart?.drillable).toBe(true);
+    expect(chart?.data).toEqual(
+      expect.arrayContaining([
+        { school_id: 'stmarksmb', school_name: 'Meera Bagh', ratio: 10 },
+        { school_id: 'stmarksj', school_name: 'Janakpuri', ratio: 15 },
+      ]),
+    );
+  });
+
+  /**
+   * The regression this test exists for: a school with students but zero
+   * staff on record must not silently divide by zero and must not be dropped
+   * without saying why (CODING_GUIDELINES §10 — no zero standing in for
+   * unknown).
+   */
+  it('leaves out a school with no staff on record, and says so rather than dividing by zero', async () => {
+    response = result({
+      reportId: 'student-staff-ratio',
+      title: 'Student-Staff Ratio',
+      schools: [
+        { school_id: 'stmarksmb', queries: [query('ratio', [{ staff: 90, students: 900 }])] },
+        { school_id: 'stmarksj', queries: [query('ratio', [{ staff: 0, students: 600 }])] },
+      ],
+    });
+    const built = await build('student-staff-ratio', ['stmarksmb', 'stmarksj']);
+    const chart = bar(built.spec, 'bar-school-ratio');
+    expect(chart?.data).toEqual([{ school_id: 'stmarksmb', school_name: 'Meera Bagh', ratio: 10 }]);
+    expect(built.logic.notes.join(' ')).toContain('Janakpuri');
+    expect(built.logic.notes.join(' ')).toContain('no staff on record');
+  });
+
+  it('sends the academic year and the as-of date, both', async () => {
+    response = result({
+      reportId: 'student-staff-ratio',
+      title: 'Student-Staff Ratio',
+      schools: [{ school_id: 'stmarksmb', queries: [query('ratio', [{ staff: 90, students: 900 }])] }],
+    });
+    await build('student-staff-ratio');
+    expect(lastCall?.args['params']).toEqual({
+      academic_year: '2026-27',
+      as_of_date: '2026-08-19',
+    });
   });
 });
 

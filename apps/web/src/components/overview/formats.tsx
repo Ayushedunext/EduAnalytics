@@ -21,6 +21,7 @@ import {
   MonthlyCard,
   RingsCard,
   SparkCard,
+  StaffRatioCard,
   TeamCards,
   TilesCard,
   TopSchoolsCard,
@@ -29,7 +30,7 @@ import { Icon } from '../Icon';
 
 export const FORMAT_SLOTS = {
   A: ['tiles', 'rings', 'monthly', 'admissions_by_school', 'weekly_receipts', 'weekly_attendance', 'top_schools', 'fee_heads'],
-  B: ['years', 'students_by_year', 'att_status', 'top_students', 'lowest_students', 'gauges', 'late_payers', 'pending_top'],
+  B: ['years', 'students_by_year', 'att_status', 'top_students', 'lowest_students', 'staff_ratio', 'gauges', 'late_payers', 'pending_top'],
   C: ['tiles', 'area', 'modes', 'rings', 'late_weekly'],
 } as const;
 
@@ -91,6 +92,10 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
       </div>
       <div className="row4" style={{ marginTop: 16 }}>
         <GaugeCards state={states['gauges']} />
+      </div>
+      <h2 className="h2B">Staffing</h2>
+      <div className="row1">
+        <StaffRatioCard state={states['staff_ratio']} onOpen={onOpen} />
       </div>
       <div className="row21">
         <LatePayersCard state={states['late_payers']} />

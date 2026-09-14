@@ -331,12 +331,12 @@ describe('the attendance ranking states the floor it actually applied', () => {
    * one. These tests hold the card to reporting what came back rather than
    * what the catalog used to hardcode.
    */
-  function ranked(school: string, floor: number, students: [string, number, number][]) {
+  function ranked(school: string, floor: number, students: [string, number, number][], queryKey = 'top_attendance') {
     return {
       school_id: school,
       queries: [
         query(
-          'top_attendance',
+          queryKey,
           students.map(([enrollmentno, marked, present]) => ({
             studentname: `Student ${enrollmentno}`,
             enrollmentno,
@@ -392,6 +392,29 @@ describe('the attendance ranking states the floor it actually applied', () => {
     const table = card.widgets.find((w): w is TableWidget => w.type === 'table');
     expect(table?.rows).toEqual([]);
     expect(card.notes).toEqual([]);
+  });
+
+  it('ranks lowest attendance the other way round, worst first, and keeps four', async () => {
+    response = result([
+      ranked(
+        'a',
+        5,
+        [
+          ['1', 12, 9],
+          ['2', 6, 6],
+          ['3', 12, 12],
+          ['4', 10, 9],
+          ['5', 11, 11],
+        ],
+        'lowest_attendance',
+      ),
+    ]);
+    const card = await build('lowest_students', ['a']);
+    expect(card.status).toBe('ok');
+    const table = card.widgets.find((w): w is TableWidget => w.type === 'table');
+    expect(table?.title).toBe('Lowest attendance this year');
+    expect(table?.rows.map((r) => r['enrollment'])).toEqual(['1', '4', '3', '5']);
+    expect(table?.rows[0]?.['marked']).toBe(12);
   });
 });
 

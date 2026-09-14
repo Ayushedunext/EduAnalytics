@@ -64,6 +64,7 @@ export const OVERVIEW_SLOTS = {
   students_by_year: ['students_by_year'],
   att_status: ['att_status'],
   top_students: ['top_attendance'],
+  lowest_students: ['lowest_attendance'],
   gauges: ['roll', 'att_today', 'admissions', 'staff_today'],
   late_payers: ['late_payers', 'pending_students'],
   pending_top: ['pending_students'],
@@ -299,6 +300,7 @@ const BUILDERS: Record<OverviewSlotKey, (merged: Merged, ctx: Ctx) => Built> = {
   students_by_year: buildStudentsByYear,
   att_status: buildAttStatus,
   top_students: buildTopStudents,
+  lowest_students: buildLowestStudents,
   gauges: buildGauges,
   late_payers: buildLatePayers,
   pending_top: buildPendingTop,
@@ -714,10 +716,16 @@ function floorNote(floors: readonly number[]): string[] {
   ];
 }
 
-function buildTopStudents(merged: Merged): Built {
-  if (!merged.succeeded('top_attendance')) return { widgets: [] };
-  const masked = merged.maskedColumns('top_attendance');
-  const answers = merged.concatRows('top_attendance');
+function buildRankedStudents(
+  merged: Merged,
+  queryKey: 'top_attendance' | 'lowest_attendance',
+  id: string,
+  title: string,
+  direction: 1 | -1,
+): Built {
+  if (!merged.succeeded(queryKey)) return { widgets: [] };
+  const masked = merged.maskedColumns(queryKey);
+  const answers = merged.concatRows(queryKey);
   const floors = [...new Set(answers.map(({ row }) => num(row['min_marked_days'])).filter((n) => n > 0))].sort(
     (a, b) => a - b,
   );
@@ -734,14 +742,14 @@ function buildTopStudents(merged: Merged): Built {
         marked,
       };
     })
-    .sort((a, b) => b.attendance_raw - a.attendance_raw || b.marked - a.marked)
+    .sort((a, b) => direction * (b.attendance_raw - a.attendance_raw) || b.marked - a.marked)
     .slice(0, 4);
   return {
     widgets: [
       {
-        id: 'table-top-attendance',
+        id,
         type: 'table',
-        title: 'Highest attendance this year',
+        title,
         columns: [
           { field: 'student', label: 'Student', ...(masked.has('studentname') ? { masked: true } : {}) },
           { field: 'enrollment', label: 'Enrolment', ...(masked.has('enrollmentno') ? { masked: true } : {}) },
@@ -754,6 +762,14 @@ function buildTopStudents(merged: Merged): Built {
     ],
     notes: floorNote(floors),
   };
+}
+
+function buildTopStudents(merged: Merged): Built {
+  return buildRankedStudents(merged, 'top_attendance', 'table-top-attendance', 'Highest attendance this year', 1);
+}
+
+function buildLowestStudents(merged: Merged): Built {
+  return buildRankedStudents(merged, 'lowest_attendance', 'table-lowest-attendance', 'Lowest attendance this year', -1);
 }
 
 function buildGauges(merged: Merged): Built {

@@ -4,7 +4,7 @@
  * not on a format is never requested for it.
  */
 
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import type { SessionResponse } from '../../api/client';
 import type { SlotState } from './useOverview';
 import {
@@ -29,7 +29,7 @@ import { Icon } from '../Icon';
 
 export const FORMAT_SLOTS = {
   A: ['tiles', 'rings', 'monthly', 'admissions_by_school', 'weekly_receipts', 'weekly_attendance', 'top_schools', 'fee_heads'],
-  B: ['years', 'students_by_year', 'att_status', 'top_students', 'gauges', 'late_payers', 'pending_top'],
+  B: ['years', 'students_by_year', 'att_status', 'top_students', 'lowest_students', 'gauges', 'late_payers', 'pending_top'],
   C: ['tiles', 'area', 'modes', 'rings', 'late_weekly'],
 } as const;
 
@@ -64,6 +64,11 @@ export function FormatA({ states, year, asOf, onOpen }: FormatProps): ReactEleme
 
 /** Format B · View 1: three charts, members, four gauges, table and inbox. */
 export function FormatB({ states, onOpen }: FormatProps): ReactElement {
+  /**
+   * Lowest attendance is the one that needs acting on, so it opens by default;
+   * highest is a click away rather than gone.
+   */
+  const [ranking, setRanking] = useState<'lowest' | 'highest'>('lowest');
   return (
     <>
       <div className="row3">
@@ -71,9 +76,18 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
         <BigChartCard state={states['students_by_year']} widgetId="bar-years" title="Students on roll, year by year" slot={2} onOpen={onOpen} reportId="trend-analysis" slotKey="students_by_year" />
         <BigChartCard state={states['att_status']} widgetId="donut-status" title="Attendance recorded" slot={0} onOpen={onOpen} reportId="attendance-analytics" slotKey="att_status" />
       </div>
-      <h2 className="h2B">Highest attendance</h2>
+      <div className="rankingHead">
+        <h2 className="h2B">{ranking === 'lowest' ? 'Lowest attendance' : 'Highest attendance'}</h2>
+        <div className="rankingToggle">
+          <button type="button" className={`tinybtn${ranking === 'lowest' ? ' dark' : ''}`} onClick={() => { setRanking('lowest'); }}>Lowest</button>
+          <button type="button" className={`tinybtn${ranking === 'highest' ? ' dark' : ''}`} onClick={() => { setRanking('highest'); }}>Highest</button>
+        </div>
+      </div>
       <div className="row4">
-        <TeamCards state={states['top_students']} />
+        <TeamCards
+          state={states[ranking === 'lowest' ? 'lowest_students' : 'top_students']}
+          widgetId={ranking === 'lowest' ? 'table-lowest-attendance' : 'table-top-attendance'}
+        />
       </div>
       <div className="row4" style={{ marginTop: 16 }}>
         <GaugeCards state={states['gauges']} />

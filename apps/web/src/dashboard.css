@@ -74,6 +74,9 @@
 .skin .row4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .skin .row21 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
 .skin .h2B { font-size: 15px; font-weight: 700; margin: 22px 0 12px; color: var(--ink); }
+.skin .rankingHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.skin .rankingHead .h2B { margin: 22px 0 12px; }
+.skin .rankingToggle { display: flex; gap: 6px; }
 .skin .kebab { color: var(--ink-3); font-size: 16px; line-height: 1; letter-spacing: 1px; cursor: pointer; background: none; border: 0; padding: 0 2px; }
 .skin .member { flex-direction: row; align-items: center; gap: 12px; padding: 14px; }
 .skin .member .skAvatar { width: 48px; height: 48px; font-size: 15px; }

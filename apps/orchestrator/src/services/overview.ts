@@ -682,7 +682,10 @@ function buildYears(merged: Merged): Built {
 function buildStudentsByYear(merged: Merged): Built {
   if (!merged.succeeded('students_by_year')) return { widgets: [] };
   const rows = byYear(merged.sumBy('students_by_year', 'ay', ['students']), 'students');
-  return { widgets: [{ id: 'bar-years', type: 'bar', title: 'Students on roll, year by year', x: 'year', y: 'students', x_title: 'Academic year', y_title: 'Students on roll', data: rows.map((r) => ({ year: r.year, students: r.value })) }] };
+  return {
+    widgets: [{ id: 'bar-years', type: 'bar', title: 'Students enrolled, year by year', x: 'year', y: 'students', x_title: 'Academic year', y_title: 'Students enrolled', data: rows.map((r) => ({ year: r.year, students: r.value })) }],
+    notes: ['Counts everyone enrolled at any point in the year, including students who have since left — not a live headcount. See the tiles above for today’s active roll.'],
+  };
 }
 
 function buildAttStatus(merged: Merged): Built {

@@ -73,7 +73,7 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
     <>
       <div className="row3">
         <BigChartCard state={states['years']} widgetId="line-years" title="Billed and collected, year by year" slot={0} onOpen={onOpen} reportId="trend-analysis" slotKey="years" />
-        <BigChartCard state={states['students_by_year']} widgetId="bar-years" title="Students on roll, year by year" slot={2} onOpen={onOpen} reportId="trend-analysis" slotKey="students_by_year" />
+        <BigChartCard state={states['students_by_year']} widgetId="bar-years" title="Students enrolled, year by year" slot={2} onOpen={onOpen} reportId="trend-analysis" slotKey="students_by_year" />
         <BigChartCard state={states['att_status']} widgetId="donut-status" title="Attendance recorded" slot={0} onOpen={onOpen} reportId="attendance-analytics" slotKey="att_status" />
       </div>
       <div className="rankingHead">

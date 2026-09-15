@@ -27,6 +27,24 @@ import {
   varchar,
 } from 'drizzle-orm/mysql-core';
 
+/**
+ * `school_channels` predates this package (migration 0005, ADR-024) and its
+ * writes still go through apps/orchestrator's hand-written mysql2 SQL
+ * (services/channels.ts `disconnectChannel`) — this definition exists so
+ * apps/agent-runtime can READ it at send time via the same Drizzle handle it
+ * already has, through the shared `resolveChannel` function (ADR-034), not to
+ * migrate its writer.
+ */
+export const schoolChannels = mysqlTable('school_channels', {
+  schoolId: varchar('school_id', { length: 128 }).notNull(),
+  channel: mysqlEnum('channel', ['email', 'sms', 'whatsapp']).notNull(),
+  status: mysqlEnum('status', ['connected', 'not_connected']).notNull().default('not_connected'),
+  provider: varchar('provider', { length: 128 }),
+  detail: varchar('detail', { length: 255 }),
+  updatedBy: varchar('updated_by', { length: 128 }),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
 export const orgChannels = mysqlTable('org_channels', {
   orgId: varchar('org_id', { length: 128 }).notNull(),
   channel: mysqlEnum('channel', ['email', 'sms', 'whatsapp']).notNull(),

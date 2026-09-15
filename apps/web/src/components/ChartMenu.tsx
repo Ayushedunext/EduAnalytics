@@ -6,7 +6,7 @@
  * generated SQL") · CODING_GUIDELINES §17 (a report surface without the
  * standard affordances is incomplete, not minimal).
  *
- * Five actions, in this order, on Dashboard cards, report panels, module
+ * Six actions, in this order, on Dashboard cards, report panels, module
  * preview cards and My View alike:
  *
  *   1. Insights          — the AI explaining this chart in plain words.
@@ -14,12 +14,21 @@
  *   3. Add to My View    — the reader's own board (myView.ts).
  *   4. Enlarge           — the same chart, drawn big, over the page.
  *   5. View logic        — the statements behind THIS chart's numbers.
+ *   6. Print             — this one chart, branded, as its own PDF.
  *
  * Insights leads because it answers the question a reader has BEFORE any of the
  * others: what am I looking at. The four below it all assume that is already
  * settled. It is also the one that spends money — the organisation's own AI key
  * (Invariant 5) — so it is the one item whose locked state carries a path to
  * Settings rather than only a reason (docs/10 §3, "locked ≠ hidden").
+ *
+ * Print is last because it is the one item that leaves the app rather than
+ * opening a panel inside it — a download, exactly like the page-level "⬇ PDF"
+ * link beside it, just narrowed to this chart (ADR-021, docs/06 §5). It only
+ * exists where the server has an endpoint that can rebuild ONE widget:
+ * `source.kind === 'report'`, a real report/widget pair. A Home/My View card
+ * built from the Dashboard's own composed query has no such endpoint, so it is
+ * offered disabled with the reason, same as Clone on that same card.
  *
  * -- Why the actions are disabled rather than hidden --------------------------
  * docs/10 §3's "locked ≠ hidden" rule, applied one level down. A chart the
@@ -40,7 +49,15 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { WidgetSpecView, type ChartType } from '@sap/chart-spec/react';
-import { ApiFailure, cloneReport, getChartInsight, type ChartInsight, type ChartInsightTarget } from '../api/client';
+import {
+  ApiFailure,
+  cloneReport,
+  customReportPdfUrl,
+  getChartInsight,
+  reportPdfUrl,
+  type ChartInsight,
+  type ChartInsightTarget,
+} from '../api/client';
 import { chartKey, useMyView, type ChartSource } from '../myView';
 import { useChartMenuEnv } from './chartMenuEnv';
 
@@ -171,6 +188,32 @@ function insightTargetOf(
   };
 }
 
+/**
+ * Where Print downloads from — the server's PER-WIDGET narrowing of the same
+ * export.pdf route the page-level "⬇ PDF" link uses (routes/report.ts,
+ * routes/custom-reports.ts, `?widget_id=`).
+ *
+ * Undefined means Print stays disabled: an `overview` card (Home, My View) is
+ * built from the Dashboard's own composed query, same as `clone` above, and
+ * has no report/widget pair for either endpoint to rebuild from. A `report`
+ * source whose academic year has not resolved yet is undefined for the same
+ * reason Clone waits for one — `academic_year` is a required query parameter
+ * on the predefined route.
+ */
+function printUrlOf(
+  source: ChartSource,
+  schoolIds: readonly string[],
+  academicYear: string | null,
+  compareYear: string | undefined,
+): string | undefined {
+  if (source.kind !== 'report') return undefined;
+  if (source.custom === true) {
+    return customReportPdfUrl(source.reportId, schoolIds, { widgetId: source.widgetId });
+  }
+  if (academicYear === null) return undefined;
+  return reportPdfUrl(source.reportId, schoolIds, academicYear, { widgetId: source.widgetId, compareYear });
+}
+
 export function ChartMenu({
   title,
   source,
@@ -234,6 +277,8 @@ export function ChartMenu({
     setOpen(false);
     setDialog(next);
   }, []);
+
+  const printUrl = printUrlOf(source, env.schoolIds, env.academicYear, compareYear);
 
   const loadInsight = (): void => {
     if (env.academicYear === null) {
@@ -347,6 +392,18 @@ export function ChartMenu({
               }
             }}
           />
+          <MenuLinkItem
+            icon="⬇"
+            label="Print"
+            hint="Download this chart on its own, as a branded PDF"
+            href={printUrl}
+            disabledReason={
+              source.kind !== 'report'
+                ? 'This card is on your Home board, not a report panel — open its report to print this chart.'
+                : 'The academic year is still loading.'
+            }
+            onOpen={() => { setOpen(false); }}
+          />
         </div>
       )}
 
@@ -446,6 +503,64 @@ function MenuItem({
         <small>{disabled === true ? disabledReason : hint}</small>
       </span>
     </button>
+  );
+}
+
+/**
+ * Print's own item, not `MenuItem`: it is a download, not a panel, so — same
+ * reasoning as the page-level "⬇ PDF" link (api/client.ts) — it has to be a
+ * real `<a href>` and not a button with a click handler. A handler would have
+ * to fetch a multi-megabyte binary into memory and re-offer it as a blob for
+ * no reason; a link lets the browser do what it already does well, with the
+ * filename and progress indicator the server and browser both already provide.
+ */
+function MenuLinkItem({
+  icon,
+  label,
+  hint,
+  href,
+  disabledReason,
+  onOpen,
+}: {
+  icon: string;
+  label: string;
+  hint: string;
+  /** Absent means disabled — there is no report/widget pair to print. */
+  href?: string | undefined;
+  disabledReason?: string | undefined;
+  onOpen: () => void;
+}): JSX.Element {
+  if (href === undefined) {
+    return (
+      <button
+        type="button"
+        role="menuitem"
+        className="chartMenuItem"
+        disabled
+        title={disabledReason}
+      >
+        <span className="chartMenuIc" aria-hidden="true">{icon}</span>
+        <span className="chartMenuText">
+          <b>{label}</b>
+          <small>{disabledReason}</small>
+        </span>
+      </button>
+    );
+  }
+  return (
+    <a
+      role="menuitem"
+      className="chartMenuItem"
+      href={href}
+      title={hint}
+      onClick={onOpen}
+    >
+      <span className="chartMenuIc" aria-hidden="true">{icon}</span>
+      <span className="chartMenuText">
+        <b>{label}</b>
+        <small>{hint}</small>
+      </span>
+    </a>
   );
 }
 

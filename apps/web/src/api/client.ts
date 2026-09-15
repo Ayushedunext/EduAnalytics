@@ -727,11 +727,12 @@ export function deleteReport(id: string): Promise<void> {
 export function customReportPdfUrl(
   id: string,
   schoolIds: readonly string[],
-  options: { logic?: boolean } = {},
+  options: { logic?: boolean; widgetId?: string } = {},
 ): string {
   const query = new URLSearchParams();
   if (schoolIds.length > 0) query.set('school_ids', schoolIds.join(','));
   if (options.logic === true) query.set('logic', '1');
+  if (options.widgetId !== undefined) query.set('widget_id', options.widgetId);
   return `${API_BASE}/api/reports/${encodeURIComponent(id)}/export.pdf?${query.toString()}`;
 }
 
@@ -966,10 +967,12 @@ export function reportPdfUrl(
   reportId: string,
   schoolIds: readonly string[],
   academicYear: string,
-  options: { logic?: boolean } & ReportFilters = {},
+  options: { logic?: boolean; widgetId?: string } & ReportFilters = {},
 ): string {
   const query = reportQuery(schoolIds, academicYear, options);
   if (options.logic === true) query.set('logic', '1');
+  /** ChartMenu's per-chart "Print" — narrows the document to one widget (pdf.ts). */
+  if (options.widgetId !== undefined) query.set('widget_id', options.widgetId);
   return `${API_BASE}/api/report/${encodeURIComponent(reportId)}/export.pdf?${query.toString()}`;
 }
 

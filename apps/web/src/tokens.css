@@ -2009,7 +2009,7 @@ body {
   display: flex; align-items: flex-start; gap: 9px; width: 100%; text-align: left;
   background: transparent; border: 0; border-radius: var(--radius-sm); padding: 7px 8px;
   font-family: var(--font-sans); cursor: pointer; color: var(--color-text-primary);
-  transition: background-color 0.12s ease;
+  text-decoration: none; transition: background-color 0.12s ease;
 }
 .chartMenuItem:hover:not(:disabled) { background: var(--color-primary-soft); }
 .chartMenuItem:disabled { cursor: not-allowed; color: var(--color-disabled); }

@@ -3,63 +3,20 @@
  * it does so exactly the way every report does: a vetted, literal SELECT
  * through the MCP server's `run_query` tool (ADR-006/023, docs/07 §3).
  *
- * -- Why the SQL lives here, not on the fetch-source catalog ------------------
- * `@sap/agent-graph`'s `FETCH_SOURCES` names WHAT an agent can ask for; the
- * literal SQL that answers it is a platform-authored statement the same way
- * `services/dashboards.ts`'s `METRIC_SQL` is for predefined dashboards — kept
- * next to the thing that RUNS it, not the shared type contract.
- *
- * -- The one runnable source today: `students_absent_today` -------------------
- * Against the real, catalogued schema (`apps/mcp-server/src/schema/erp-v1.ts`):
- * `student_attendance_data_set` is not unique on (student, date) and its
- * `academicyearname` cannot be trusted, so this statement filters on
- * `attendancedate` (text, `YYYY-MM-DD`) and `statusname = 'Absent'` only, per
- * that schema's own column notes. `consecutive_days` is a TRAILING-WINDOW
- * approximation (count of distinct absent dates in the last 7 calendar days),
- * not a true unbroken-run calculation — the same kind of stated simplification
- * docs/06's drill per-level notes make for other counts that read like one
- * thing and are actually another. A real consecutive-run calculation is a
- * follow-up, not a blocker for proving the trigger→run pipeline end to end.
- *
- * `parent_phone` is always null — see @sap/agent-graph's FETCH_SOURCES comment
- * and docs/11 §2 item 10 (no contact column exists in the catalogued schema).
+ * The statement for each `FETCH_SOURCES` entry lives in `@sap/agent-graph`'s
+ * `FETCH_SOURCE_SQL` (fetch-source-sql.ts), not here — shared with
+ * apps/orchestrator's `testRunAgent` (the builder's "Test run" button) so a
+ * schedule-driven run and a live test-run can never quietly answer the same
+ * declared source with two different queries.
  */
 
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { agentGraphSchema, type FetchSourceId } from '@sap/agent-graph';
+import { FETCH_SOURCE_SQL, agentGraphSchema } from '@sap/agent-graph';
 import * as agentDbSchema from '@sap/agent-graph/db-schema';
 import { db } from '../db/client.js';
 import { withAgentMcp } from '../mcp/client.js';
 import { agentQueue } from '../queue/queue.js';
-
-const FETCH_SOURCE_SQL: Partial<Record<FetchSourceId, string>> = {
-  students_absent_today: `
-    SELECT s.studentid AS student_id, s.studentname AS student_name,
-           s.classname AS class, s.sectionname AS section,
-           (SELECT COUNT(DISTINCT a2.attendancedate)
-              FROM student_attendance_data_set a2
-             WHERE a2.studentid = s.studentid
-               AND a2.statusname = 'Absent'
-               AND a2.attendancedate BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 6 DAY), '%Y-%m-%d')
-                                          AND DATE_FORMAT(CURDATE(), '%Y-%m-%d')
-           ) AS consecutive_days
-      FROM (
-        SELECT DISTINCT studentid, studentname, classname, sectionname
-          FROM student_attendance_data_set
-         WHERE attendancedate = DATE_FORMAT(CURDATE(), '%Y-%m-%d')
-           AND statusname = 'Absent'
-      ) s
-  `.trim(),
-};
-
-interface FetchedRow {
-  student_id: number | string;
-  student_name: string;
-  class: string;
-  section: string;
-  consecutive_days: number;
-}
 
 interface RunQueryResult {
   rows: Record<string, unknown>[];
@@ -121,21 +78,21 @@ export async function evaluateAgent(agentId: string): Promise<{ matched: number;
       (mcp) => mcp.call<RunQueryResult>('run_query', { school_id: schoolId, sql }),
     );
 
-    for (const raw of result.rows) {
-      const row = raw as unknown as FetchedRow;
+    for (const row of result.rows) {
       matched += 1;
 
-      const recordRef = {
-        student_id: row.student_id,
-        student_name: row.student_name,
-        class: row.class,
-        section: row.section,
-        parent_phone: null as string | null,
-        consecutive_days: row.consecutive_days,
-      };
+      /**
+       * Source-agnostic on purpose: every `FETCH_SOURCES` entry's SQL already
+       * aliases its columns to that source's declared `fields`
+       * (@sap/agent-graph), so the row IS the record — spread as-is, with
+       * `parent_phone` forced to `null` because no source can supply it
+       * (docs/11 §2 item 10), rather than trusting a query to remember to.
+       */
+      const recordRef: Record<string, unknown> = { ...row, parent_phone: null };
+      const studentId = row['student_id'];
 
       /** docs/07 §3: "auto-derived DEDUP KEY (agent+node+record+date)". */
-      const dedupKey = `${fetchNode.id}:${String(row.student_id)}:${today}`;
+      const dedupKey = `${fetchNode.id}:${String(studentId)}:${today}`;
       const runId = randomUUID();
 
       try {

@@ -18,3 +18,4 @@ export * from './validate.js';
 export * from './templates.js';
 export * from './queue-contract.js';
 export * from './channel-resolution.js';
+export * from './fetch-source-sql.js';

@@ -32,6 +32,7 @@
 
 import puppeteer, { type Browser } from 'puppeteer';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
+import type { ChartSpec } from '@sap/chart-spec';
 import { config } from '../config.js';
 import type { DashboardResult } from './dashboards.js';
 
@@ -76,6 +77,36 @@ export interface PdfRequest {
   readonly scopeLine: string;
   /** docs/06 §5: "the logic summary can print as an appendix". */
   readonly includeLogic: boolean;
+  /**
+   * Set for a single chart's "Print" action (ChartMenu.tsx), never by the
+   * page-level "⬇ PDF" link. When present, only this widget draws — the same
+   * narrowing `narrowToWidget` below performs — so a reader who asked to print
+   * ONE chart does not receive the other five panels on the report around it.
+   */
+  readonly widgetId?: string | undefined;
+}
+
+/**
+ * The spec for ONE widget, reduced from the report's own — same rebuild-not-
+ * accept rule as the whole document (ADR-021, module docblock above): a print
+ * request never carries a spec, only the id of a widget already inside the one
+ * this service just re-read.
+ *
+ * `narrative` is dropped: it is the REPORT's summary sentence, and printing it
+ * over a single chart would caption that chart with a claim about panels that
+ * are no longer on the page.
+ */
+export function narrowToWidget(spec: ChartSpec, widgetId: string): ChartSpec {
+  const widget = spec.widgets.find((w) => w.id === widgetId);
+  if (widget === undefined) {
+    throw new PlatformError({
+      code: ERROR_CODES.VALIDATION_FAILED,
+      message: 'This chart is not part of this report.',
+      details: { widget_id: widgetId },
+    });
+  }
+  const { narrative: _narrative, ...rest } = spec;
+  return { ...rest, title: widget.title ?? spec.title, widgets: [widget] };
 }
 
 /**
@@ -88,9 +119,10 @@ export interface PdfRequest {
  * Chromium's problem.
  */
 export function buildPrintPayload(req: PdfRequest, generatedAt: string) {
+  const spec = req.widgetId === undefined ? req.dashboard.spec : narrowToWidget(req.dashboard.spec, req.widgetId);
   return {
-    spec: req.dashboard.spec,
-    title: req.title,
+    spec,
+    title: req.widgetId === undefined ? req.title : spec.title,
     org_name: req.orgName,
     scope_line: req.scopeLine,
     filters: req.dashboard.logic.filters.map((f) => ({ label: f.label, value: f.value })),
@@ -182,7 +214,7 @@ export async function renderReportPdf(req: PdfRequest): Promise<Uint8Array> {
       footerTemplate: `
         <div style="width:100%;font-size:8px;color:#64748b;font-family:Inter,sans-serif;
                     padding:0 12mm;display:flex;justify-content:space-between;">
-          <span>${escapeHtml(req.orgName)} · ${escapeHtml(req.title)}</span>
+          <span>${escapeHtml(req.orgName)} · ${escapeHtml(payload.title)}</span>
           <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
         </div>`,
       margin: { top: '14mm', bottom: '14mm', left: '10mm', right: '10mm' },

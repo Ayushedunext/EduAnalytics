@@ -197,6 +197,8 @@ Until this date drill-down existed only on the fifteen predefined dashboards and
 
 Server-side Puppeteer renders the same React print route from the persisted spec: school/trust branding, school-scope line, generated-on timestamp, page numbers; optional logic appendix; drill exports as above. A lightweight client-side quick-export path may exist for casual use; official documents use the server path. Exports are logged (Export History).
 
+**Per-chart, added 2026-09-15.** The page-level export above is one route; `?widget_id=` on the same `export.pdf` endpoint asks it for ONE widget instead of the whole report, reached from that chart's own "⋮ → Print" (docs/10 §1.6) rather than the page footer. The spec is still rebuilt server-side from the report id exactly as ADR-021 requires — nothing here accepts a spec from the caller — and then reduced to the one widget named (`narrowToWidget`, `services/pdf.ts`) before it reaches the print route; the narrative line is dropped with it, since it is the whole report's summary sentence and would caption a page that no longer carries the panels it refers to. Same branding, same footer, same `report.exported` audit event as a whole-report export — only which widgets of the rebuilt spec are drawn differs.
+
 ## 6. Assumptions
 
 1. The hierarchy catalog is maintained by the platform team as schema versions evolve; it is data, not code.

@@ -261,6 +261,7 @@
 **Context.** Every report must export as a branded, print-perfect PDF that matches the screen — including drilled views.
 **Decision.** Puppeteer renders a print-optimized route fed by the same persisted chart-spec/report definition (never a re-query through a different path): school/trust branding, scope line, timestamps, page numbers; optional logic appendix; drill exports as current-view (breadcrumb in header) or full pack of visited levels. Exports logged in Export History. A client-side quick-export may exist for casual use; official documents use the server path.
 **Reasoning.** Same-spec rendering guarantees screen/PDF parity; server-side gives pixel-perfect, brandable output and an auditable export event.
+**Extended 2026-09-15 (not amended):** `export.pdf` takes an optional `widget_id`, narrowing the same rebuilt spec to one widget before it reaches the print route (`narrowToWidget`, `services/pdf.ts`) — the per-chart **Print** item on `ChartMenu` (docs/10 §1.6). Same rebuild-from-id rule, same renderer, same audit event; only which widgets of the already-rebuilt spec are drawn differs. No new query path and no client-supplied spec, so the ADR's own decision is unchanged by it.
 **Alternatives considered.** Client-only (html2canvas/jsPDF) as the sole path — rejected: fidelity and branding limits, no server-side audit; a bespoke PDF layout engine — rejected: duplicates the renderer.
 **Trade-offs.** Headless-browser fleet to operate; 2–4 s export latency.
 **Future impact.** Scheduled email digests attach PDFs produced by this exact path.

@@ -13,9 +13,10 @@
 
 import { describe, expect, it } from 'vitest';
 import './env-defaults.js';
+import { PlatformError } from '@sap/shared';
 import type { DashboardResult } from '../src/services/dashboards.js';
 
-const { buildPrintPayload, escapeHtml } = await import('../src/services/pdf.js');
+const { buildPrintPayload, escapeHtml, narrowToWidget } = await import('../src/services/pdf.js');
 
 const DASHBOARD = {
   spec: {
@@ -78,6 +79,58 @@ describe('every export says what it is about', () => {
     // ADR-021: one spec, one renderer. If the export ever transformed the spec
     // on its way to the page, the PDF could disagree with the screen.
     expect(payload.spec).toBe(DASHBOARD.spec);
+  });
+});
+
+/**
+ * ChartMenu's per-chart "Print" (docs/06 §5, ADR-021 extension 2026-09-15):
+ * `?widget_id=` reduces the already-rebuilt spec to one widget before it
+ * reaches the print route.
+ */
+describe('narrowToWidget — Print, one chart at a time', () => {
+  const spec = {
+    spec_version: 1,
+    title: 'Fee Defaulters',
+    narrative: 'Overdue balances rose 4% against last quarter.',
+    widgets: [
+      { id: 'kpi', type: 'kpi', label: 'Overdue', value: '₹30.6L' },
+      { id: 'bar', type: 'bar', title: 'Overdue by age', x: 'band', y: 'amount', data: [] },
+    ],
+    meta: DASHBOARD.spec.meta,
+  } as unknown as DashboardResult['spec'];
+
+  it('keeps only the named widget and takes its title as the document title', () => {
+    const narrowed = narrowToWidget(spec, 'bar');
+    expect(narrowed.widgets).toHaveLength(1);
+    expect(narrowed.widgets[0]).toEqual(spec.widgets[1]);
+    expect(narrowed.title).toBe('Overdue by age');
+  });
+
+  it('falls back to the report title when the widget has none of its own', () => {
+    expect(narrowToWidget(spec, 'kpi').title).toBe('Fee Defaulters');
+  });
+
+  it('drops the narrative — it is the REPORT’s summary, not this chart’s', () => {
+    expect(narrowToWidget(spec, 'kpi')).not.toHaveProperty('narrative');
+  });
+
+  it('refuses a widget id this report does not have, rather than printing an empty page', () => {
+    expect(() => narrowToWidget(spec, 'missing')).toThrow(PlatformError);
+  });
+
+  it('leaves buildPrintPayload drawing the whole report when no widget id is given', () => {
+    const payload = buildPrintPayload({ ...BASE, dashboard: { ...DASHBOARD, spec } }, 'now');
+    expect(payload.spec).toBe(spec);
+    expect(payload.title).toBe(BASE.title);
+  });
+
+  it('narrows buildPrintPayload’s own spec and title when a widget id is given', () => {
+    const payload = buildPrintPayload(
+      { ...BASE, dashboard: { ...DASHBOARD, spec }, widgetId: 'bar' },
+      'now',
+    );
+    expect(payload.spec.widgets).toEqual([spec.widgets[1]]);
+    expect(payload.title).toBe('Overdue by age');
   });
 });
 

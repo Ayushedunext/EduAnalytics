@@ -423,6 +423,9 @@ customReportsRouter.get(
       const id = req.params['id'];
       if (typeof id !== 'string' || id === '') badRequest('A report id is required.', req.correlationId);
       const includeLogic = req.query['logic'] === '1' || req.query['logic'] === 'true';
+      /** ChartMenu's per-chart "Print" — see routes/report.ts's twin. */
+      const widgetIdRaw = req.query['widget_id'];
+      const widgetId = typeof widgetIdRaw === 'string' && widgetIdRaw !== '' ? widgetIdRaw : undefined;
       const schoolIds = await resolveRequestedSchools(req);
 
       const view = await viewReport({ session, correlationId: req.correlationId, id, requestedSchoolIds: schoolIds });
@@ -433,6 +436,7 @@ customReportsRouter.get(
         orgName: await orgName(session.org_id),
         scopeLine: scope.map((s) => s.school_name).join(' · '),
         includeLogic,
+        widgetId,
       });
 
       /**
@@ -453,14 +457,15 @@ customReportsRouter.get(
       });
 
       res.setHeader('content-type', 'application/pdf');
-      res.setHeader('content-disposition', `attachment; filename="${filename(view.name)}"`);
+      res.setHeader('content-disposition', `attachment; filename="${filename(view.name, widgetId)}"`);
       res.setHeader('cache-control', 'private, no-store');
       res.end(Buffer.from(pdf));
     })().catch(next);
   },
 );
 
-function filename(name: string): string {
+function filename(name: string, widgetId?: string): string {
   const safe = name.replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'report';
-  return `${safe}-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const suffix = widgetId === undefined ? '' : `-${widgetId.replace(/[^a-z0-9-]+/gi, '-').toLowerCase()}`;
+  return `${safe}${suffix}-${new Date().toISOString().slice(0, 10)}.pdf`;
 }

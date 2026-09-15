@@ -322,6 +322,10 @@ reportRouter.post('/api/report/:id/drill', (req: Request, res: Response, next: N
  * A GET, and side-effect-free by contract: it changes nothing, so a link can
  * open it and CSRF does not apply (ADR-029 clause 3). The audit write is a
  * RECORD of the read, not a change to any state a caller can influence.
+ *
+ * `?widget_id=` narrows the document to one chart — ChartMenu's "Print" item,
+ * beside Insights/Clone/Enlarge/View logic on every panel. Same endpoint, same
+ * rebuild-from-id rule; only what prints differs (`narrowToWidget`, pdf.ts).
  */
 reportRouter.get(
   '/api/report/:id/export.pdf',
@@ -332,6 +336,14 @@ reportRouter.get(
 
       /** docs/06 §5: the logic summary prints as an appendix, on request. */
       const includeLogic = req.query['logic'] === '1' || req.query['logic'] === 'true';
+
+      /**
+       * ChartMenu's per-chart "Print" (docs/06 §5, ADR-021): the same export,
+       * narrowed to one widget. Absent, this is the page-level "⬇ PDF" link and
+       * the whole report prints, exactly as before.
+       */
+      const widgetIdRaw = req.query['widget_id'];
+      const widgetId = typeof widgetIdRaw === 'string' && widgetIdRaw !== '' ? widgetIdRaw : undefined;
 
       /**
        * The same filters the SCREEN was built from, comparison year included.
@@ -356,6 +368,7 @@ reportRouter.get(
         orgName: await orgName(session.org_id),
         scopeLine: scope.map((s) => s.school_name).join(' · '),
         includeLogic,
+        widgetId,
       });
 
       /**
@@ -383,7 +396,7 @@ reportRouter.get(
        */
       res.setHeader(
         'content-disposition',
-        `attachment; filename="${filename(reportId, asOfDate)}"`,
+        `attachment; filename="${filename(reportId, asOfDate, widgetId)}"`,
       );
       /** Never cached by a proxy: the content is school data (docs/08 §3). */
       res.setHeader('cache-control', 'private, no-store');
@@ -392,6 +405,6 @@ reportRouter.get(
   },
 );
 
-function filename(reportId: string, asOfDate: string): string {
-  return `${reportId}-${asOfDate}.pdf`;
+function filename(reportId: string, asOfDate: string, widgetId?: string): string {
+  return widgetId === undefined ? `${reportId}-${asOfDate}.pdf` : `${reportId}-${widgetId}-${asOfDate}.pdf`;
 }

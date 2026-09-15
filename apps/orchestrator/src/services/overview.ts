@@ -819,9 +819,13 @@ function buildRankedStudents(
         rows,
       },
     ],
-    notes: floorNote(floors),
+    notes: [...floorNote(floors), ...(direction === -1 ? [LOWEST_EXCLUSION_NOTE] : [])],
   };
 }
+
+/** Why a 0% row never appears here -- see the `lowest_attendance` catalog entry. */
+const LOWEST_EXCLUSION_NOTE =
+  "Students present on none of their marked days are left off this list -- that almost always means they withdrew or stopped attending, not that they need a nudge.";
 
 function buildTopStudents(merged: Merged): Built {
   return buildRankedStudents(merged, 'top_attendance', 'table-top-attendance', 'Highest attendance this year', 1);

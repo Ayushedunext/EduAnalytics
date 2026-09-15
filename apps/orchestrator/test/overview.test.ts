@@ -473,6 +473,18 @@ describe('the attendance ranking states the floor it actually applied', () => {
     expect(table?.title).toBe('Lowest attendance this year');
     expect(table?.rows.map((r) => r['enrollment'])).toEqual(['1', '4', '3', '5']);
     expect(table?.rows[0]?.['marked']).toBe(12);
+    expect(card.notes.join(' ')).toContain('withdrew or stopped attending');
+  });
+
+  /**
+   * The zero-attendance exclusion happens in the catalog's WHERE clause
+   * (present_days > 0), not here -- this only holds the card to explaining it
+   * when the query key it reads from is the lowest-ranking one.
+   */
+  it('says nothing about withdrawal on the highest-attendance card', async () => {
+    response = result([ranked('a', 5, [['1', 12, 12]])]);
+    const card = await build('top_students', ['a']);
+    expect(card.notes.join(' ')).not.toContain('withdrew');
   });
 });
 

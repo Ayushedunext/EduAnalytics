@@ -2957,10 +2957,24 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         'ORDER BY present_days / marked_days DESC, marked_days DESC, enrollmentno LIMIT 4',
     },
     {
-      /** Same floor as `top_attendance` immediately above, only the ranking flips. */
+      /**
+       * Same floor as `top_attendance` immediately above, ranking flipped --
+       * plus one guard that direction needs and the other does not.
+       *
+       * `present_days > 0` excludes a student marked on every one of their
+       * days and present on none of them. That is not "struggling" -- it is
+       * almost always a student who withdrew or stopped attending mid-year
+       * but is still on the roster, so every day after they left keeps
+       * recording as absent. Nothing about that clears with more days
+       * marked; a chronic absentee with a real, actionable problem still
+       * clears the floor and ranks here, they just are not sitting at
+       * exactly zero. Left in, a school's four withdrawn students would
+       * occupy this card permanently and the reader could never see past
+       * them to the attendance issue the card exists to surface.
+       */
       key: 'lowest_attendance',
       description:
-        "Students with the lowest attendance over the window, above a floor set from the school's own register (half the best-covered student's marked days, capped at 20, never below 5)",
+        "Students with the lowest attendance over the window (excluding a student present on none of their marked days, which is withdrawal rather than an attendance problem), above a floor set from the school's own register (half the best-covered student's marked days, capped at 20, never below 5)",
       sql:
         'SELECT studentname, enrollmentno, classname, sectionname, marked_days, present_days, min_marked_days FROM ' +
         '(SELECT s.studentname, s.enrollmentno, s.classname, s.sectionname, s.marked_days, s.present_days, ' +
@@ -2970,7 +2984,7 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
         ' FROM ' + STUDENT_DAYS +
         ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname) s) t ' +
-        'WHERE marked_days >= min_marked_days ' +
+        'WHERE marked_days >= min_marked_days AND present_days > 0 ' +
         'ORDER BY present_days / marked_days ASC, marked_days DESC, enrollmentno LIMIT 4',
     },
     {

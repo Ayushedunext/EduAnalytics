@@ -15,15 +15,18 @@
  * exception that aborts the walk — the run still reaches an End node.
  */
 
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
   agentGraphSchema,
   isMessageAction,
+  isSandboxProvider,
   type AgentGraph,
   type AgentNode,
 } from '@sap/agent-graph';
 import * as agentDbSchema from '@sap/agent-graph/db-schema';
 import { db } from '../db/client.js';
+import { resolveEffectiveChannel } from '../channels/resolve.js';
 import { checkGuardrails, recordRunOutcome } from '../guardrails/guardrails.js';
 import { agentQueue } from '../queue/queue.js';
 
@@ -32,6 +35,12 @@ type RunRow = typeof agentDbSchema.agentRuns.$inferSelect;
 export async function advanceRun(runId: string): Promise<void> {
   const [run] = await db.select().from(agentDbSchema.agentRuns).where(eq(agentDbSchema.agentRuns.runId, runId));
   if (run === undefined || run.status === 'completed' || run.status === 'failed') return;
+
+  const [agent] = await db.select({ orgId: agentDbSchema.agents.orgId }).from(agentDbSchema.agents).where(eq(agentDbSchema.agents.id, run.agentId));
+  if (agent === undefined) {
+    await failRun(run, 'agent no longer exists');
+    return;
+  }
 
   const [version] = await db
     .select()
@@ -109,7 +118,7 @@ export async function advanceRun(runId: string): Promise<void> {
      * rather than no record at all.
      */
     const stepId = await createStep(run.runId, nodeId);
-    const outcome = await executeNode(node, run, stepId);
+    const outcome = await executeNode(node, run, stepId, agent.orgId);
     await finalizeStep(stepId, outcome.status, outcome.payloadIn ?? null, outcome.payloadOut ?? null, outcome.error);
 
     currentNodeId = nodeId;
@@ -204,7 +213,7 @@ interface NodeOutcome {
   readonly error?: string;
 }
 
-async function executeNode(node: AgentNode, run: RunRow, stepId: number): Promise<NodeOutcome> {
+async function executeNode(node: AgentNode, run: RunRow, stepId: number, orgId: string): Promise<NodeOutcome> {
   switch (node.data.kind) {
     case 'dedup_guard':
       return { status: 'succeeded', payloadOut: { note: 'enforced at run creation via agent_runs.dedup_key (ADR-025)' } };
@@ -226,12 +235,12 @@ async function executeNode(node: AgentNode, run: RunRow, stepId: number): Promis
       return { status: 'failed', error: 'ERP notification API not available (docs/11 §2 item 7)' };
 
     default:
-      if (isMessageAction(node.data)) return executeMessageAction(node, run, stepId);
+      if (isMessageAction(node.data)) return executeMessageAction(node, run, stepId, orgId);
       return { status: 'failed', error: `node kind "${node.data.kind}" has no executor` };
   }
 }
 
-async function executeMessageAction(node: AgentNode, run: RunRow, stepId: number): Promise<NodeOutcome> {
+async function executeMessageAction(node: AgentNode, run: RunRow, stepId: number, orgId: string): Promise<NodeOutcome> {
   if (!isMessageAction(node.data)) return { status: 'failed', error: 'not a message node' };
 
   const guard = await checkGuardrails({ schoolId: run.schoolId });
@@ -252,11 +261,29 @@ async function executeMessageAction(node: AgentNode, run: RunRow, stepId: number
     return { status: 'skipped', error: `guardrail: ${guard.reason}` };
   }
 
+  const effective = await resolveEffectiveChannel(orgId, run.schoolId, node.data.primary);
+
+  /**
+   * The sandbox path (@sap/agent-graph channel-resolution.ts): a channel
+   * explicitly connected with provider "Sandbox" simulates the whole
+   * send — including standing in for the missing recipient (docs/11 §2 item
+   * 10) — because the point of sandbox mode is proving the guardrail →
+   * dedup → branch → send pipeline end to end where NEITHER a real contact
+   * column nor a real BSP exists yet. It never claims delivery: `provider_ref`
+   * is prefixed `sandbox-` and never a real message id.
+   */
+  if (effective.status === 'connected' && isSandboxProvider(effective.provider)) {
+    const recipientForLog = typeof recipient === 'string' && recipient !== '' ? recipient : '(sandbox — no contact column yet, docs/11 §2 item 10)';
+    const providerRef = `sandbox-${randomUUID()}`;
+    await insertMessageLog({ ...baseLog, recipient: recipientForLog, status: 'sent', providerRef });
+    return { status: 'succeeded', payloadOut: { channel: node.data.primary, provider_ref: providerRef, mode: 'sandbox' } };
+  }
+
   if (typeof recipient !== 'string' || recipient === '') {
     /** docs/11 §2 item 10: no contact column exists in the catalogued schema
-     * yet, so this fires for every real record today — see this file's
-     * module doc and the trigger evaluator's. A structured, logged non-send,
-     * never a fabricated phone number. */
+     * yet, so this fires for every real record today outside sandbox mode —
+     * see this file's module doc and the trigger evaluator's. A structured,
+     * logged non-send, never a fabricated phone number. */
     await insertMessageLog({ ...baseLog, status: 'failed', error: 'no parent contact information available (docs/11 §2 item 10)' });
     return { status: 'failed', error: 'no recipient contact information available' };
   }
@@ -282,6 +309,7 @@ async function insertMessageLog(fields: {
   recipient: string;
   status: 'sent' | 'failed' | 'skipped_dedup' | 'skipped_quiet_hours' | 'skipped_cap' | 'skipped_guardrail';
   error?: string;
+  providerRef?: string;
 }): Promise<void> {
   await db.insert(agentDbSchema.messageLog).values({
     runId: fields.runId,
@@ -292,6 +320,7 @@ async function insertMessageLog(fields: {
     recipient: fields.recipient,
     status: fields.status,
     ...(fields.error === undefined ? {} : { error: fields.error }),
+    ...(fields.providerRef === undefined ? {} : { providerRef: fields.providerRef }),
   });
 }
 

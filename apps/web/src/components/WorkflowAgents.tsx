@@ -33,13 +33,17 @@ import {
   ApiFailure,
   createAgent,
   getAgent,
+  getAgentRuns,
   getAgentsHome,
+  getRunSteps,
   publishAgent,
   runAgentNow,
   saveAgentDraft,
   setAgentActive,
   testRunAgent,
   type AgentDetail,
+  type AgentRunRow,
+  type AgentRunStepRow,
   type AgentSummary,
   type AgentTestRunResult,
   type AgentsHomeResponse,
@@ -51,7 +55,7 @@ interface Props {
   schoolIds: readonly string[];
 }
 
-type View = { kind: 'home' } | { kind: 'builder'; agentId: string };
+type View = { kind: 'home' } | { kind: 'builder'; agentId: string } | { kind: 'runs'; agentId: string; agentName: string };
 
 export function WorkflowAgents({ session, schoolIds }: Props): ReactElement {
   const [view, setView] = useState<View>({ kind: 'home' });
@@ -62,6 +66,18 @@ export function WorkflowAgents({ session, schoolIds }: Props): ReactElement {
         agentId={view.agentId}
         session={session}
         onBack={() => { setView({ kind: 'home' }); }}
+        onViewRuns={(agentName) => { setView({ kind: 'runs', agentId: view.agentId, agentName }); }}
+      />
+    );
+  }
+
+  if (view.kind === 'runs') {
+    return (
+      <AgentRunsView
+        agentId={view.agentId}
+        agentName={view.agentName}
+        onBack={() => { setView({ kind: 'home' }); }}
+        onEditFlow={() => { setView({ kind: 'builder', agentId: view.agentId }); }}
       />
     );
   }
@@ -70,6 +86,7 @@ export function WorkflowAgents({ session, schoolIds }: Props): ReactElement {
     <AgentsHome
       schoolIds={schoolIds}
       onOpen={(agentId) => { setView({ kind: 'builder', agentId }); }}
+      onViewRuns={(agentId, agentName) => { setView({ kind: 'runs', agentId, agentName }); }}
     />
   );
 }
@@ -78,7 +95,15 @@ export function WorkflowAgents({ session, schoolIds }: Props): ReactElement {
 // Fleet view
 // ---------------------------------------------------------------------------
 
-function AgentsHome({ schoolIds, onOpen }: { schoolIds: readonly string[]; onOpen: (id: string) => void }): ReactElement {
+function AgentsHome({
+  schoolIds,
+  onOpen,
+  onViewRuns,
+}: {
+  schoolIds: readonly string[];
+  onOpen: (id: string) => void;
+  onViewRuns: (id: string, name: string) => void;
+}): ReactElement {
   const [data, setData] = useState<AgentsHomeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -157,6 +182,9 @@ function AgentsHome({ schoolIds, onOpen }: { schoolIds: readonly string[]; onOpe
                       </p>
                     </div>
                     <div className="agentRowActions">
+                      <button type="button" className="btn btnGhost" onClick={() => { onViewRuns(agent.id, agent.name); }}>
+                        Runs
+                      </button>
                       <button type="button" className="btn btnOutline" onClick={() => { onOpen(agent.id); }}>
                         Edit flow
                       </button>
@@ -234,12 +262,177 @@ function Kpi({ label, value, tone }: { label: string; value: string; tone?: 'pos
 }
 
 // ---------------------------------------------------------------------------
+// Runs & History (docs/07 §6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Deliberately simpler than docs/07 §6's "replay it on the same flowchart":
+ * a run list plus a per-node trail as a plain sequence, not overlaid on the
+ * `@xyflow/react` canvas. The data (`run_steps`) is the same either way; the
+ * animated-replay-on-the-diagram affordance is a UI enhancement tracked
+ * alongside the rest of docs/11's deferred list, not a data gap.
+ */
+function AgentRunsView({
+  agentId,
+  agentName,
+  onBack,
+  onEditFlow,
+}: {
+  agentId: string;
+  agentName: string;
+  onBack: () => void;
+  onEditFlow: () => void;
+}): ReactElement {
+  const [runs, setRuns] = useState<AgentRunRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [steps, setSteps] = useState<AgentRunStepRow[] | null>(null);
+  const [stepsLoading, setStepsLoading] = useState(false);
+
+  const load = useCallback(() => {
+    getAgentRuns(agentId)
+      .then(({ runs: r }) => { setRuns(r); })
+      .catch((err: unknown) => { setError(err instanceof Error ? err.message : 'Could not load runs.'); });
+  }, [agentId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openRun = useCallback(
+    (runId: string) => {
+      setSelectedRunId(runId);
+      setStepsLoading(true);
+      setSteps(null);
+      getRunSteps(agentId, runId)
+        .then(({ steps: s }) => { setSteps(s); })
+        .catch((err: unknown) => { setError(err instanceof Error ? err.message : 'Could not load this run.'); })
+        .finally(() => { setStepsLoading(false); });
+    },
+    [agentId],
+  );
+
+  return (
+    <main className="flex-1 overflow-y-auto">
+      <div className="px-7 py-6 max-w-[1400px]">
+        <div className="flex items-center gap-3 flex-wrap mb-1">
+          <button type="button" className="btn btnGhost" onClick={onBack}>← Agents</button>
+          <h1 className="page-title" style={{ marginBottom: 0 }}>{agentName} — Runs & History</h1>
+          <div style={{ flex: 1 }} />
+          <button type="button" className="btn btnGhost" onClick={load}>Refresh</button>
+          <button type="button" className="btn btnOutline" onClick={onEditFlow}>Edit flow</button>
+        </div>
+
+        {error !== null && <div className="notice mt-3">{error}</div>}
+
+        {runs === null ? (
+          <div className="text-[13px] text-[var(--color-muted)] mt-5">Loading…</div>
+        ) : runs.length === 0 ? (
+          <div className="card mt-5" style={{ padding: 20 }}>
+            <p className="text-[13px] text-[var(--color-text-secondary)]">
+              No runs yet. Publish this agent, then either wait for its schedule to fire or click
+              "Run now" in the builder to trigger one immediately.
+            </p>
+          </div>
+        ) : (
+          <div className="agentBuilderGrid mt-5">
+            <div className="card" style={{ padding: 0 }}>
+              {runs.map((run) => (
+                <div
+                  key={run.runId}
+                  className={`agentRow${run.runId === selectedRunId ? ' selectedRun' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => { openRun(run.runId); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRun(run.runId); } }}
+                >
+                  <span className={`pill ${runStatusPill(run.status)}`}>{run.status}</span>
+                  <div className="agentBody">
+                    <b>{new Date(run.startedAt).toLocaleString()}</b>
+                    <p className="agentMeta">{run.schoolId} · {summarizeRecord(run.recordRef)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="card agentPanel">
+              <div className="agentPanelHead"><span className="agentPanelDot" />Run detail — per-node trail</div>
+              {selectedRunId === null ? (
+                <p className="text-[12.5px] text-[var(--color-text-muted)]">Select a run on the left to see what each node did.</p>
+              ) : stepsLoading ? (
+                <p className="text-[12.5px] text-[var(--color-text-muted)]">Loading…</p>
+              ) : steps === null || steps.length === 0 ? (
+                <p className="text-[12.5px] text-[var(--color-text-muted)]">No steps recorded for this run.</p>
+              ) : (
+                steps.map((step) => (
+                  <div key={step.id} className={`runStep ${step.status}`}>
+                    <div className="runStepHead">
+                      <span>{step.nodeId}</span>
+                      <span className={`pill ${stepStatusPill(step.status)}`}>{step.status}</span>
+                    </div>
+                    {step.error !== null && <p className="agentHint warn">{step.error}</p>}
+                    {step.payloadOut !== null && (
+                      <pre className="runStepPayload">{JSON.stringify(step.payloadOut, null, 2)}</pre>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+function runStatusPill(status: AgentRunRow['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'live';
+    case 'failed':
+      return 'danger';
+    case 'waiting':
+      return 'warning';
+    default:
+      return 'info';
+  }
+}
+
+function stepStatusPill(status: AgentRunStepRow['status']): string {
+  switch (status) {
+    case 'succeeded':
+      return 'live';
+    case 'failed':
+      return 'danger';
+    case 'skipped':
+      return 'warning';
+    default:
+      return 'info';
+  }
+}
+
+function summarizeRecord(record: Record<string, unknown>): string {
+  const name = record['student_name'];
+  const days = record['consecutive_days'];
+  if (typeof name === 'string') return days !== undefined ? `${name} · ${String(days)} day(s)` : name;
+  return Object.entries(record).slice(0, 2).map(([k, v]) => `${k}: ${String(v)}`).join(' · ');
+}
+
+// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
 const EMPTY_GRAPH: AgentGraph = { nodes: [], edges: [] };
 
-function AgentBuilder({ agentId, session, onBack }: { agentId: string; session: SessionResponse; onBack: () => void }): ReactElement {
+function AgentBuilder({
+  agentId,
+  session,
+  onBack,
+  onViewRuns,
+}: {
+  agentId: string;
+  session: SessionResponse;
+  onBack: () => void;
+  onViewRuns: (agentName: string) => void;
+}): ReactElement {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [graph, setGraph] = useState<AgentGraph>(EMPTY_GRAPH);
   const [name, setName] = useState('');
@@ -346,6 +539,7 @@ function AgentBuilder({ agentId, session, onBack }: { agentId: string; session: 
             {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Draft saved' : ''}
           </span>
           <div style={{ flex: 1 }} />
+          <button type="button" className="btn btnGhost" onClick={() => { onViewRuns(name); }}>Runs & History</button>
           <button type="button" className="btn btnOutline" onClick={handleTestRun} disabled={testing || graph.nodes.length === 0}>
             {testing ? 'Running…' : '▶ Test run (dry — sends nothing)'}
           </button>

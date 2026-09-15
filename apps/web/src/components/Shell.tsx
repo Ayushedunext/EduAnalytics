@@ -85,6 +85,12 @@ export function Shell({
       locked: !aiActive,
       title: aiActive ? 'Ask AI about your schools' : 'Complete AI setup in Settings',
     },
+    {
+      id: 'agents',
+      label: 'Agents',
+      icon: 'bolt',
+      title: 'Automate WhatsApp/SMS/Email alerts — build your own flows, no AI required',
+    },
     { id: 'my-reports', label: 'My Reports', icon: 'save', title: 'Your cloned dashboards and saved Ask AI reports' },
     /* Beside Settings, and before it: scheduling a report is something a reader
        does with a report, not a thing they configure once — but it shares the

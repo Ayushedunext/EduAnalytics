@@ -97,7 +97,7 @@ Default layout, mapped 1:1 to the module boundaries in `docs/01` (layout changes
 - School-DB connections use the per-school `analytics_ro` user from Secrets Manager (ADR-008/013). No shared users, no widened grants "temporarily".
 - Platform DBs (registry, reports, agents, rollups) follow the schemas documented in docs/03/06/07; schema changes update the doc in the same PR (§21).
 - **The platform DB is MySQL 8** (decided 2026-08-19, `PROJECT_CONTEXT.md` §7) — the same engine as the school DBs and replicas, so there is exactly one SQL dialect in the codebase. Use the JSON column type for `def_json`, `graph_json` and `dims_json`. This is a technology choice, not a contract (§20), so it did not require an ADR; the **Rollup Store** engine remains separately open (§23).
-- ORM adoption is *not decided* (§23); until it is, use the driver with parameterized statements.
+- **ORM: Drizzle, decided 2026-09-15** for new platform-DB code (docs/11 §1, Workflow Agents entry) — type-safe schema/query builder over `mysql2`, chosen because it layers onto the existing hand-written SQL migrations (`db/platform/migrations/*.sql`) without imposing its own migration DSL, unlike Prisma. Scope: additive. `apps/agent-runtime` and the orchestrator's `services/agents.ts`/`services/channels.ts` use it for the agent and channel tables; existing services keep the parameterized driver unless a separate decision migrates them — this is not a mandate to rewrite working code (§17 "don't refactor beyond what's needed"). The Drizzle schema for agent-related tables is the single source of truth in `packages/agent-graph/src/db-schema.ts`, imported by both services that touch those tables, so their column definitions cannot drift apart.
 
 ## 10. Validation & error handling
 
@@ -199,11 +199,11 @@ These require a project decision (small ones in a PR touching this file; contrac
 - Frontend TypeScript adoption level for `apps/web` (backend TS is set; SPA not formally decided).
 - Linter/formatter tooling (ESLint/Prettier config not chosen).
 - Test framework(s) and coverage thresholds (§14 defines *what*, not *with what*).
-- ORM vs raw parameterized driver for platform DBs (§9).
+- ~~ORM vs raw parameterized driver for platform DBs (§9).~~ **Decided 2026-09-15 — see §9**: Drizzle for new code, additive only.
 - Frontend state-management library.
 - Git branching model and commit-message standard (§21 holds the minimum meanwhile).
 - Formal accessibility target (WCAG level) and localization approach beyond message-template language options.
 - Monorepo tooling (workspaces/turbo/nx) — the §1 layout is tool-agnostic.
-- Choice of queue (SQS vs BullMQ), WhatsApp BSP, and SMS/DLT provider — architecture fixes the *model*; vendors are open inputs (docs/11 §2).
+- ~~Choice of queue (SQS vs BullMQ)~~ **Decided 2026-09-15**: BullMQ, against the platform's existing Redis (already a dependency for result-cache) — cheapest path to the ADR-022 "Wait nodes are delayed queue jobs, not threads" requirement without standing up new infra. SQS remains the documented option if a managed queue is later needed at fleet scale; switching means re-implementing `apps/agent-runtime/src/queue/queue.ts`'s thin interface, not touching scheduler/evaluator/runner logic. WhatsApp BSP and SMS/DLT provider remain open inputs (docs/11 §2) — architecture fixes the *model*, vendors do not.
 - **Rollup Store technology — Aurora MySQL vs ClickHouse.** Listed among the "fixed" choices in `PROJECT_CONTEXT.md` §7 but never resolved; ADR-010 says only "a small platform DB". The two differ materially for the ETL, `dims_json` access patterns and ops load. Resolve by ADR before Phase 2 builds on it.
 - Validation library for the trust-boundary parsing required by §3/§10, and the JSON Schema artifact for chart-spec (§18 seam) — one choice should serve both; it touches a contract seam, so §19 makes it ADR-gated.

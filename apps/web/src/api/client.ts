@@ -783,6 +783,9 @@ export interface ChannelRow {
   status: 'connected' | 'not_connected';
   detail: string | null;
   requirement: string;
+  /** Which level this resolved from — the school's own override, the trust
+   * default, or neither (ADR-034). */
+  source: 'school' | 'org' | 'none';
 }
 
 export interface SettingsResponse {
@@ -837,6 +840,117 @@ export function disconnectChannel(
     `/api/settings/channels/${encodeURIComponent(schoolId)}/${encodeURIComponent(channel)}/disconnect`,
     { method: 'POST' },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Agents (docs/07) — the graph shape itself is imported from
+// @sap/agent-graph, not redeclared, so the builder and the server can never
+// silently drift on what a node looks like (CODING_GUIDELINES §1).
+// ---------------------------------------------------------------------------
+
+export type { AgentGraph, AgentNode, AgentEdge, ChannelId } from '@sap/agent-graph';
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  status: 'draft' | 'active' | 'paused';
+  schedule_label: string | null;
+  last_run_at: string | null;
+  last_run_status: string | null;
+}
+
+export interface AgentTemplateSummary {
+  id: string;
+  title: string;
+  blurb: string;
+  icon: string;
+  runnable: boolean;
+}
+
+export interface AgentsHomeResponse {
+  kpis: {
+    active_agents: number;
+    runs_this_week: number;
+    success_rate_pct: number | null;
+    messages_today: number;
+    messages_cap: number;
+  };
+  agents: AgentSummary[];
+  templates: AgentTemplateSummary[];
+}
+
+export function getAgentsHome(): Promise<AgentsHomeResponse> {
+  return request<AgentsHomeResponse>('/api/agents');
+}
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  status: 'draft' | 'active' | 'paused';
+  school_ids: string[];
+  current_version: number;
+  graph: Record<string, unknown>;
+}
+
+export function createAgent(body: {
+  name: string;
+  school_ids: string[];
+  template_id?: string;
+}): Promise<{ agent: AgentDetail }> {
+  return request<{ agent: AgentDetail }>('/api/agents', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function getAgent(id: string): Promise<{ agent: AgentDetail }> {
+  return request<{ agent: AgentDetail }>(`/api/agents/${encodeURIComponent(id)}`);
+}
+
+export function saveAgentDraft(
+  id: string,
+  body: { name?: string; school_ids?: string[]; graph: Record<string, unknown> },
+): Promise<{ agent: AgentDetail }> {
+  return request<{ agent: AgentDetail }>(`/api/agents/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function publishAgent(id: string): Promise<{ agent: AgentDetail }> {
+  return request<{ agent: AgentDetail }>(`/api/agents/${encodeURIComponent(id)}/publish`, { method: 'POST' });
+}
+
+export function setAgentActive(id: string, active: boolean): Promise<{ agent: AgentDetail }> {
+  return request<{ agent: AgentDetail }>(`/api/agents/${encodeURIComponent(id)}/${active ? 'activate' : 'pause'}`, {
+    method: 'POST',
+  });
+}
+
+export function runAgentNow(id: string): Promise<{ queued: boolean }> {
+  return request<{ queued: boolean }>(`/api/agents/${encodeURIComponent(id)}/run-now`, { method: 'POST' });
+}
+
+export interface AgentTestRunResult {
+  matched_count: number;
+  sample: Record<string, unknown>[];
+  note: string;
+}
+
+export function testRunAgent(id: string): Promise<AgentTestRunResult> {
+  return request<AgentTestRunResult>(`/api/agents/${encodeURIComponent(id)}/test-run`, { method: 'POST' });
+}
+
+export interface AgentRunRow {
+  runId: string;
+  agentId: string;
+  schoolId: string;
+  recordRef: Record<string, unknown>;
+  status: 'running' | 'waiting' | 'completed' | 'failed';
+  currentNodeId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export function getAgentRuns(id: string): Promise<{ runs: AgentRunRow[] }> {
+  return request<{ runs: AgentRunRow[] }>(`/api/agents/${encodeURIComponent(id)}/runs`);
 }
 
 /**

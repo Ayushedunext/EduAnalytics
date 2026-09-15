@@ -62,23 +62,43 @@ export interface ChannelRow {
   readonly status: 'connected' | 'not_connected';
   readonly detail: string | null;
   readonly requirement: string;
+  /**
+   * Which level this school's status actually resolved from (ADR-034):
+   * `school` — this school has its own override row; `org` — falling back to
+   * the trust default; `none` — neither is connected. Lets Settings show "via
+   * trust default" instead of leaving an admin to guess why a channel they
+   * never configured shows Connected.
+   */
+  readonly source: 'school' | 'org' | 'none';
 }
 
-export async function readChannels(
-  scope: readonly { school_id: string; school_name: string }[],
-): Promise<ChannelRow[]> {
+/**
+ * Effective channel resolution (ADR-034): a school's own `school_channels`
+ * row wins when present; otherwise the org's `org_channels` default applies.
+ * One function, called everywhere a channel's status matters (Settings, the
+ * agent builder's flow lint, publish-time checks) — never re-derived inline,
+ * for the same "one function, unit-tested" reason ADR-028 required of
+ * `permission_class`.
+ */
+export async function readChannels(orgId: string, scope: readonly { school_id: string; school_name: string }[]): Promise<ChannelRow[]> {
   if (scope.length === 0) return [];
 
   const ids = scope.map((s) => s.school_id);
-  const [rows] = await platformDb.query<RowDataPacket[]>(
+  const [schoolRows] = await platformDb.query<RowDataPacket[]>(
     `SELECT school_id, channel, status, provider, detail
        FROM school_channels
       WHERE school_id IN (${ids.map(() => '?').join(',')})`,
     ids,
   );
+  const [orgRows] = await platformDb.query<RowDataPacket[]>(
+    `SELECT channel, status, provider, detail FROM org_channels WHERE org_id = ?`,
+    [orgId],
+  );
 
-  const byKey = new Map<string, RowDataPacket>();
-  for (const row of rows) byKey.set(`${String(row['school_id'])}:${String(row['channel'])}`, row);
+  const bySchoolKey = new Map<string, RowDataPacket>();
+  for (const row of schoolRows) bySchoolKey.set(`${String(row['school_id'])}:${String(row['channel'])}`, row);
+  const byOrgChannel = new Map<string, RowDataPacket>();
+  for (const row of orgRows) byOrgChannel.set(String(row['channel']), row);
 
   /**
    * Built from the CHANNEL list, not from the rows returned. A school with no
@@ -90,17 +110,23 @@ export async function readChannels(
   const out: ChannelRow[] = [];
   for (const school of scope) {
     for (const channel of CHANNELS) {
-      const row = byKey.get(`${school.school_id}:${channel}`);
+      const schoolRow = bySchoolKey.get(`${school.school_id}:${channel}`);
+      const orgRow = byOrgChannel.get(channel);
       const meta = CHANNEL_META[channel];
-      const provider = row?.['provider'];
-      const detail = row?.['detail'];
+
+      const resolved = schoolRow ?? orgRow;
+      const source: ChannelRow['source'] =
+        schoolRow !== undefined ? 'school' : orgRow !== undefined ? 'org' : 'none';
+      const provider = resolved?.['provider'];
+      const detail = resolved?.['detail'];
+
       out.push({
         school_id: school.school_id,
         school_name: school.school_name,
         channel,
         title: meta.title,
         icon: meta.icon,
-        status: row?.['status'] === 'connected' ? 'connected' : 'not_connected',
+        status: resolved?.['status'] === 'connected' ? 'connected' : 'not_connected',
         detail:
           detail !== null && detail !== undefined
             ? String(detail)
@@ -108,10 +134,18 @@ export async function readChannels(
               ? String(provider)
               : null,
         requirement: meta.requirement,
+        source,
       });
     }
   }
   return out;
+}
+
+/** The set of channels connected (school override or org default) for one
+ * school — what the agent builder's flow lint checks a message node against. */
+export async function connectedChannelIds(orgId: string, schoolId: string): Promise<Set<ChannelId>> {
+  const rows = await readChannels(orgId, [{ school_id: schoolId, school_name: schoolId }]);
+  return new Set(rows.filter((r) => r.status === 'connected').map((r) => r.channel));
 }
 
 /**

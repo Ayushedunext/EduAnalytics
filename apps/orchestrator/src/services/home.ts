@@ -822,6 +822,16 @@ export async function buildHomePreview(args: {
  * built from (`listReportSources` in custom-reports.ts, docs/06 §3). One list
  * for both: a card that is `coming` or `blocked` on Home cannot be a report
  * source either, and two tables would eventually disagree about which.
+ *
+ * -- `workflow-agents` no longer lives here (removed 2026-09-15) -------------
+ * It was a homepage teaser card pointing at a feature with no screen of its
+ * own yet. Now that the agent builder is real it is a top-level nav item
+ * (`apps/web/src/components/Shell.tsx`) like Ask AI / My Reports / Settings —
+ * none of which are DASHBOARDS entries either, because this catalog's whole
+ * contract (`isDashboardId`, `previewableDashboards`, the report-click route)
+ * is for things opened as a REPORT, and Workflow Agents was never going to be
+ * one. Leaving the old `coming` row here would have made it clickable through
+ * `otherDashboards()`'s strip into a report screen that doesn't exist for it.
  */
 export const DASHBOARDS: readonly DashboardCard[] = [
   {
@@ -849,16 +859,6 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     status: 'coming',
     reason: 'Cross-school aggregates are served from the rollup store (ADR-010, Phase 2)',
     modules: ['attendance'],
-  },
-  {
-    id: 'workflow-agents',
-    title: 'Workflow Agents',
-    blurb: 'Automate alerts: absence, fees, library — build your own flows',
-    icon: '⚡',
-    group: 'director',
-    status: 'coming',
-    reason: 'The agent runtime is a later phase (ADR-022)',
-    modules: ['general'],
   },
   {
     id: 'school-comparison',

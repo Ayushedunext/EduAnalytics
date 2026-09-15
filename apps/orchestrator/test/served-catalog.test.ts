@@ -42,7 +42,6 @@ describe('served dashboard catalog', () => {
     expect(withheld).toEqual([
       { id: 'group-overview', status: 'coming' },
       { id: 'cross-school-attendance', status: 'coming' },
-      { id: 'workflow-agents', status: 'coming' },
       { id: 'school-comparison', status: 'coming' },
       { id: 'exam-performance', status: 'blocked' },
     ]);

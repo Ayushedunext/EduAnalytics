@@ -65,6 +65,14 @@ export const OVERVIEW_SLOTS = {
   att_status: ['att_status'],
   top_students: ['top_attendance'],
   lowest_students: ['lowest_attendance'],
+  /**
+   * The same `roll` and `staff` statements the tiles and gauges cards already
+   * run, kept per school instead of summed across them -- so this card costs
+   * no scan of its own (services/overview-queries.ts caches per statement).
+   * The by-school reading is level 1 of the Student-Staff Ratio drill path,
+   * which is what the card's "Report" button opens into.
+   */
+  staff_ratio: ['roll', 'staff'],
   gauges: ['roll', 'att_today', 'admissions', 'staff_today'],
   late_payers: ['late_payers', 'pending_students'],
   pending_top: ['pending_students'],
@@ -301,6 +309,7 @@ const BUILDERS: Record<OverviewSlotKey, (merged: Merged, ctx: Ctx) => Built> = {
   att_status: buildAttStatus,
   top_students: buildTopStudents,
   lowest_students: buildLowestStudents,
+  staff_ratio: buildStaffRatioPreview,
   gauges: buildGauges,
   late_payers: buildLatePayers,
   pending_top: buildPendingTop,
@@ -517,6 +526,53 @@ function buildAdmissionsBySchool(merged: Merged, ctx: Ctx): Built {
       },
     ],
     notes: ['Students the ERP marks as new to the school this academic year, read from the roll. Open the report to break a school down by class and then by section.'],
+  };
+}
+
+/**
+ * Students per staff member, one bar per school -- level 1 of the
+ * Student-Staff Ratio drill path (services/dashboards.ts `DRILL_PATHS`),
+ * drawn on the Dashboard beside the roll and headcount it is built from.
+ *
+ * Re-groups `roll` and `staff`, both already on the wire for the tiles and
+ * gauges cards, rather than querying again -- the same reasoning
+ * `buildAdmissionsBySchool` above follows. A school contributes a bar only
+ * when both queries reported it and its staff count is non-zero; a school
+ * with students but no staff on record gets a note instead of a divide-by-zero.
+ *
+ * Not drillable here, for the same reason `buildAdmissionsBySchool` is not:
+ * the Dashboard's slot API has no drill endpoint, so the card is drawn plain
+ * and clicking it opens Student-Staff Ratio, where the school-to-department
+ * descent works.
+ */
+function buildStaffRatioPreview(merged: Merged, ctx: Ctx): Built {
+  if (!merged.succeeded('roll') || !merged.succeeded('staff')) return { widgets: [] };
+  const rollBySchool = new Map(merged.sumPerSchool('roll', ['students']).map((e) => [e.school_id, e.totals['students'] ?? 0]));
+  const staffBySchool = new Map(merged.sumPerSchool('staff', ['on_roll']).map((e) => [e.school_id, e.totals['on_roll'] ?? 0]));
+  const schoolName = new Map(ctx.scope.map((entry) => [entry.school_id, entry.school_name]));
+
+  const rows = [...rollBySchool.keys()]
+    .filter((id) => (staffBySchool.get(id) ?? 0) > 0)
+    .map((id) => ({
+      school_name: schoolName.get(id) ?? id,
+      ratio: Math.round(((rollBySchool.get(id) ?? 0) / (staffBySchool.get(id) ?? 1)) * 10) / 10,
+    }));
+  if (rows.length === 0) return { widgets: [] };
+
+  return {
+    widgets: [
+      {
+        id: 'bar-staff-ratio',
+        type: 'bar',
+        title: 'Students per staff member, by school',
+        x: 'school_name',
+        y: 'ratio',
+        x_title: 'School',
+        y_title: 'Students per staff member',
+        data: rows,
+      },
+    ],
+    notes: ['Staff are not linked to a class in this ERP. Open the report to see a school’s staff broken down by department.'],
   };
 }
 
@@ -763,9 +819,13 @@ function buildRankedStudents(
         rows,
       },
     ],
-    notes: floorNote(floors),
+    notes: [...floorNote(floors), ...(direction === -1 ? [LOWEST_EXCLUSION_NOTE] : [])],
   };
 }
+
+/** Why a 0% row never appears here -- see the `lowest_attendance` catalog entry. */
+const LOWEST_EXCLUSION_NOTE =
+  "Students present on none of their marked days are left off this list -- that almost always means they withdrew or stopped attending, not that they need a nudge.";
 
 function buildTopStudents(merged: Merged): Built {
   return buildRankedStudents(merged, 'top_attendance', 'table-top-attendance', 'Highest attendance this year', 1);

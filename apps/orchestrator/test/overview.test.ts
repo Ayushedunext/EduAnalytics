@@ -294,6 +294,64 @@ describe('new admissions by school re-groups the tile’s own statement', () => 
   });
 });
 
+/**
+ * The Dashboard card behind "Students per staff member" (View 1). Re-groups
+ * the SAME `roll` and `staff` statements the tiles and gauges cards already
+ * run — the thing worth locking in, same as the admissions card above, is
+ * that it costs no scan of its own.
+ */
+describe('students per staff member re-groups the tiles’ own statements', () => {
+  it('divides each school’s own roll by its own headcount', async () => {
+    response = result([
+      {
+        school_id: 'a',
+        queries: [
+          query('roll', [{ gender: 'Girl', students: 300 }, { gender: 'Boy', students: 300 }]),
+          query('staff', [{ stafftype: 'Teaching', on_roll: 60 }]),
+        ],
+      },
+      {
+        school_id: 'b',
+        queries: [
+          query('roll', [{ gender: 'Girl', students: 200 }]),
+          query('staff', [{ stafftype: 'Teaching', on_roll: 50 }]),
+        ],
+      },
+    ]);
+    const card = await build('staff_ratio');
+    const chart = card.widgets.find((w) => w.id === 'bar-staff-ratio') as { data: Record<string, unknown>[] };
+    expect(chart.data).toEqual([
+      { school_name: 'Alpha', ratio: 10 },
+      { school_name: 'Beta', ratio: 4 },
+    ]);
+  });
+
+  it('costs the tiles’ statements and nothing else', async () => {
+    response = result([{ school_id: 'a', queries: [] }]);
+    await build('staff_ratio');
+    expect(lastCall?.args['query_keys']).toEqual(['roll', 'staff']);
+  });
+
+  it('leaves out a school with no staff on record rather than dividing by zero', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('roll', [{ gender: 'Girl', students: 300 }]), query('staff', [{ stafftype: 'Teaching', on_roll: 60 }])] },
+      { school_id: 'b', queries: [query('roll', [{ gender: 'Girl', students: 200 }])] },
+    ]);
+    const card = await build('staff_ratio');
+    const chart = card.widgets.find((w) => w.id === 'bar-staff-ratio') as { data: Record<string, unknown>[] };
+    expect(chart.data).toEqual([{ school_name: 'Alpha', ratio: 5 }]);
+  });
+
+  it('is not marked drillable — the Dashboard has no drill endpoint', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('roll', [{ gender: 'Girl', students: 300 }]), query('staff', [{ stafftype: 'Teaching', on_roll: 60 }])] },
+    ]);
+    const card = await build('staff_ratio');
+    const chart = card.widgets.find((w) => w.id === 'bar-staff-ratio');
+    expect((chart as { drillable?: unknown }).drillable).toBeUndefined();
+  });
+});
+
 describe('late payers join the two ledgers by enrolment', () => {
   it('ranks late-and-unpaid first and keeps the masked flag on names', async () => {
     response = result([
@@ -415,6 +473,18 @@ describe('the attendance ranking states the floor it actually applied', () => {
     expect(table?.title).toBe('Lowest attendance this year');
     expect(table?.rows.map((r) => r['enrollment'])).toEqual(['1', '4', '3', '5']);
     expect(table?.rows[0]?.['marked']).toBe(12);
+    expect(card.notes.join(' ')).toContain('withdrew or stopped attending');
+  });
+
+  /**
+   * The zero-attendance exclusion happens in the catalog's WHERE clause
+   * (present_days > 0), not here -- this only holds the card to explaining it
+   * when the query key it reads from is the lowest-ranking one.
+   */
+  it('says nothing about withdrawal on the highest-attendance card', async () => {
+    response = result([ranked('a', 5, [['1', 12, 12]])]);
+    const card = await build('top_students', ['a']);
+    expect(card.notes.join(' ')).not.toContain('withdrew');
   });
 });
 

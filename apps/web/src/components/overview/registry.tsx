@@ -41,6 +41,7 @@ import {
   MonthlyCard,
   RingsCard,
   SparkCard,
+  StaffRatioCard,
   TopSchoolsCard,
 } from './cards';
 
@@ -87,6 +88,11 @@ export const OVERVIEW_CARDS: Readonly<Record<string, OverviewCardDef>> = {
     slots: ['admissions_by_school'],
     span: 6,
     render: (c) => <AdmissionsCard state={c.states['admissions_by_school']} onOpen={c.onOpen} />,
+  },
+  'staff_ratio:bar-staff-ratio': {
+    slots: ['staff_ratio'],
+    span: 12,
+    render: (c) => <StaffRatioCard state={c.states['staff_ratio']} onOpen={c.onOpen} />,
   },
   'weekly_receipts:line-week-receipts': {
     slots: ['weekly_receipts'],

@@ -1134,6 +1134,68 @@ const STAFF_OVERVIEW: PredefinedReport = {
 };
 
 /**
+ * Student-Staff Ratio — a planning metric nobody had built: is a school over-
+ * or under-staffed relative to its enrolment. Both totals already exist
+ * independently (Enrollment Overview's roll, Staff Overview's headcount); this
+ * report is the two of them divided, per school.
+ *
+ * -- Why the drill stops at department, not class ----------------------------
+ * `employees_data_set` carries no class, section or even wing column — a
+ * teacher is never linked to a single class in this ERP, and `students_data_set`
+ * has no department column either, so there is no shared dimension finer than
+ * the whole school. A class-level ratio would mean inventing a per-class staff
+ * count (splitting a school's staff evenly across its classes, say), which is
+ * exactly the kind of fabricated denominator this catalog does not produce
+ * anywhere else (Transport reports "no data" rather than guess at one).
+ *
+ * So the drill's second level answers a related but different question —
+ * "which department is the school's staff concentrated in?" — using
+ * `by_department`, reused verbatim from Staff Overview's own query of the same
+ * name, rather than a deeper cut of the ratio itself. `drill_only` here, unlike
+ * on Staff Overview: this report's own page never shows a department chart
+ * except behind a click, so a plain load does not pay for it.
+ */
+const STUDENT_STAFF_RATIO: PredefinedReport = {
+  id: 'student-staff-ratio',
+  title: 'Student-Staff Ratio',
+  schema_version: 'erp-v1',
+  source: 'students_data_set · employees_data_set',
+  domain: 'staff',
+  params: [ACADEMIC_YEAR, AS_OF_DATE],
+  queries: [
+    /**
+     * One row, both totals — a scalar subquery against the OTHER table, the
+     * same shape Attendance Analytics' `expected_days` already uses to fold a
+     * roll count into an attendance query. Written as one statement rather
+     * than two so this report has a single result to hand the Home preview
+     * (services/home.ts's `DASHBOARD_LEAD_QUERY`/`DASHBOARD_DRILL_QUERY`
+     * fetch exactly one query per card) and so the base page's own builder
+     * reads one per-school total instead of joining two.
+     */
+    {
+      key: 'ratio',
+      description: 'Students on roll for the year, and staff on roll as of the date',
+      sql:
+        'SELECT SUM(CASE WHEN (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'AND (joining_date IS NULL OR joining_date <= :as_of_date) THEN 1 ELSE 0 END) AS staff, ' +
+        '(SELECT COUNT(*) FROM students_data_set ' +
+        'WHERE academicyearname = :academic_year AND deactivation_date IS NULL) AS students ' +
+        'FROM employees_data_set',
+    },
+    {
+      key: 'by_department',
+      description: 'Staff headcount by department, as of the date',
+      drill_only: true,
+      sql:
+        'SELECT departmentname, COUNT(*) AS staff FROM employees_data_set ' +
+        'WHERE (deactivation_date IS NULL OR deactivation_date > :as_of_date) ' +
+        'AND (joining_date IS NULL OR joining_date <= :as_of_date) ' +
+        'GROUP BY departmentname ORDER BY staff DESC',
+    },
+  ],
+};
+
+/**
  * Admissions Funnel — docs/06 §2; taken into Phase 1 as the fifth dashboard
  * (docs/11 §1 names it "a viable fifth if Phase 1 has room").
  *
@@ -2895,10 +2957,24 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         'ORDER BY present_days / marked_days DESC, marked_days DESC, enrollmentno LIMIT 4',
     },
     {
-      /** Same floor as `top_attendance` immediately above, only the ranking flips. */
+      /**
+       * Same floor as `top_attendance` immediately above, ranking flipped --
+       * plus one guard that direction needs and the other does not.
+       *
+       * `present_days > 0` excludes a student marked on every one of their
+       * days and present on none of them. That is not "struggling" -- it is
+       * almost always a student who withdrew or stopped attending mid-year
+       * but is still on the roster, so every day after they left keeps
+       * recording as absent. Nothing about that clears with more days
+       * marked; a chronic absentee with a real, actionable problem still
+       * clears the floor and ranks here, they just are not sitting at
+       * exactly zero. Left in, a school's four withdrawn students would
+       * occupy this card permanently and the reader could never see past
+       * them to the attendance issue the card exists to surface.
+       */
       key: 'lowest_attendance',
       description:
-        "Students with the lowest attendance over the window, above a floor set from the school's own register (half the best-covered student's marked days, capped at 20, never below 5)",
+        "Students with the lowest attendance over the window (excluding a student present on none of their marked days, which is withdrawal rather than an attendance problem), above a floor set from the school's own register (half the best-covered student's marked days, capped at 20, never below 5)",
       sql:
         'SELECT studentname, enrollmentno, classname, sectionname, marked_days, present_days, min_marked_days FROM ' +
         '(SELECT s.studentname, s.enrollmentno, s.classname, s.sectionname, s.marked_days, s.present_days, ' +
@@ -2908,7 +2984,7 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         "SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
         ' FROM ' + STUDENT_DAYS +
         ' GROUP BY a.studentid, a.studentname, a.enrollmentno, a.classname, a.sectionname) s) t ' +
-        'WHERE marked_days >= min_marked_days ' +
+        'WHERE marked_days >= min_marked_days AND present_days > 0 ' +
         'ORDER BY present_days / marked_days ASC, marked_days DESC, enrollmentno LIMIT 4',
     },
     {
@@ -2955,6 +3031,7 @@ const REPORTS: readonly PredefinedReport[] = [
   FEE_COLLECTION,
   FEE_DEFAULTERS,
   STAFF_OVERVIEW,
+  STUDENT_STAFF_RATIO,
   STAFF_ATTENDANCE,
   FEE_BY_STUDENT,
   ADMISSIONS_FUNNEL,

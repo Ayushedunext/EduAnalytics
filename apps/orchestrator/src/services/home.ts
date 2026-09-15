@@ -966,6 +966,21 @@ export const DASHBOARDS: readonly DashboardCard[] = [
     modules: ['staff'],
   },
   {
+    id: 'student-staff-ratio',
+    title: 'Student-Staff Ratio',
+    blurb: 'Students per staff member by school, drilling into staff by department',
+    icon: '⚖️',
+    group: 'school',
+    status: 'available',
+    /**
+     * General, not staff or students, for the same reason Principal's
+     * Snapshot is: it reads both domains to answer one question, and putting
+     * it under either module would pad the other with a report that is not
+     * fully about it.
+     */
+    modules: ['general'],
+  },
+  {
     id: 'staff-attendance',
     title: 'Staff Attendance',
     blurb: 'Present and absent staff-days by school, quarter and department',

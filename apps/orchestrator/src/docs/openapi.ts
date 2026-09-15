@@ -660,7 +660,7 @@ export const openApiDocument: OpenApiDocument = {
         required: ['key', 'widgets', 'status', 'notes', 'queries', 'degraded_schools', 'as_of'],
         description: 'One card of the Dashboard (docs/10 §1.5), as chart-spec widgets plus its provenance.',
         properties: {
-          key: { type: 'string', description: 'The slot: tiles, rings, monthly, weekly_receipts, weekly_attendance, top_schools, fee_heads, years, students_by_year, att_status, top_students, lowest_students, gauges, late_payers, pending_top, area, modes, late_weekly.' },
+          key: { type: 'string', description: 'The slot: tiles, rings, monthly, weekly_receipts, weekly_attendance, top_schools, fee_heads, years, students_by_year, att_status, top_students, lowest_students, staff_ratio, gauges, late_payers, pending_top, area, modes, late_weekly.' },
           widgets: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Validated by the renderer before they are drawn.' },
           status: { type: 'string', enum: ['ok', 'blocked'] },
           reason: { type: 'string' },

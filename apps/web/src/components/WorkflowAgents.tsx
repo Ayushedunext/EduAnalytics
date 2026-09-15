@@ -23,12 +23,17 @@ import { Background, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
   AGENT_TEMPLATES,
+  FETCH_SOURCES,
   findTemplate,
   type AgentEdge,
   type AgentGraph,
   type AgentNode,
   type ChannelId,
 } from '@sap/agent-graph';
+
+/** Fields that identify or contact a record, never a sensible condition to
+ * branch on — every other field a fetch source declares is a candidate. */
+const NON_CONDITION_FIELDS = new Set(['student_id', 'student_name', 'class', 'section', 'parent_phone']);
 import {
   ApiFailure,
   createAgent,
@@ -411,9 +416,12 @@ function stepStatusPill(status: AgentRunStepRow['status']): string {
 
 function summarizeRecord(record: Record<string, unknown>): string {
   const name = record['student_name'];
-  const days = record['consecutive_days'];
-  if (typeof name === 'string') return days !== undefined ? `${name} · ${String(days)} day(s)` : name;
-  return Object.entries(record).slice(0, 2).map(([k, v]) => `${k}: ${String(v)}`).join(' · ');
+  if (typeof name !== 'string') {
+    return Object.entries(record).slice(0, 2).map(([k, v]) => `${k}: ${String(v)}`).join(' · ');
+  }
+  if (record['consecutive_days'] !== undefined) return `${name} · ${String(record['consecutive_days'])} day(s) absent`;
+  if (record['balance_amount'] !== undefined) return `${name} · ₹${String(record['balance_amount'])} overdue by ${String(record['days_overdue'])} day(s)`;
+  return name;
 }
 
 // ---------------------------------------------------------------------------
@@ -607,7 +615,7 @@ function AgentBuilder({
                   <div className="agentField">
                     <label>Source</label>
                     <select value={fetchNode.data.source} disabled>
-                      <option value={fetchNode.data.source}>Students absent today</option>
+                      <option value={fetchNode.data.source}>{FETCH_SOURCES[fetchNode.data.source].label}</option>
                     </select>
                     <p className="agentHint">Runs on the read replica via the MCP server's tools — never a direct database connection (ADR-006).</p>
                   </div>
@@ -628,7 +636,11 @@ function AgentBuilder({
                     <div className="agentField">
                       <label>Field</label>
                       <select value={condition.data.field} onChange={(e) => { updateNode('condition', { field: e.target.value }); }}>
-                        <option value="consecutive_days">consecutive_days</option>
+                        {(fetchNode?.data.kind === 'fetch_records' ? FETCH_SOURCES[fetchNode.data.source].fields : [])
+                          .filter((f) => !NON_CONDITION_FIELDS.has(f))
+                          .map((f) => (
+                            <option key={f} value={f}>{f}</option>
+                          ))}
                       </select>
                     </div>
                     <div className="agentField">
@@ -730,7 +742,10 @@ function BranchPanel({
           value={data.template_preview}
           onChange={(e) => { onChange({ template_preview: e.target.value }); }}
         />
-        <p className="agentHint">Variables: {'{{student.name}}'} · {'{{student.class}}'} · {'{{parent.phone}}'} · {'{{days}}'}</p>
+        <p className="agentHint">
+          Variables: {'{{student.name}}'} · {'{{student.class}}'} · {'{{parent.phone}}'} · {'{{days}}'} ·{' '}
+          {'{{fee.balance_amount}}'} · {'{{fee.days_overdue}}'} — availability depends on this agent's data source.
+        </p>
         <p className="agentHint warn">
           Sends on approved templates only (ADR-024) — editing this text here changes the preview; the
           approved template library that gates real sending is a follow-up (docs/11 §2).

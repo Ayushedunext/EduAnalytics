@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq, gte, isNull } from 'drizzle-orm';
 import {
   AGENT_TEMPLATES,
+  FETCH_SOURCE_SQL,
   SEED_APPROVED_TEMPLATE_IDS,
   agentGraphSchema,
   findTemplate,
@@ -418,20 +419,10 @@ export async function testRunAgent(args: {
 
   const parsed = agentGraphSchema.safeParse(agent.draftGraphJson);
   const fetchNode = parsed.success ? parsed.data.nodes.find((n) => n.data.kind === 'fetch_records') : undefined;
-  if (fetchNode === undefined || fetchNode.data.kind !== 'fetch_records' || fetchNode.data.source !== 'students_absent_today') {
+  const sql = fetchNode?.data.kind === 'fetch_records' ? FETCH_SOURCE_SQL[fetchNode.data.source] : undefined;
+  if (sql === undefined) {
     return { matched_count: 0, sample: [], note: 'This data source cannot be test-run yet.' };
   }
-
-  const sql = `
-    SELECT s.studentid AS student_id, s.studentname AS student_name,
-           s.classname AS class, s.sectionname AS section
-      FROM (
-        SELECT DISTINCT studentid, studentname, classname, sectionname
-          FROM student_attendance_data_set
-         WHERE attendancedate = DATE_FORMAT(CURDATE(), '%Y-%m-%d')
-           AND statusname = 'Absent'
-      ) s
-  `.trim();
 
   const targetSchools = agent.schoolIds.filter((id) => args.session.school_ids.includes(id));
   if (targetSchools.length === 0) {

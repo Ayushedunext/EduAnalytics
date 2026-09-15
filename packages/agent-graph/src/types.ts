@@ -109,8 +109,16 @@ export const FETCH_SOURCES = {
   },
   fee_defaulters_30_60_90: {
     label: 'Fee defaulters (30/60/90 days)',
-    runnable: false,
-    fields: ['student_id', 'student_name', 'class', 'balance_amount', 'days_overdue', 'parent_phone'],
+    runnable: true,
+    /**
+     * Second runnable source (after `students_absent_today`), added 2026-09-15
+     * against the same real table the Fee Defaulters dashboard already reads
+     * (`fee_compile_data_set`, mcp-server/src/reports/catalog.ts's
+     * `FEE_DEFAULTERS`) — the evaluator's SQL mirrors that report's aging-band
+     * logic, aggregated per student rather than per band. `parent_phone` is
+     * null for the same reason as the absence source: docs/11 §2 item 10.
+     */
+    fields: ['student_id', 'student_name', 'class', 'section', 'balance_amount', 'days_overdue', 'parent_phone'],
   },
   attendance_below_threshold: {
     label: 'Attendance % dropped below threshold',

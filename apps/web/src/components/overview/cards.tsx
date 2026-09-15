@@ -870,8 +870,31 @@ function LatePayersTable({ table, palette }: { table: TableWidget; palette: Char
   );
 }
 
-export function InboxCard({ state }: { state: SlotState | undefined }): ReactElement {
+/** Types that stay readable in this card's narrow column — long school names truncate as horizontal-bar category labels once the column is this tight. */
+const RATIO_FORMS: readonly ChartType[] = ['bar', 'donut', 'pie', 'line'];
+
+/**
+ * Pending fees, with the Student-Staff Ratio preview folded in above the
+ * table (2026-09-14) -- the table on its own never filled this card's height
+ * (its sibling, `LatePayersCard`, has far more rows and sets the row's
+ * height), so the ratio chart now uses that space rather than getting a
+ * full-width row of its own further down the page.
+ *
+ * Each section owns its own heading, directly above its own content — the
+ * card has no single title of its own, because one title at the top over TWO
+ * unrelated sections read as a mislabel: "Pending fees" was appearing above
+ * the ratio chart, not above the pending-fees table it actually describes.
+ */
+export function InboxCard({ state, ratioState, onOpen }: { state: SlotState | undefined; ratioState?: SlotState | undefined; onOpen?: ((id: string) => void) | undefined }): ReactElement {
   const palette = usePalette();
+  /**
+   * Plain `useState`, not `useChartType`/`defaultChartTypeOf`: that default
+   * picks `hbar` for any label over 8 characters ("World School" is 12), which
+   * is exactly the truncation this card was built to avoid, and `hbar` is not
+   * even one of `RATIO_FORMS` below. Pie has no axis labels to truncate at all,
+   * which is why it is the pinned start state rather than bar or line.
+   */
+  const [ratioType, setRatioType] = useState<ChartType>('pie');
   const body = (
     <Slot state={state}>
       {(widgets) => {
@@ -882,21 +905,37 @@ export function InboxCard({ state }: { state: SlotState | undefined }): ReactEle
     </Slot>
   );
   return (
-    <Card
-      title="Pending fees"
-      sub="Top 10 students by balance"
-      tools={
-        <CardMenu
-          state={state}
-          slot="pending_top"
-          id="table-pending"
-          title="Pending fees"
-          reportId="fee-defaulters"
-          renderLarge={() => body}
-        />
-      }
-      notes={notesOf(state)}
-    >
+    <Card notes={notesOf(state)}>
+      {ratioState !== undefined && (
+        <div className="ratioMini">
+          <div className="ovHead">
+            <h3>Students per staff member</h3>
+            <div className="tools">
+              <ChartTypeSelect value={ratioType} onChange={setRatioType} options={RATIO_FORMS} />
+              {onOpen !== undefined && <ReportButton onClick={() => { onOpen('student-staff-ratio'); }} />}
+            </div>
+          </div>
+          <Slot state={ratioState}>
+            {(widgets) => <Chart widget={widgets.find((w) => (w as { id?: unknown }).id === 'bar-staff-ratio')} type={ratioType} slot={0} fill />}
+          </Slot>
+        </div>
+      )}
+      <div className="ovHead">
+        <div>
+          <h3>Pending fees</h3>
+          <div className="sub">Top 10 students by balance</div>
+        </div>
+        <div className="tools">
+          <CardMenu
+            state={state}
+            slot="pending_top"
+            id="table-pending"
+            title="Pending fees"
+            reportId="fee-defaulters"
+            renderLarge={() => body}
+          />
+        </div>
+      </div>
       {body}
     </Card>
   );

@@ -21,7 +21,6 @@ import {
   MonthlyCard,
   RingsCard,
   SparkCard,
-  StaffRatioCard,
   TeamCards,
   TilesCard,
   TopSchoolsCard,
@@ -93,13 +92,9 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
       <div className="row4" style={{ marginTop: 16 }}>
         <GaugeCards state={states['gauges']} />
       </div>
-      <h2 className="h2B">Staffing</h2>
-      <div className="row1">
-        <StaffRatioCard state={states['staff_ratio']} onOpen={onOpen} />
-      </div>
       <div className="row21">
         <LatePayersCard state={states['late_payers']} />
-        <InboxCard state={states['pending_top']} />
+        <InboxCard state={states['pending_top']} ratioState={states['staff_ratio']} onOpen={onOpen} />
       </div>
     </>
   );

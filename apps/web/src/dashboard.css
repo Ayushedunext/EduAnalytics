@@ -73,8 +73,9 @@
 .skin .row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .skin .row4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .skin .row21 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
-.skin .row1 { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px; }
-.skin .row1 .ovCard.fillChart .recharts-responsive-container { min-height: 220px; }
+.skin .ratioMini { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.skin .ratioMini .ovHead { margin-bottom: 8px; }
+.skin .ratioMini .recharts-responsive-container { min-height: 230px; }
 .skin .h2B { font-size: 15px; font-weight: 700; margin: 22px 0 12px; color: var(--ink); }
 .skin .rankingHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .skin .rankingHead .h2B { margin: 22px 0 12px; }

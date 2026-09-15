@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/shared" },
-    { "path": "./packages/chart-spec" }
+    { "path": "./packages/chart-spec" },
+    { "path": "./packages/agent-graph" }
   ]
 }

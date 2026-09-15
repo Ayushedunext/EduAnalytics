@@ -953,23 +953,6 @@ export function getAgentRuns(id: string): Promise<{ runs: AgentRunRow[] }> {
   return request<{ runs: AgentRunRow[] }>(`/api/agents/${encodeURIComponent(id)}/runs`);
 }
 
-export interface AgentRunStepRow {
-  id: number;
-  runId: string;
-  nodeId: string;
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
-  payloadIn: Record<string, unknown> | null;
-  payloadOut: Record<string, unknown> | null;
-  error: string | null;
-  ts: string;
-}
-
-export function getRunSteps(agentId: string, runId: string): Promise<{ steps: AgentRunStepRow[] }> {
-  return request<{ steps: AgentRunStepRow[] }>(
-    `/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/steps`,
-  );
-}
-
 /**
  * The PDF is fetched by the BROWSER following a link, not by this module.
  *

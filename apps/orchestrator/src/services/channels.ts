@@ -23,6 +23,7 @@
 
 import type { RowDataPacket } from 'mysql2';
 import { ERROR_CODES, PlatformError, type Role } from '@sap/shared';
+import { resolveChannel, type ChannelRowState } from '@sap/agent-graph';
 import { platformDb } from '../db/platform-db.js';
 import { auditSink } from '../db/audit.js';
 
@@ -110,15 +111,11 @@ export async function readChannels(orgId: string, scope: readonly { school_id: s
   const out: ChannelRow[] = [];
   for (const school of scope) {
     for (const channel of CHANNELS) {
-      const schoolRow = bySchoolKey.get(`${school.school_id}:${channel}`);
-      const orgRow = byOrgChannel.get(channel);
       const meta = CHANNEL_META[channel];
-
-      const resolved = schoolRow ?? orgRow;
-      const source: ChannelRow['source'] =
-        schoolRow !== undefined ? 'school' : orgRow !== undefined ? 'org' : 'none';
-      const provider = resolved?.['provider'];
-      const detail = resolved?.['detail'];
+      const effective = resolveChannel(
+        toChannelRowState(bySchoolKey.get(`${school.school_id}:${channel}`)),
+        toChannelRowState(byOrgChannel.get(channel)),
+      );
 
       out.push({
         school_id: school.school_id,
@@ -126,19 +123,25 @@ export async function readChannels(orgId: string, scope: readonly { school_id: s
         channel,
         title: meta.title,
         icon: meta.icon,
-        status: resolved?.['status'] === 'connected' ? 'connected' : 'not_connected',
-        detail:
-          detail !== null && detail !== undefined
-            ? String(detail)
-            : provider !== null && provider !== undefined
-              ? String(provider)
-              : null,
+        status: effective.status,
+        detail: effective.detail ?? effective.provider,
         requirement: meta.requirement,
-        source,
+        source: effective.source,
       });
     }
   }
   return out;
+}
+
+function toChannelRowState(row: RowDataPacket | undefined): ChannelRowState | undefined {
+  if (row === undefined) return undefined;
+  const provider = row['provider'];
+  const detail = row['detail'];
+  return {
+    status: row['status'] === 'connected' ? 'connected' : 'not_connected',
+    provider: provider === null || provider === undefined ? null : String(provider),
+    detail: detail === null || detail === undefined ? null : String(detail),
+  };
 }
 
 /** The set of channels connected (school override or org default) for one

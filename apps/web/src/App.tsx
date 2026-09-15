@@ -40,6 +40,7 @@ import { AskAI } from './components/AskAI';
 import { MyReports } from './components/MyReports';
 import { ModulePage, ModulesIndex } from './components/Modules';
 import { ReportEditor } from './components/ReportEditor';
+import { WorkflowAgents } from './components/WorkflowAgents';
 
 type State =
   | { kind: 'loading' }
@@ -123,6 +124,7 @@ export function App(): JSX.Element {
     /** Scheduled delivery — components/Schedule.tsx. */
     | { kind: 'schedule' }
     | { kind: 'ask'; seedQuestion?: string }
+    | { kind: 'agents' }
     | { kind: 'my-reports' }
     /** The Module Wise Analysis tiles, and one module opened. */
     | { kind: 'modules' }
@@ -445,9 +447,11 @@ export function App(): JSX.Element {
                   ? { kind: 'schedule' }
                   : id === 'ask'
                     ? { kind: 'ask' }
-                    : id === 'my-reports'
-                      ? { kind: 'my-reports' }
-                      : id === 'modules'
+                    : id === 'agents'
+                      ? { kind: 'agents' }
+                      : id === 'my-reports'
+                        ? { kind: 'my-reports' }
+                        : id === 'modules'
                         ? { kind: 'modules' }
                         : { kind: 'report', id },
           );
@@ -564,6 +568,8 @@ export function App(): JSX.Element {
               />
             );
           })()
+        ) : route.kind === 'agents' ? (
+          <WorkflowAgents session={state.session} schoolIds={selected} />
         ) : route.kind === 'my-reports' ? (
           <MyReports
             schoolIds={selected}

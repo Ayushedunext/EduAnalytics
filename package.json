@@ -16,7 +16,7 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --build --force && tsc -p apps/orchestrator && tsc -p apps/mcp-server && tsc -p apps/web && tsc -p tools/erp-stub",
+    "typecheck": "tsc --build --force && tsc -p apps/orchestrator && tsc -p apps/mcp-server && tsc -p apps/web && tsc -p apps/agent-runtime && tsc -p tools/erp-stub",
     "db:migrate": "node db/scripts/migrate.mjs",
     "db:reset": "node db/scripts/migrate.mjs --seed",
     "db:dump": "node db/scripts/dump.mjs",
@@ -27,7 +27,8 @@
     "api:dev": "npm run dev -w @sap/orchestrator",
     "mcp:dev": "npm run dev -w @sap/mcp-server",
     "mcp:probe": "npm run probe -w @sap/mcp-server",
-    "web:dev": "npm run dev -w @sap/web"
+    "web:dev": "npm run dev -w @sap/web",
+    "agents:dev": "npm run dev -w @sap/agent-runtime"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

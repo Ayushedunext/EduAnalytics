@@ -1,0 +1,26 @@
+{
+  "name": "@sap/agent-graph",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The workflow-agent graph contract (ADR-022): node/edge types, flow-lint validation, template gallery, and the Drizzle schema for the agent tables — shared by the builder UI, the orchestrator's agents service, and apps/agent-runtime so none of the three can drift apart.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./db-schema": {
+      "types": "./dist/db-schema.d.ts",
+      "default": "./dist/db-schema.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "zod": "^3.23.8",
+    "drizzle-orm": "^0.36.4"
+  }
+}

@@ -27,6 +27,7 @@ import { reportRouter } from './routes/report.js';
 import { customReportsRouter } from './routes/custom-reports.js';
 import { settingsRouter } from './routes/settings.js';
 import { aiRouter } from './routes/ai.js';
+import { agentsRouter } from './routes/agents.js';
 import { closePdfRenderer } from './services/pdf.js';
 import { closeCache } from './cache/result-cache.js';
 
@@ -110,6 +111,7 @@ app.use(reportRouter);
 app.use(customReportsRouter);
 app.use(settingsRouter);
 app.use(aiRouter);
+app.use(agentsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

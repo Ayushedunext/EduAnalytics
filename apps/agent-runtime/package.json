@@ -1,0 +1,24 @@
+{
+  "name": "@sap/agent-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Workflow Agents execution engine (ADR-022): scheduler, MCP-backed trigger evaluator, persisted-state-machine run orchestrator, action workers. Reaches school data only through MCP tools (ADR-006/023) and writes nothing but messages.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@sap/agent-graph": "*",
+    "@sap/shared": "*",
+    "bullmq": "^5.34.4",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.36.4",
+    "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
+    "mysql2": "^3.11.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {}
+}

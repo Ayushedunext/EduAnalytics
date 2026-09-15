@@ -82,7 +82,7 @@ settingsRouter.get('/api/settings', (req: Request, res: Response, next: NextFunc
         key_prefix: p.keyPrefix,
         models: p.models,
       })),
-      channels: await readChannels(scope),
+      channels: await readChannels(session.org_id, scope),
     });
   })().catch(next);
 });
@@ -216,7 +216,7 @@ settingsRouter.post(
         correlationId: req.correlationId,
       });
 
-      res.json({ channels: await readChannels(scope) });
+      res.json({ channels: await readChannels(session.org_id, scope) });
     })().catch(next);
   },
 );

@@ -42,6 +42,7 @@
 | ADR-031 | BYOK is multi-provider: Anthropic or Google Gemini, admin's choice | Accepted (amends ADR-017) |
 | ADR-032 | `report_definitions.school_scope` is intersected with the viewer's token scope at execution | Accepted |
 | ADR-033 | Saved AI reports re-run the persisted statement, never the model | Accepted |
+| ADR-034 | Channel ownership: trust-level default, per-school override | Accepted (amends ADR-024) |
 
 ---
 
@@ -444,6 +445,24 @@ Separately, the Redis result cache is the only store where row-level PII leaves 
 **Future impact.** "✎ Refine with AI" is additive: a new `ai_status`-gated endpoint that re-invokes the model seeded with the current definition and, on success, calls the same `updateReportSql`-style save path already built — no change to the re-run/view path this ADR fixes.
 
 **Status.** Accepted. Updates docs/06 §1 (Re-run semantics stated explicitly) and docs/10 §2 (My Reports' Re-run affordance). Implemented in `services/custom-reports.ts`; "✎ Refine with AI" remains unbuilt and tracked in docs/11.
+
+---
+
+## ADR-034 — Channel ownership: trust-level default, per-school override
+
+**Context.** ADR-024 fixed messaging-channel configuration as school-level v1, with docs/07 §4 flagging trust-level provider accounts as the anticipated evolution (assumption A7) — then going further to note A7 "may be a prerequisite rather than an evolution": DLT and WABA onboarding at 1,500-school scale is a per-school operations programme (its own entity registration, business verification and template-approval lead time), not a configuration step, and school-level-only would mean starting that programme 1,500 times before any agent can send a message anywhere. Workflow Agents (ADR-022/023) is the first feature that actually depends on a channel existing, which forces the question ADR-024 deferred.
+
+**Decision.** A channel's effective configuration resolves from two tables: `org_channels` (one row per org+channel — the trust-level default) and `school_channels` (unchanged shape from ADR-024 — a school-level row that, when present, overrides the org default for that one school). Resolution order, computed by one function (`effectiveChannel`, mirroring the determinism discipline ADR-028 required of `permission_class`): a `school_channels` row wins when present; otherwise the `org_channels` default applies; a school with neither is not connected. Both tables keep ADR-024's no-credentials-here posture — state only (status/provider/detail), never a secret. Publish-time and send-time checks always read the *resolved* channel, never the org default in isolation, so a school that has explicitly overridden or disconnected its own channel is never silently routed through the trust account.
+
+**Reasoning.** A trust-level BSP/DLT/SMTP relationship is the one mechanism that makes onboarding tractable for a trust's schools from day one — one DLT entity and one WABA account can back every school in the trust immediately, deferring per-school registration to schools that actually need their own sender identity (a large school with its own brand reputation to protect, say). This is the same shape as ADR-013's tenant-registry-plus-per-school-secrets model: a shared default with a named override path, not a forced choice between them.
+
+**Alternatives considered.** (a) Keep school-level-only (ADR-024 as originally written) — rejected: makes per-school provisioning a precondition of Workflow Agents GA rather than a parallel-track improvement, which is exactly the risk A7 flagged. (b) Trust-level only, no school override — rejected: a school with its own existing DLT/WABA registration would be forced onto the shared trust sender, discarding a real asset and, for SMS specifically, potentially violating the school's own registered-sender obligations.
+
+**Trade-offs.** Two tables instead of one, and the resolution function is now load-bearing — every message-send and publish-time check must call it rather than reading either table directly, or a school-level override could be silently ignored. The Settings screen must show *which level* a school's active channel resolved from, so an admin isn't left guessing whether "Connected" means the trust's account or their own.
+
+**Future impact.** The Template Manager (docs/07 §4) inherits this shape unchanged: a trust-level provider account implies a trust-level approved-template library by default, with the same override point for a school running its own account. A third ownership level (e.g., a regional grouping) would be a third resolution step in the same function, not a new mechanism.
+
+**Status.** Accepted. Amends ADR-024's school-level-v1 clause (everything else in ADR-024 — approved-template-only sending, connection-gated publish, per-school disconnect flagging dependent agents — stands unchanged). Updates docs/07 §4 and resolves docs/11 assumption A7 and open decision §4 item 2.
 
 ---
 

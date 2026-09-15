@@ -58,11 +58,11 @@ run_log / run_steps / message_log  (per-node input/output/status)
 
 Storage (platform DB, never school DBs): `agents(id, school_or_org_id, name, status, version, graph_json, schedule, stats)` · `agent_runs(run_id, agent_id, record_ref, status, started, finished)` · `run_steps(run_id, node_id, status, payload_in, payload_out, ts)` · `message_log(…)`.
 
-## 4. Channels — configured by the school, selected per message node
+## 4. Channels — trust-level default, per-school override, selected per message node
 
-**Ownership decision:** messaging providers belong to the school/org, configured once in Settings › Messaging Channels: **Email (SMTP)**, **SMS (DLT provider + registered Sender ID)**, **WhatsApp Business (BSP, e.g. Gupshup/Twilio/Meta Cloud API)** — each with a Connected/Not-connected status.
+**Ownership decision (ADR-034, amending ADR-024's school-level-v1 clause):** a channel's effective configuration resolves from a **trust-level default** (`org_channels` — one BSP/DLT/SMTP relationship covering every school in the org) optionally **overridden per school** (`school_channels` — unchanged from ADR-024's original shape). Resolution is one deterministic function: a school's own row wins when present, otherwise the org default applies, otherwise the channel is not connected. Configured once in Settings › Messaging Channels: **Email (SMTP)**, **SMS (DLT provider + registered Sender ID)**, **WhatsApp Business (BSP, e.g. Gupshup/Twilio/Meta Cloud API)** — each showing a Connected/Not-connected status **and which level it resolved from** (trust default vs this school's own override), never credentials.
 
-**Per-node channel selection:** every message action node presents checkboxes of the school's channels; the first checked is **PRIMARY**; a **fallback channel** dropdown handles delivery failure (e.g., WhatsApp failed → SMS). **Only connected channels are selectable**; publishing an agent that references a disconnected channel is refused; a later disconnect flags dependent agents until reconnected or edited.
+**Per-node channel selection:** every message action node presents checkboxes of the *school's effective* channels (post-resolution); the first checked is **PRIMARY**; a **fallback channel** dropdown handles delivery failure (e.g., WhatsApp failed → SMS). **Only connected (effective) channels are selectable**; publishing an agent that references a disconnected channel is refused; a later disconnect — at either level — flags dependent agents until reconnected or edited.
 
 **India compliance is a first-class constraint:** SMS requires DLT-registered sender + approved templates; WhatsApp requires BSP/WABA-approved templates. Hence the **Template Manager** (create → submit → approved library); message nodes reference approved templates only — free text cannot be sent on those channels. Template variable slots map to node variables. *Open item:* BSP/SMS provider choice gates approval timelines more than any code (doc 11).
 

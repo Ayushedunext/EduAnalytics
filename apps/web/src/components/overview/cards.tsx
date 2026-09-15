@@ -895,6 +895,7 @@ export function InboxCard({ state, ratioState, onOpen }: { state: SlotState | un
    * which is why it is the pinned start state rather than bar or line.
    */
   const [ratioType, setRatioType] = useState<ChartType>('pie');
+  const ratioWidget = ratioState?.kind === 'ready' ? ratioState.slot.widgets.find((w) => (w as { id?: unknown }).id === 'bar-staff-ratio') : undefined;
   const body = (
     <Slot state={state}>
       {(widgets) => {
@@ -913,6 +914,16 @@ export function InboxCard({ state, ratioState, onOpen }: { state: SlotState | un
             <div className="tools">
               <ChartTypeSelect value={ratioType} onChange={setRatioType} options={RATIO_FORMS} />
               {onOpen !== undefined && <ReportButton onClick={() => { onOpen('student-staff-ratio'); }} />}
+              <CardMenu
+                state={ratioState}
+                slot="staff_ratio"
+                id="bar-staff-ratio"
+                title="Students per staff member"
+                reportId="student-staff-ratio"
+                widget={ratioWidget}
+                chartType={ratioType}
+                chartSlot={0}
+              />
             </div>
           </div>
           <Slot state={ratioState}>

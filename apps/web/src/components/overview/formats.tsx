@@ -54,8 +54,8 @@ export function FormatA({ states, year, asOf, onOpen }: FormatProps): ReactEleme
         <MonthlyCard state={states['monthly']} onOpen={onOpen} />
         <AdmissionsCard state={states['admissions_by_school']} onOpen={onOpen} />
       </div>
-      <SparkCard state={states['weekly_receipts']} kpiId="kpi-week-receipts" lineId="line-week-receipts" className="slotSpark" slot={1} title="Weekly receipts" slotKey="weekly_receipts" reportId="fee-collection" />
-      <SparkCard state={states['weekly_attendance']} kpiId="kpi-week-attendance" lineId="line-week-attendance" className="slotSpark" slot={2} title="Weekly attendance" slotKey="weekly_attendance" reportId="attendance-analytics" />
+      <SparkCard state={states['weekly_receipts']} kpiId="kpi-week-receipts" lineId="line-week-receipts" className="slotSpark" slot={1} title="Weekly receipts" slotKey="weekly_receipts" reportId="fee-collection" verifiedReportWidget />
+      <SparkCard state={states['weekly_attendance']} kpiId="kpi-week-attendance" lineId="line-week-attendance" className="slotSpark" slot={2} title="Weekly attendance" slotKey="weekly_attendance" reportId="attendance-analytics" verifiedReportWidget />
       <TopSchoolsCard state={states['top_schools']} onOpen={onOpen} />
       <FeeHeadsCard state={states['fee_heads']} />
     </div>
@@ -72,9 +72,9 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
   return (
     <>
       <div className="row3">
-        <BigChartCard state={states['years']} widgetId="line-years" title="Billed and collected, year by year" slot={0} onOpen={onOpen} reportId="trend-analysis" slotKey="years" />
-        <BigChartCard state={states['students_by_year']} widgetId="bar-years" title="Students enrolled, year by year" slot={2} onOpen={onOpen} reportId="trend-analysis" slotKey="students_by_year" />
-        <BigChartCard state={states['att_status']} widgetId="donut-status" title="Attendance recorded" slot={0} onOpen={onOpen} reportId="attendance-analytics" slotKey="att_status" />
+        <BigChartCard state={states['years']} widgetId="line-years" title="Billed and collected, year by year" slot={0} onOpen={onOpen} reportId="trend-analysis" slotKey="years" verifiedReportWidget />
+        <BigChartCard state={states['students_by_year']} widgetId="bar-years" title="Students enrolled, year by year" slot={2} onOpen={onOpen} reportId="trend-analysis" slotKey="students_by_year" verifiedReportWidget />
+        <BigChartCard state={states['att_status']} widgetId="donut-status" title="Attendance recorded" slot={0} onOpen={onOpen} reportId="attendance-analytics" slotKey="att_status" verifiedReportWidget />
       </div>
       <div className="rankingHead">
         <h2 className="h2B">{ranking === 'lowest' ? 'Lowest attendance' : 'Highest attendance'}</h2>

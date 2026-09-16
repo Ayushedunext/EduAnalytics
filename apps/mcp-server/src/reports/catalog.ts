@@ -426,6 +426,63 @@ const FEE_COLLECTION: PredefinedReport = {
         'GROUP BY componentname ORDER BY payable DESC',
     },
     /**
+     * The Dashboard's own "Weekly receipts" sparkline (ADR-018/ADR-021 addenda,
+     * 2026-09-16) — a verbatim copy of DASHBOARD_OVERVIEW's `receipts_by_week`
+     * above, so Home's card and this report's widget are the same statement.
+     */
+    {
+      key: 'receipts_by_week',
+      description: 'Receipts by ISO week',
+      sql:
+        "SELECT DATE_FORMAT(feedate, '%x-W%v') AS week, MIN(YEARWEEK(feedate, 3)) AS seq, " +
+        'ROUND(SUM(paidamount)) AS received ' +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+        "GROUP BY DATE_FORMAT(feedate, '%x-W%v') ORDER BY seq",
+    },
+    /**
+     * The Dashboard's own "Fee position" donut and "Fee activity by month"
+     * sparklines (ADR-018/ADR-021 addenda, 2026-09-16) — verbatim copies of
+     * DASHBOARD_OVERVIEW's `heads`, `heads_by_month` and `pending_by_month`
+     * above. `heads` names late fee and transport fee within the year's
+     * receipts; `by_component` above already gives this report its
+     * payable/paid/balance totals (the same `fee_compile_data_set` scan,
+     * summed across components instead of grouped by them), so the donut
+     * needs only this one new statement, not a second copy of `fees`.
+     *
+     * The transport-head spelling list is DASHBOARD_OVERVIEW's own
+     * `TRANSPORT_HEADS`, declared further down this file where that report's
+     * comment on it (2026-09-04) lives — copied rather than hoisted so that
+     * comment stays beside the report it documents.
+     */
+    {
+      key: 'heads',
+      description: 'Receipts for the year, and how much of them was late fee and transport fee',
+      sql:
+        'SELECT ROUND(SUM(paidamount)) AS received, ' +
+        "ROUND(SUM(CASE WHEN componentname = 'Late Fee' THEN paidamount ELSE 0 END)) AS late_fee, " +
+        "ROUND(SUM(CASE WHEN componentname IN ('Transport Fee', 'Transport Fees', 'Bus Fee', 'TPT1 FEE', 'TPT2 FEE', 'TPT3 FEE', 'TR.C') THEN paidamount ELSE 0 END)) AS transport " +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year',
+    },
+    {
+      key: 'heads_by_month',
+      description: 'Receipts by month, with the late fee and transport fee within them',
+      sql:
+        'SELECT fee_month, MIN(MONTH(feedate)) AS mo, ROUND(SUM(paidamount)) AS received, ' +
+        "ROUND(SUM(CASE WHEN componentname = 'Late Fee' THEN paidamount ELSE 0 END)) AS late_fee, " +
+        "ROUND(SUM(CASE WHEN componentname IN ('Transport Fee', 'Transport Fees', 'Bus Fee', 'TPT1 FEE', 'TPT2 FEE', 'TPT3 FEE', 'TR.C') THEN paidamount ELSE 0 END)) AS transport " +
+        'FROM fee_collection_data_set WHERE academicyearname = :academic_year ' +
+        'GROUP BY fee_month ORDER BY mo',
+    },
+    {
+      key: 'pending_by_month',
+      description: 'Balance still owed, by the month the fee was demanded for',
+      sql:
+        "SELECT DATE_FORMAT(periodfromdate, '%Y-%m') AS ym, ROUND(SUM(balance_amount)) AS pending " +
+        'FROM fee_compile_data_set WHERE academicyearname = :academic_year ' +
+        'AND periodfromdate IS NOT NULL AND balance_amount > 0 ' +
+        "GROUP BY DATE_FORMAT(periodfromdate, '%Y-%m') ORDER BY ym",
+    },
+    /**
      * Drill level 2 — demand, collection and pending by academic quarter, for
      * whichever school the reader clicked at level 1.
      *
@@ -891,6 +948,51 @@ const FEE_DEFAULTERS: PredefinedReport = {
         'AND periodtodate < :as_of_date ' +
         'GROUP BY enrollmentno, studentname, classname, sectionname ' +
         'ORDER BY outstanding DESC LIMIT 50',
+    },
+    /**
+     * The Dashboard's own three widgets, moved onto this report so they can be
+     * cloned and printed from Home (ADR-018/ADR-021 addenda, 2026-09-16) —
+     * verbatim copies of DASHBOARD_OVERVIEW's `late_payers`, `pending_students`
+     * and `late_by_week` above, not new readings. `pending_students` differs
+     * from `top_defaulters` above on purpose: that query is OVERDUE balances
+     * only (`periodtodate < :as_of_date`), the number this report's own KPIs
+     * and drill are built on, while this one is EVERY pending balance — what a
+     * bursar mailing every family with money still owed needs, overdue or not.
+     */
+    {
+      key: 'late_payers',
+      description: 'Students with two or more receipts paid after the instalment ended',
+      sql:
+        'SELECT studentname, enrollmentno, classname, sectionname, COUNT(*) AS receipts, ' +
+        'SUM(CASE WHEN feedate > installment_enddate THEN 1 ELSE 0 END) AS late_payments ' +
+        'FROM fee_collection_data_set ' +
+        'WHERE academicyearname = :academic_year AND installment_enddate IS NOT NULL ' +
+        'GROUP BY enrollmentno, studentname, classname, sectionname ' +
+        'HAVING SUM(CASE WHEN feedate > installment_enddate THEN 1 ELSE 0 END) >= 2 ' +
+        'ORDER BY late_payments DESC LIMIT 50',
+    },
+    {
+      key: 'pending_students',
+      description: 'Students carrying a balance, largest first, with how much of it is overdue',
+      sql:
+        'SELECT studentname, enrollmentno, classname, sectionname, ' +
+        'ROUND(SUM(balance_amount)) AS balance, ' +
+        'ROUND(SUM(CASE WHEN periodtodate < :as_of_date THEN balance_amount ELSE 0 END)) AS overdue ' +
+        'FROM fee_compile_data_set ' +
+        'WHERE academicyearname = :academic_year AND balance_amount > 0 ' +
+        'GROUP BY enrollmentno, studentname, classname, sectionname ' +
+        'ORDER BY balance DESC LIMIT 50',
+    },
+    {
+      key: 'late_by_week',
+      description: 'Students who paid late, by the ISO week the late receipt was taken',
+      sql:
+        "SELECT DATE_FORMAT(feedate, '%x-W%v') AS week, MIN(YEARWEEK(feedate, 3)) AS seq, " +
+        'COUNT(DISTINCT enrollmentno) AS students ' +
+        'FROM fee_collection_data_set ' +
+        'WHERE academicyearname = :academic_year AND installment_enddate IS NOT NULL ' +
+        'AND feedate > installment_enddate ' +
+        "GROUP BY DATE_FORMAT(feedate, '%x-W%v') ORDER BY seq",
     },
     /**
      * Drill level 2 — how many students carry overdue fees, by academic quarter,
@@ -1494,6 +1596,21 @@ const ATTENDANCE_ANALYTICS: PredefinedReport = {
         'SELECT a.statusname, COUNT(*) AS days FROM ' +
         STUDENT_DAYS +
         ' GROUP BY a.statusname ORDER BY days DESC',
+    },
+    /**
+     * The Dashboard's own "Weekly attendance" sparkline (ADR-018/ADR-021
+     * addenda, 2026-09-16) — a verbatim copy of DASHBOARD_OVERVIEW's
+     * `att_by_week` above, so Home's card and this report's widget are the
+     * same statement.
+     */
+    {
+      key: 'att_by_week',
+      description: 'Marked and present student-days by ISO week',
+      sql:
+        "SELECT DATE_FORMAT(a.attendancedate, '%x-W%v') AS week, MIN(YEARWEEK(a.attendancedate, 3)) AS seq, " +
+        "COUNT(*) AS marked_days, SUM(CASE WHEN a.statusname = 'Present' THEN 1 ELSE 0 END) AS present_days" +
+        ' FROM ' + STUDENT_DAYS +
+        " GROUP BY DATE_FORMAT(a.attendancedate, '%x-W%v') ORDER BY seq",
     },
     {
       /**
@@ -2612,6 +2729,37 @@ const TREND_ANALYSIS: PredefinedReport = {
         `WHERE feedate IS NOT NULL AND feedate >= ${DATE_FLOOR} AND feedate <= :as_of_date ` +
         `AND (:drill_year IS NULL OR ${RECEIPT_AY_START} = :drill_year) ` +
         'GROUP BY month ORDER BY seq',
+    },
+    /**
+     * The Dashboard's own "Billed and collected, year by year" and "Students
+     * enrolled, year by year" (ADR-018/ADR-021 addenda, 2026-09-16) — verbatim
+     * copies of DASHBOARD_OVERVIEW's `collected_by_year`, `billed_by_year` and
+     * `students_by_year` above, grouped on the ERP's own stamped
+     * `academicyearname` rather than this report's own `feedate`-derived year
+     * (the reason `collection_by_month` above gives for not using that column).
+     * Kept as its own reading rather than re-derived from `collection_by_month`
+     * so Home's card and this report's widget stay the same statement.
+     */
+    {
+      key: 'collected_by_year',
+      description: 'Receipts by academic year, over all recorded history',
+      sql:
+        'SELECT academicyearname AS ay, ROUND(SUM(paidamount)) AS collected ' +
+        'FROM fee_collection_data_set GROUP BY ay ORDER BY ay',
+    },
+    {
+      key: 'billed_by_year',
+      description: 'Demand raised by academic year, over all recorded history',
+      sql:
+        'SELECT academicyearname AS ay, ROUND(SUM(total_payable_amount)) AS payable ' +
+        'FROM fee_compile_data_set GROUP BY ay ORDER BY ay',
+    },
+    {
+      key: 'students_by_year',
+      description: 'Students on roll by academic year, over all recorded history',
+      sql:
+        'SELECT academicyearname AS ay, COUNT(DISTINCT studentid) AS students ' +
+        'FROM students_data_set GROUP BY ay ORDER BY ay',
     },
   ],
 };

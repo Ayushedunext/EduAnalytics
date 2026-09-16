@@ -95,13 +95,31 @@ export interface CloneTarget {
 }
 
 /**
+ * One real, individually addressable widget behind a composite Dashboard
+ * card — the concentric rings, the Data Graphic's pair of gauges. Each part
+ * is checked, statement for statement, against its own report the same way
+ * `verifiedReportWidget` is for a single-widget card (overview/cards.tsx);
+ * there is no "the whole composite" to fall back to, because no single
+ * report holds all of it — a card can mix a fee report's realisation with an
+ * attendance report's rate with a staff report's rate, three reports that
+ * share nothing but this card.
+ */
+export interface ChartPart {
+  /** What the picker calls this piece — the ring's own label, not the card's. */
+  readonly label: string;
+  readonly reportId: string;
+  readonly widgetId: string;
+}
+
+/**
  * One chart's logic, as the SERVER stated it (Invariant 6).
  *
  * Assembled by the caller out of the response it already holds — a report's
  * `logic`, or a Dashboard slot's `queries` and `notes` — never re-derived here.
- * `activeQueryKey` marks the statement that feeds this particular widget where
- * the screen knows which one it is; where it does not, every statement behind
- * the panel is listed, which is the honest answer rather than a guess.
+ * `activeQueryKeys` marks the statement(s) that feed this particular widget
+ * where the screen knows which they are — one for most panels, several for one
+ * that folds multiple result sets together; where it does not, every statement
+ * behind the panel is listed, which is the honest answer rather than a guess.
  */
 export interface ChartLogic {
   readonly source?: string | undefined;
@@ -113,7 +131,7 @@ export interface ChartLogic {
   readonly asOf?: string | undefined;
   readonly notes: readonly string[];
   readonly queries: readonly { key: string; description: string; sql: string }[];
-  readonly activeQueryKey?: string | undefined;
+  readonly activeQueryKeys?: readonly string[] | undefined;
 }
 
 interface Props {
@@ -160,9 +178,18 @@ interface Props {
    * card's own body and My View remembers the card, so neither needs the list.
    */
   readonly insightParts?: readonly { slot: string; widgetId: string }[] | undefined;
+  /**
+   * For a composite card with no single widget of its own (`clone`/`source`
+   * both stay whatever the caller already set for a whole-report fallback):
+   * the real, individually cloneable and printable widgets it draws. Present
+   * and non-empty means Clone and Print each open a picker over these parts
+   * instead of their usual this-chart/whole-report choice — there being no
+   * "whole report" when the parts span more than one.
+   */
+  readonly parts?: readonly ChartPart[] | undefined;
 }
 
-type Dialog = null | 'clone' | 'enlarge' | 'logic' | 'insights';
+type Dialog = null | 'clone' | 'enlarge' | 'logic' | 'insights' | 'print';
 
 /**
  * The chart's identity as `/api/ai/insights` names it (api/client.ts).
@@ -228,6 +255,7 @@ export function ChartMenu({
   logicReason,
   compareYear,
   insightParts,
+  parts,
 }: Props): JSX.Element {
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -268,7 +296,8 @@ export function ChartMenu({
     };
   }, [open]);
 
-  const canClone = clone !== undefined && env.academicYear !== null;
+  const hasParts = parts !== undefined && parts.length > 0;
+  const canClone = hasParts ? env.academicYear !== null : clone !== undefined && env.academicYear !== null;
   const canEnlarge = widget !== undefined || renderLarge !== undefined;
   const shownLogic = logic ?? fetched;
   const canShowLogic = logic !== undefined || logicLoader !== undefined;
@@ -279,6 +308,7 @@ export function ChartMenu({
   }, []);
 
   const printUrl = printUrlOf(source, env.schoolIds, env.academicYear, compareYear);
+  const canPrint = hasParts ? env.academicYear !== null : printUrl !== undefined;
 
   const loadInsight = (): void => {
     if (env.academicYear === null) {
@@ -342,15 +372,17 @@ export function ChartMenu({
             icon="⧉"
             label="Clone and customise"
             hint={
-              clone?.widgetId === undefined
-                ? 'Copies the whole report into My Reports, editable'
-                : 'Copies this chart — or its whole report — into My Reports'
+              hasParts
+                ? 'Copies one of this card’s charts into My Reports, editable'
+                : clone?.widgetId === undefined
+                  ? 'Copies the whole report into My Reports, editable'
+                  : 'Copies this chart — or its whole report — into My Reports'
             }
             disabled={!canClone}
             disabledReason={
-              clone === undefined
-                ? cloneReason ?? 'This chart is not part of a report that can be cloned.'
-                : 'The academic year is still loading.'
+              hasParts || clone !== undefined
+                ? 'The academic year is still loading.'
+                : cloneReason ?? 'This chart is not part of a report that can be cloned.'
             }
             onClick={() => { run('clone'); }}
           />
@@ -392,18 +424,29 @@ export function ChartMenu({
               }
             }}
           />
-          <MenuLinkItem
-            icon="⬇"
-            label="Print"
-            hint="Download this chart on its own, as a branded PDF"
-            href={printUrl}
-            disabledReason={
-              source.kind !== 'report'
-                ? 'This card is on your Home board, not a report panel — open its report to print this chart.'
-                : 'The academic year is still loading.'
-            }
-            onOpen={() => { setOpen(false); }}
-          />
+          {hasParts ? (
+            <MenuItem
+              icon="⬇"
+              label="Print"
+              hint="Download one of this card’s charts as a branded PDF"
+              disabled={!canPrint}
+              disabledReason="The academic year is still loading."
+              onClick={() => { run('print'); }}
+            />
+          ) : (
+            <MenuLinkItem
+              icon="⬇"
+              label="Print"
+              hint="Download this chart on its own, as a branded PDF"
+              href={printUrl}
+              disabledReason={
+                source.kind !== 'report'
+                  ? 'This card is on your Home board, not a report panel — open its report to print this chart.'
+                  : 'The academic year is still loading.'
+              }
+              onOpen={() => { setOpen(false); }}
+            />
+          )}
         </div>
       )}
 
@@ -454,7 +497,22 @@ export function ChartMenu({
         </Modal>
       )}
 
-      {dialog === 'clone' && clone !== undefined && env.academicYear !== null && (
+      {dialog === 'clone' && hasParts && env.academicYear !== null && (
+        <Modal title={`Clone — ${title}`} onClose={() => { setDialog(null); }}>
+          <CompositeCloneForm
+            parts={parts as readonly ChartPart[]}
+            academicYear={env.academicYear}
+            schoolIds={env.schoolIds}
+            onCancel={() => { setDialog(null); }}
+            onCloned={(id) => {
+              setDialog(null);
+              env.onCloned(id);
+            }}
+          />
+        </Modal>
+      )}
+
+      {dialog === 'clone' && !hasParts && clone !== undefined && env.academicYear !== null && (
         <Modal title={`Clone — ${title}`} onClose={() => { setDialog(null); }}>
           <CloneForm
             title={title}
@@ -466,6 +524,18 @@ export function ChartMenu({
               setDialog(null);
               env.onCloned(id);
             }}
+          />
+        </Modal>
+      )}
+
+      {dialog === 'print' && hasParts && env.academicYear !== null && (
+        <Modal title={`Print — ${title}`} onClose={() => { setDialog(null); }}>
+          <CompositePrintBody
+            parts={parts as readonly ChartPart[]}
+            schoolIds={env.schoolIds}
+            academicYear={env.academicYear}
+            compareYear={compareYear}
+            onOpen={() => { setDialog(null); }}
           />
         </Modal>
       )}
@@ -750,17 +820,150 @@ function ChartLogicBody({ logic, fallbackScope }: { logic: ChartLogic; fallbackS
         logic.queries.map((query) => (
           <div
             key={query.key}
-            className={`logicQuery${query.key === logic.activeQueryKey ? ' logicQuery--active' : ''}`}
+            className={`logicQuery${logic.activeQueryKeys?.includes(query.key) === true ? ' logicQuery--active' : ''}`}
           >
             <div className="logicQueryTitle">
               {query.key} — {query.description}
-              {query.key === logic.activeQueryKey && <span className="logicQueryFlag">this chart</span>}
+              {logic.activeQueryKeys?.includes(query.key) === true && <span className="logicQueryFlag">this chart</span>}
             </div>
             {/* Rendered as text, never as markup (§4). */}
             <pre className="logicSql">{query.sql}</pre>
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+/**
+ * Clone, for a composite card: pick which real widget to copy, out of the
+ * `parts` its constituent reports each verified — no "whole report" choice,
+ * since no single report holds the whole card. Otherwise the same request
+ * `CloneForm` below makes, to the same endpoint, with the same server-side
+ * validation against `WIDGET_QUERY_KEYS`.
+ */
+function CompositeCloneForm({
+  parts,
+  academicYear,
+  schoolIds,
+  onCancel,
+  onCloned,
+}: {
+  parts: readonly ChartPart[];
+  academicYear: string;
+  schoolIds: readonly string[];
+  onCancel: () => void;
+  onCloned: (id: string) => void;
+}): JSX.Element {
+  const [chosen, setChosen] = useState(0);
+  const part = parts[chosen] ?? parts[0];
+  const [name, setName] = useState(`${part?.label ?? ''} (copy)`);
+  const [named, setNamed] = useState(false);
+  const [year, setYear] = useState(academicYear);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="cloneForm">
+      <div className="cloneWhat" role="group" aria-label="Which chart to copy">
+        {parts.map((p, i) => (
+          <button
+            key={p.widgetId}
+            type="button"
+            className={i === chosen ? 'on' : ''}
+            aria-pressed={i === chosen}
+            onClick={() => {
+              setChosen(i);
+              if (!named) setName(`${p.label} (copy)`);
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="chartModalHint">Saves just “{part?.label ?? ''}” to My Reports, editable on its own.</p>
+
+      {error !== null && <div className="widgetClonePopoverError">{error}</div>}
+
+      <label className="widgetCloneField">
+        Name
+        <input value={name} onChange={(e) => { setName(e.target.value); setNamed(true); }} />
+      </label>
+
+      <label className="widgetCloneField">
+        Academic year
+        <input value={year} onChange={(e) => { setYear(e.target.value); }} placeholder="2026-27" />
+      </label>
+
+      <div className="widgetClonePopoverActions">
+        <button type="button" className="chipbtn" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button
+          type="button"
+          className="chipbtn chipbtn--ai"
+          disabled={saving || part === undefined || name.trim() === '' || year.trim() === ''}
+          onClick={() => {
+            if (part === undefined) return;
+            setSaving(true);
+            setError(null);
+            cloneReport({
+              base_report_id: part.reportId,
+              name: name.trim(),
+              academic_year: year.trim(),
+              school_ids: schoolIds,
+              widget_id: part.widgetId,
+            })
+              .then((cloned) => { onCloned(cloned.id); })
+              .catch((err: unknown) => {
+                setError(err instanceof ApiFailure ? err.message : 'Could not clone this chart.');
+              })
+              .finally(() => { setSaving(false); });
+          }}
+        >
+          {saving ? 'Cloning…' : 'Clone'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Print, for a composite card: a link per part rather than the usual single
+ * download, for the same reason Clone gets a picker instead of a binary
+ * choice — reusing `reportPdfUrl` per part, the identical per-widget PDF
+ * route every other Print item downloads from.
+ */
+function CompositePrintBody({
+  parts,
+  schoolIds,
+  academicYear,
+  compareYear,
+  onOpen,
+}: {
+  parts: readonly ChartPart[];
+  schoolIds: readonly string[];
+  academicYear: string;
+  compareYear?: string | undefined;
+  onOpen: () => void;
+}): JSX.Element {
+  return (
+    <div className="cloneForm">
+      <p className="chartModalHint">Each of this card’s charts downloads on its own, branded like every other report PDF.</p>
+      {parts.map((p) => (
+        <a
+          key={p.widgetId}
+          role="menuitem"
+          className="chartMenuItem"
+          href={reportPdfUrl(p.reportId, schoolIds, academicYear, { widgetId: p.widgetId, compareYear })}
+          onClick={onOpen}
+        >
+          <span className="chartMenuIc" aria-hidden="true">⬇</span>
+          <span className="chartMenuText">
+            <b>{p.label}</b>
+            <small>Download as a branded PDF</small>
+          </span>
+        </a>
+      ))}
     </div>
   );
 }

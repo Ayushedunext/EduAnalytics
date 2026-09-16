@@ -34,7 +34,8 @@ export interface ReportLike {
  * a reader everything behind it.
  */
 export function reportChartLogic(report: ReportLike, reportId: string | null, widgetId: string): ChartLogic {
-  const active = reportId === null ? undefined : WIDGET_QUERY_KEYS[reportId]?.[widgetId];
+  const entry = reportId === null ? undefined : WIDGET_QUERY_KEYS[reportId]?.[widgetId];
+  const active = entry === undefined ? undefined : typeof entry === 'string' ? [entry] : entry;
   return {
     source: report.logic.source,
     scope: report.logic.scope.map((s) => s.school_name),
@@ -44,7 +45,7 @@ export function reportChartLogic(report: ReportLike, reportId: string | null, wi
     servedFrom: report.spec.meta.served_from,
     notes: report.logic.notes,
     queries: report.logic.queries,
-    ...(active === undefined ? {} : { activeQueryKey: active }),
+    ...(active === undefined ? {} : { activeQueryKeys: active }),
   };
 }
 

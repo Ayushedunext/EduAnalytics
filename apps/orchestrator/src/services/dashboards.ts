@@ -331,8 +331,15 @@ export function resolveReportParams(
  *
  * A widget id absent from its report's map cannot be cloned on its own —
  * `services/custom-reports.ts` refuses the request rather than guessing.
+ *
+ * A value is either the one query key a widget reads alone, or (2026-09-16)
+ * an array where it reads several together — `run_predefined`'s `query_keys`
+ * already accepts either shape (apps/mcp-server's `run_predefined` schema),
+ * so a multi-query panel clones exactly as completely as it renders on the
+ * base page, rather than being confined to whole-report clone by a table that
+ * could only name one statement.
  */
-export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<string, string>>>> = {
+export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<string, string | readonly string[]>>>> = {
   /**
    * The four widgets that ONE query answers on its own — all four of them the
    * receipt ledger's, because `collection_by_month` is deliberately scanned once
@@ -353,6 +360,14 @@ export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<stri
     'line-seasonality': 'collection_by_month',
     'bar-mode': 'collection_by_month',
     'bar-school': 'collection_by_month',
+    'bar-enrollment': 'enrollment_by_year',
+    'bar-exits': 'student_exits',
+    /** Joins and exits, drawn together (2026-09-16 query_keys widening). */
+    'bar-staff': ['staff_joins', 'staff_exits'],
+    'table-year': ['collection_by_month', 'enrollment_by_year'],
+    'table-highlights': ['collection_by_month', 'enrollment_by_year', 'student_exits'],
+    'line-years': ['collected_by_year', 'billed_by_year'],
+    'bar-years': 'students_by_year',
   },
   /**
    * Only the two panels that a SINGLE query answers on its own. The KPI strip,
@@ -366,12 +381,136 @@ export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<stri
     'line-recovery': 'demand_by_period',
     'bar-outstanding': 'demand_by_period',
     'bar-school': 'demand_by_period',
+    /** Home's "Top schools" ranking — the same `demand_by_period` rows, kept to the current year and re-sorted. */
+    'table-schools': 'demand_by_period',
+    /** Each also reads `timing`, for the arrival-timing columns/segments beside the demand ledger's own (2026-09-16 query_keys widening). */
+    'bar-timeline': ['demand_by_period', 'timing'],
+    'table-school': ['demand_by_period', 'timing'],
+    'table-highlights': ['demand_by_period', 'timing'],
   },
   'fee-collection': {
     'line-month': 'by_month',
     'bar-class': 'by_class',
     'donut-mode': 'by_mode',
     'table-component': 'by_component',
+    'line-week-receipts': 'receipts_by_week',
+    /** Drill level 1 — the same `by_component` rows, kept per school. */
+    'bar-school': 'by_component',
+    /** The donut also reads `by_component`'s summed totals for the "Pending" slice. */
+    'donut-heads': ['by_component', 'heads'],
+    'line-received': 'heads_by_month',
+    'line-late': 'heads_by_month',
+    'line-transport': 'heads_by_month',
+    'line-pending': 'pending_by_month',
+    /** The Rings card's fee ring, decomposed (2026-09-16) — the same `by_component` totals. */
+    'table-realisation': 'by_component',
+  },
+  /**
+   * The one panel a single query answers alone. The monthly line, the by-class
+   * bar and the below-75% table each read `by_month`/`by_class`/`low_attendance`
+   * together with other result sets the builder cross-references, so only the
+   * unbucketed status donut maps to exactly one statement.
+   */
+  'attendance-analytics': {
+    'bar-school-attendance': 'summary',
+    'line-month': 'by_month',
+    'bar-class': 'by_class',
+    'donut-status': 'by_status',
+    'table-low-attendance': 'low_attendance',
+    'line-week-attendance': 'att_by_week',
+    /** The Rings card's attendance ring, decomposed (2026-09-16). */
+    'table-attendance-rate': 'summary',
+  },
+  /**
+   * The drill path's entry bar — `new_by_class` summed per school instead of
+   * per class, the exact reading the Dashboard's own admissions tile uses (see
+   * DASHBOARD_OVERVIEW's `admissions` in mcp-server/reports/catalog.ts, and the
+   * DRILL_PATHS comment above `admissions-funnel`).
+   */
+  'admissions-funnel': {
+    'bar-school-admissions': 'new_by_class',
+    'bar-new-class': 'new_by_class',
+    'bar-funnel': 'funnel',
+    'bar-class': 'by_class',
+    'table-class': 'by_class',
+    'donut-gender': 'by_gender',
+    'table-status': 'by_status',
+  },
+  /**
+   * The drill path's entry bar — the report's single `ratio` query, which folds
+   * the same roll/staff totals the Dashboard's own preview re-derives from two
+   * separate queries (mcp-server/reports/catalog.ts's comment on `ratio`).
+   */
+  'student-staff-ratio': {
+    'bar-school-ratio': 'ratio',
+    'table-ratio': 'ratio',
+  },
+  'fee-defaulters': {
+    'bar-school-defaulters': 'totals',
+    'bar-aging': 'aging',
+    'table-aging': 'aging',
+    'bar-class': 'by_class',
+    'table-component': 'by_component',
+    'table-defaulters': 'top_defaulters',
+    'table-pending': 'pending_students',
+    'line-late-week': 'late_by_week',
+    /** Folds two result sets together; both are fetched together on clone (2026-09-16 query_keys widening). */
+    'table-late-payers': ['late_payers', 'pending_students'],
+  },
+  /**
+   * 2026-09-16 audit (docs/06 §3): registering the remaining single-query
+   * panels across every predefined report, so "Clone and customise" offers
+   * a chart on its own everywhere Print already does — not just the widgets
+   * one earlier pass happened to touch.
+   */
+  'enrollment-overview': {
+    'bar-school-roll': 'by_class',
+    'bar-class': 'by_class',
+    'donut-gender': 'by_gender',
+    'donut-category': 'by_category',
+    'table-section': 'by_section',
+  },
+  'fee-by-student': {
+    'bar-school-fee-student': 'dues',
+    'bar-class': 'by_class',
+    'table-students': 'students',
+  },
+  'staff-overview': {
+    'bar-school-staff': 'by_department',
+    'bar-department': 'by_department',
+    'bar-stafftype': 'by_stafftype',
+    'donut-gender': 'by_gender',
+    'table-designation': 'by_designation',
+    'table-reasons': 'leavers_by_reason',
+  },
+  'principal-snapshot': {
+    'bar-class': 'by_class',
+  },
+  'transport-analytics': {
+    'bar-school-transport': 'by_pickup_route',
+    'bar-route': 'by_pickup_route',
+    'bar-class': 'by_class',
+    'donut-mode': 'by_mode',
+  },
+  'library-textbooks': {
+    'line-month': 'issues_by_month',
+    'table-category': 'by_category',
+    'table-low-stock': 'low_stock',
+    'donut-issue-type': 'by_issue_type',
+  },
+  'staff-attendance': {
+    'bar-school-staff-attendance': 'summary',
+    /**
+     * The same `present_days` a Dashboard card also draws (`STAFF_DAYS`,
+     * `STAFF_STATUS_SUMS` — literally the same shared SQL fragments
+     * DASHBOARD_OVERVIEW's `staff_by_month` reuses, mcp-server/reports/
+     * catalog.ts), so "Staff present days" on Home is this exact widget.
+     */
+    'line-month': 'by_month',
+    'bar-department': 'by_department',
+    'table-status': 'by_status',
+    /** The Rings card's staff ring, decomposed (2026-09-16). */
+    'table-attendance-rate': 'summary',
   },
 };
 
@@ -1851,6 +1990,30 @@ function buildFeeCollection(merged: Merged, { year, scope }: BuildContext): Dash
         tone: 'neutral',
       },
     );
+
+    /**
+     * The Dashboard's own "Fee realisation" ring, individually cloneable and
+     * printable (docs/06 §3, ADR-018/ADR-021 addenda, 2026-09-16) — a table
+     * because a single figure needs no chart type, and the same `kpi-paid`/
+     * `kpi-payable`/`kpi-balance`/`kpi-rate` totals above, not a second
+     * statement. Home draws this as a ring for space; the report states the
+     * same numbers as a row.
+     */
+    widgets.push({
+      id: 'table-realisation',
+      type: 'table',
+      title: 'Fee realisation',
+      columns: [
+        { field: 'metric', label: 'Metric' },
+        { field: 'value', label: 'Value', align: 'right' },
+      ],
+      rows: [
+        { metric: 'Fee realisation', value: payable > 0 ? `${((paid / payable) * 100).toFixed(1)}%` : '—' },
+        { metric: 'Total fees billed', value: rupees(payable) },
+        { metric: 'Collected', value: rupees(paid) },
+        { metric: 'Pending', value: rupees(balance) },
+      ],
+    });
   }
 
   /**
@@ -1954,6 +2117,87 @@ function buildFeeCollection(merged: Merged, { year, scope }: BuildContext): Dash
         paid: num(r['paid']),
         balance: num(r['balance']),
       })),
+    });
+  }
+
+  /**
+   * The Dashboard's own "Weekly receipts" sparkline (ADR-018/ADR-021 addenda,
+   * 2026-09-16) — built from `receipts_by_week`, the same statement
+   * services/overview.ts's `buildWeeklyReceipts` runs.
+   */
+  const weeklyReceipts = merged.sumBy('receipts_by_week', 'week', ['received'], 'seq');
+  if (weeklyReceipts.length > 0) {
+    widgets.push({
+      id: 'line-week-receipts',
+      type: 'line',
+      title: 'Receipts by week',
+      x: 'week',
+      y: 'received',
+      x_title: 'Week starting',
+      y_title: 'Fee received (₹)',
+      data: weeklyReceipts.map((r) => ({ week: weekLabel(String(r['week'])), received: num(r['received']) })),
+    });
+  }
+
+  /**
+   * The Dashboard's own "Fee position" donut and "Fee activity by month"
+   * sparklines (ADR-018/ADR-021 addenda, 2026-09-16) — built the same way
+   * services/overview.ts's `buildFeeHeads` does. The donut's payable/paid/
+   * balance third comes from `byComponent` above (already summed for
+   * `table-component`), the same total `fees` gives Home — one scan of
+   * `fee_compile_data_set`, not a second one.
+   */
+  const feeTotalsBalance = byComponent.reduce((t, r) => t + num(r['balance']), 0);
+  const heads = merged.sumAll('heads', ['received', 'late_fee', 'transport']);
+  if (heads !== null && byComponent.length > 0) {
+    const received = num(heads['received']);
+    const lateFee = num(heads['late_fee']);
+    const transport = num(heads['transport']);
+    widgets.push({
+      id: 'donut-heads',
+      type: 'donut',
+      title: 'Where the year’s fee money stands',
+      label_field: 'head',
+      value_field: 'amount',
+      data: [
+        { head: 'Fee received', amount: Math.max(0, received - lateFee - transport) },
+        { head: 'Late fee collected', amount: lateFee },
+        { head: 'Transport fee collected', amount: transport },
+        { head: 'Pending', amount: feeTotalsBalance },
+      ],
+    });
+  }
+
+  const headsByMonth = merged.sumBy('heads_by_month', 'fee_month', ['received', 'late_fee', 'transport'], 'mo');
+  if (headsByMonth.length > 0) {
+    const series = (id: string, title: string, field: string, measure: string): Widget => ({
+      id,
+      type: 'line',
+      title,
+      x: 'month',
+      y: field,
+      y_title: measure,
+      data: headsByMonth.map((r) => ({ month: String(r['fee_month']), [field]: num(r[field]) })),
+    });
+    widgets.push(series('line-received', 'Received by month', 'received', 'Received (₹)'));
+    widgets.push(series('line-late', 'Late fee by month', 'late_fee', 'Late fee (₹)'));
+    widgets.push(series('line-transport', 'Transport fee by month', 'transport', 'Transport (₹)'));
+  }
+
+  const pendingByMonth = merged.sumBy('pending_by_month', 'ym', ['pending']);
+  if (pendingByMonth.length > 0) {
+    widgets.push({
+      id: 'line-pending',
+      type: 'line',
+      title: 'Pending by month demanded for',
+      x: 'month',
+      y: 'pending',
+      x_title: 'Month demanded',
+      y_title: 'Pending (₹)',
+      data: pendingByMonth
+        .slice()
+        .sort((a, b) => String(a['ym']).localeCompare(String(b['ym'])))
+        .map((r) => ({ month: monthLabel(String(r['ym'])), pending: num(r['pending']) })),
     });
   }
 
@@ -2273,6 +2517,39 @@ function buildFeeComparative(
     name: named.get(schoolId) ?? schoolId,
     ...money,
   }));
+
+  /**
+   * The Dashboard's own "Top schools" ranking (ADR-018/ADR-021 addenda,
+   * 2026-09-16) — the same `payable`/`collected` totals `schools` above already
+   * holds for the CURRENT year, reshaped into Home's exact table rather than a
+   * new scan: services/overview.ts's `buildTopSchools` sums the same columns
+   * off its own single-year `fees` query, and summing one year out of this
+   * report's two-year `demand_by_period` (the `current` bucket, never
+   * `compare`) is the identical total.
+   */
+  if (schools.length > 0) {
+    widgets.push({
+      id: 'table-schools',
+      type: 'table',
+      title: 'Schools by fee collected',
+      columns: [
+        { field: 'school', label: 'School' },
+        { field: 'collected', label: 'Collected', align: 'right', sort_field: 'collected_raw' },
+        { field: 'realisation', label: 'Realised', align: 'right', sort_field: 'realisation_raw' },
+      ],
+      rows: schools
+        .slice()
+        .sort((a, b) => b.current.collected - a.current.collected)
+        .map((s) => ({
+          school: s.name,
+          school_id: s.schoolId,
+          collected: rupees(s.current.collected),
+          collected_raw: s.current.collected,
+          realisation: pct(share(s.current.collected, s.current.payable)),
+          realisation_raw: pctValue(share(s.current.collected, s.current.payable)),
+        })),
+    });
+  }
 
   /** Receipts split by how late they were, per school and in total. */
   const timingFields = ['advance', 'same_month', 'next_month', 'later', 'undated', 'receipts'];
@@ -3108,6 +3385,115 @@ function buildFeeDefaulters(merged: Merged, { asOf, scope }: BuildContext): Dash
     });
   }
 
+  /**
+   * The Dashboard's own three panels (ADR-018/ADR-021 addenda, 2026-09-16) —
+   * built the same way Home's services/overview.ts builds them, off the
+   * `late_payers`/`pending_students`/`late_by_week` copies added to this
+   * report's catalog entry above, so a reader who clones or prints one of
+   * these from Home gets exactly the chart they were looking at.
+   */
+  {
+    interface LateRow { student: string; enrollment: string; class: string; late: number; balance: number; overdue: number }
+    const byEnrolment = new Map<string, LateRow>();
+    const seed = (row: Record<string, unknown>): LateRow => {
+      const id = label(row['enrollmentno']);
+      let entry = byEnrolment.get(id);
+      if (entry === undefined) {
+        entry = {
+          student: label(row['studentname']),
+          enrollment: id,
+          class: `${label(row['classname'])}${row['sectionname'] === null || row['sectionname'] === undefined || row['sectionname'] === '' ? '' : `-${String(row['sectionname'])}`}`,
+          late: 0,
+          balance: 0,
+          overdue: 0,
+        };
+        byEnrolment.set(id, entry);
+      }
+      return entry;
+    };
+    for (const { row } of merged.concatRows('late_payers')) seed(row).late += num(row['late_payments']);
+    for (const { row } of merged.concatRows('pending_students')) {
+      const entry = seed(row);
+      entry.balance += num(row['balance']);
+      entry.overdue += num(row['overdue']);
+    }
+    const lateRows = [...byEnrolment.values()]
+      .filter((r) => r.late >= 2 || r.overdue > 0)
+      .map((r) => ({
+        student: r.student,
+        enrollment: r.enrollment,
+        class: r.class,
+        late_payments: r.late,
+        pending: rupees(r.balance),
+        pending_raw: r.balance,
+        status: r.late >= 2 && r.overdue > 0 ? 'Late & unpaid' : r.late >= 2 ? 'Pays late' : 'Unpaid',
+        rank: r.late >= 2 && r.overdue > 0 ? 2 : 1,
+      }))
+      .sort((a, b) => b.rank - a.rank || b.late_payments - a.late_payments || b.pending_raw - a.pending_raw)
+      .slice(0, 20)
+      .map(({ rank: _rank, ...row }) => row);
+    if (lateRows.length > 0) {
+      const lateMasked = new Set([...merged.maskedColumns('late_payers'), ...merged.maskedColumns('pending_students')]);
+      widgets.push({
+        id: 'table-late-payers',
+        type: 'table',
+        title: 'Students paying late or not paying',
+        columns: [
+          { field: 'student', label: 'Student', ...(lateMasked.has('studentname') ? { masked: true } : {}) },
+          { field: 'enrollment', label: 'Enrolment', ...(lateMasked.has('enrollmentno') ? { masked: true } : {}) },
+          { field: 'class', label: 'Class' },
+          { field: 'late_payments', label: 'Late payments', align: 'right' },
+          { field: 'pending', label: 'Pending', align: 'right', sort_field: 'pending_raw' },
+          { field: 'status', label: 'Status' },
+        ],
+        rows: lateRows,
+      });
+    }
+
+    const pendingRows = merged
+      .concatRows('pending_students')
+      .map(({ row }) => ({
+        student: label(row['studentname']),
+        enrollment: label(row['enrollmentno']),
+        class: `${label(row['classname'])}${row['sectionname'] === null || row['sectionname'] === undefined || row['sectionname'] === '' ? '' : `-${String(row['sectionname'])}`}`,
+        pending: rupees(num(row['balance'])),
+        pending_raw: num(row['balance']),
+        overdue: rupees(num(row['overdue'])),
+      }))
+      .sort((a, b) => b.pending_raw - a.pending_raw)
+      .slice(0, 10);
+    if (pendingRows.length > 0) {
+      const pendingMasked = merged.maskedColumns('pending_students');
+      widgets.push({
+        id: 'table-pending',
+        type: 'table',
+        title: 'Largest pending fees',
+        columns: [
+          { field: 'student', label: 'Student', ...(pendingMasked.has('studentname') ? { masked: true } : {}) },
+          { field: 'enrollment', label: 'Enrolment', ...(pendingMasked.has('enrollmentno') ? { masked: true } : {}) },
+          { field: 'class', label: 'Class' },
+          { field: 'pending', label: 'Pending', align: 'right', sort_field: 'pending_raw' },
+          { field: 'overdue', label: 'Of which overdue', align: 'right' },
+        ],
+        rows: pendingRows,
+      });
+    }
+
+    const lateWeekly = merged.sumBy('late_by_week', 'week', ['students'], 'seq');
+    if (lateWeekly.length > 0) {
+      widgets.push({
+        id: 'line-late-week',
+        type: 'line',
+        title: 'Students paying late, by week',
+        x: 'week',
+        y: 'students',
+        x_title: 'Week starting',
+        y_title: 'Students paying late',
+        data: lateWeekly.map((r) => ({ week: weekLabel(String(r['week'])), students: num(r['students']) })),
+      });
+    }
+  }
+
   return {
     widgets,
     groupBy: ['school', 'aging band', 'class', 'fee head', 'student'],
@@ -3858,6 +4244,27 @@ function buildAttendance(merged: Merged, { year, scope }: BuildContext): Dashboa
       tone: attendanceTone(markedDays > 0 ? num(summary['present_days']) / markedDays : null),
     });
 
+    /**
+     * The Dashboard's own "Student attendance" ring, individually cloneable
+     * and printable (docs/06 §3, ADR-018/ADR-021 addenda, 2026-09-16) — a
+     * table, the same `summary` totals `kpi-attendance-rate` above already
+     * reads, not a second statement.
+     */
+    widgets.push({
+      id: 'table-attendance-rate',
+      type: 'table',
+      title: 'Student attendance',
+      columns: [
+        { field: 'metric', label: 'Metric' },
+        { field: 'value', label: 'Value', align: 'right' },
+      ],
+      rows: [
+        { metric: 'Student attendance', value: markedDays > 0 ? percent(num(summary['present_days']) / markedDays) : '—' },
+        { metric: 'Present student-days', value: count(num(summary['present_days'])) },
+        { metric: 'Marked student-days', value: count(markedDays) },
+      ],
+    });
+
     widgets.push({
       id: 'kpi-days-marked',
       type: 'kpi',
@@ -3980,6 +4387,28 @@ function buildAttendance(merged: Merged, { year, scope }: BuildContext): Dashboa
           attendance_pct: rate(num(row['present_days']), num(row['marked_days'])),
         }))
         .sort((a, b) => a.attendance_pct - b.attendance_pct),
+    });
+  }
+
+  /**
+   * The Dashboard's own "Weekly attendance" sparkline (ADR-018/ADR-021
+   * addenda, 2026-09-16) — built from `att_by_week`, the same statement
+   * services/overview.ts's `buildWeeklyAttendance` runs.
+   */
+  const byWeek = merged.sumBy('att_by_week', 'week', ['marked_days', 'present_days'], 'seq');
+  if (byWeek.length > 0) {
+    widgets.push({
+      id: 'line-week-attendance',
+      type: 'line',
+      title: 'Student attendance by week, %',
+      x: 'week',
+      y: 'rate',
+      x_title: 'Week starting',
+      y_title: 'Students present (%)',
+      data: byWeek.map((r) => ({
+        week: weekLabel(String(r['week'])),
+        rate: pctValue(share(num(r['present_days']), num(r['marked_days']))),
+      })),
     });
   }
 
@@ -4195,6 +4624,30 @@ function buildStaffAttendance(merged: Merged, { scope }: BuildContext): Dashboar
         value: `${((present / marked) * 100).toFixed(1)}%`,
         tone: present / marked < 0.85 ? 'warning' : 'neutral',
       },
+    );
+
+    /**
+     * The Dashboard's own "Staff attendance" ring, individually cloneable and
+     * printable (docs/06 §3, ADR-018/ADR-021 addenda, 2026-09-16) — a table,
+     * the same `summary` totals `kpi-present-rate` above already reads, not a
+     * second statement.
+     */
+    widgets.push({
+      id: 'table-attendance-rate',
+      type: 'table',
+      title: 'Staff attendance',
+      columns: [
+        { field: 'metric', label: 'Metric' },
+        { field: 'value', label: 'Value', align: 'right' },
+      ],
+      rows: [
+        { metric: 'Staff attendance', value: `${((present / marked) * 100).toFixed(1)}%` },
+        { metric: 'Present staff-days', value: count(present) },
+        { metric: 'Marked staff-days', value: count(marked) },
+      ],
+    });
+
+    widgets.push(
       {
         id: 'kpi-staff-marked',
         type: 'kpi',
@@ -5731,6 +6184,60 @@ function buildTrendAnalysis(merged: Merged, { asOf, scope }: BuildContext): Dash
     'Attendance, transport and library are not on this page. Those tables hold too few rows in this dataset to draw a trend that would mean anything.',
   );
 
+  /**
+   * The Dashboard's own "Billed and collected, year by year" and "Students
+   * enrolled, year by year" (ADR-018/ADR-021 addenda, 2026-09-16) — built the
+   * same way services/overview.ts's `buildYears`/`buildStudentsByYear` do, off
+   * the `collected_by_year`/`billed_by_year`/`students_by_year` copies added
+   * to this report's catalog entry above. Grouped on the ERP's stamped
+   * `academicyearname`, deliberately NOT the `feedate`-derived year the rest
+   * of this report uses (see `collection_by_month`'s own comment) — a
+   * different, less careful reading, kept only because it is the one Home's
+   * cards already show and print must match exactly, not because it is this
+   * report's preferred one.
+   */
+  const byYearAmount = merged.sumBy('collected_by_year', 'ay', ['collected']);
+  const byYearBilled = merged.sumBy('billed_by_year', 'ay', ['payable']);
+  const collectedYears = trendYearSeries(byYearAmount, 'collected');
+  const billedYears = trendYearSeries(byYearBilled, 'payable');
+  if (collectedYears.length > 0 || billedYears.length > 0) {
+    const drawnAys = [...new Set([...billedYears.map((r) => r.year), ...collectedYears.map((r) => r.year)])]
+      .sort((a, b) => (trendYearStart(a) ?? 0) - (trendYearStart(b) ?? 0))
+      .slice(-8);
+    const yearRows: Record<string, string | number>[] = [];
+    for (const ay of drawnAys) {
+      const b = billedYears.find((r) => r.year === ay);
+      const c = collectedYears.find((r) => r.year === ay);
+      if (b !== undefined) yearRows.push({ year: ay, measure: 'Billed', amount: b.value });
+      if (c !== undefined) yearRows.push({ year: ay, measure: 'Collected', amount: c.value });
+    }
+    widgets.push({
+      id: 'line-years',
+      type: 'line',
+      title: 'Billed and collected, year by year',
+      x: 'year',
+      y: 'amount',
+      series: 'measure',
+      x_title: 'Academic year',
+      y_title: 'Amount (₹)',
+      data: yearRows,
+    });
+  }
+
+  const studentsByYear = trendYearSeries(merged.sumBy('students_by_year', 'ay', ['students']), 'students');
+  if (studentsByYear.length > 0) {
+    widgets.push({
+      id: 'bar-years',
+      type: 'bar',
+      title: 'Students enrolled, year by year',
+      x: 'year',
+      y: 'students',
+      x_title: 'Academic year',
+      y_title: 'Students enrolled',
+      data: studentsByYear.map((r) => ({ year: r.year, students: r.value })),
+    });
+  }
+
   return {
     widgets,
     groupBy: ['month', 'academic year', 'payment mode', 'calendar year', 'leaving reason'],
@@ -6020,6 +6527,52 @@ function monthLabel(value: string): string {
   if (match === null) return value;
   const name = MONTH_NAMES[Number(match[2]) - 1];
   return name === undefined ? value : `${name} ${String(match[1])}`;
+}
+
+/**
+ * The Monday of ISO week `week` in ISO year `year`, in UTC (mirrors
+ * services/overview.ts's own copy — each caller owns its date arithmetic
+ * rather than sharing it, the same reasoning DRILL_PATHS gives for identical
+ * SQL living in two catalog entries).
+ */
+function isoWeekStart(year: number, week: number): Date {
+  const DAY = 86_400_000;
+  const jan4 = Date.UTC(year, 0, 4);
+  const weekday = new Date(jan4).getUTCDay();
+  const monday1 = jan4 - ((weekday === 0 ? 7 : weekday) - 1) * DAY;
+  return new Date(monday1 + (week - 1) * 7 * DAY);
+}
+
+/** `2026-W18` -> `27 Apr`: the Monday the week began. */
+function weekLabel(week: string): string {
+  const m = /^(\d{4})-W(\d{2})$/.exec(week);
+  if (m === null) return week;
+  const start = isoWeekStart(Number(m[1]), Number(m[2]));
+  const day = String(start.getUTCDate());
+  const month = MONTH_NAMES[start.getUTCMonth()] ?? '';
+  return `${day} ${month}`;
+}
+
+/**
+ * The starting year of an academic-year label like `2025-26`, for sorting and
+ * dropping unreadable ones — mirrors services/overview.ts's own `yearStart`,
+ * kept as its own copy for the same reason DRILL_PATHS gives for identical SQL
+ * living in two catalog entries.
+ */
+function trendYearStart(labelText: string): number | null {
+  const m = /^(\d{4})\s*-\s*(\d{2}|\d{4})\b/.exec(labelText.trim());
+  if (m === null) return null;
+  const start = Number(m[1]);
+  return Number.isInteger(start) ? start : null;
+}
+
+/** Rows keyed by academic-year label, sorted and trimmed to the most recent `limit`. */
+function trendYearSeries(rows: readonly Record<string, unknown>[], field: string, limit = 8): { year: string; value: number }[] {
+  const parsed = rows
+    .map((r) => ({ year: String(r['ay'] ?? ''), start: trendYearStart(String(r['ay'] ?? '')), value: num(r[field]) }))
+    .filter((r): r is { year: string; start: number; value: number } => r.start !== null);
+  parsed.sort((a, b) => a.start - b.start);
+  return parsed.slice(-limit).map(({ year, value }) => ({ year, value }));
 }
 
 function rupees(value: number): string {

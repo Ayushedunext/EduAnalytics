@@ -339,13 +339,20 @@ async function runTemplateMode(args: {
 
   /**
    * Per-widget clone (docs/06 §3): a `widget_scope` def asks `run_predefined`
-   * for only the one query that widget needs (`query_keys`), never the
+   * for only the query keys that widget needs (`query_keys`), never the
    * whole report's queries — cheaper, and it also means `BUILDERS` below
    * naturally produces exactly that one widget, since every OTHER widget's
    * `merged.sumBy` call reads a query key that was never fetched.
+   *
+   * A widget's entry may be one key or several — a panel that reads two
+   * result sets together (e.g. `late_payers` and `pending_students` folded
+   * into one table) still clones alone as long as BOTH are fetched; the
+   * builder's own guard conditions (`if (rows.length > 0)`) already handle
+   * however many queries actually came back.
    */
-  const queryKey = args.def.widget_scope === undefined ? undefined : WIDGET_QUERY_KEYS[baseReportId]?.[args.def.widget_scope];
-  if (args.def.widget_scope !== undefined && queryKey === undefined) {
+  const scopeEntry = args.def.widget_scope === undefined ? undefined : WIDGET_QUERY_KEYS[baseReportId]?.[args.def.widget_scope];
+  const queryKeys = scopeEntry === undefined ? undefined : typeof scopeEntry === 'string' ? [scopeEntry] : [...scopeEntry];
+  if (args.def.widget_scope !== undefined && queryKeys === undefined) {
     throw new PlatformError({
       code: ERROR_CODES.REPORT_DEFINITION_NOT_FOUND,
       message: 'This chart can no longer be cloned on its own.',
@@ -362,7 +369,7 @@ async function runTemplateMode(args: {
         report_id: baseReportId,
         school_ids: [...args.effectiveSchoolIds],
         params: args.def.params,
-        ...(queryKey === undefined ? {} : { query_keys: [queryKey] }),
+        ...(queryKeys === undefined ? {} : { query_keys: queryKeys }),
       }),
   );
 

@@ -25,7 +25,8 @@ import type { KpiWidget, TableWidget, Widget } from '@sap/chart-spec';
 import type { OverviewSlot } from '../../api/client';
 import { Icon } from '../Icon';
 import type { SlotState } from './useOverview';
-import { ChartMenu, type ChartLogic } from '../ChartMenu';
+import { ChartMenu, type ChartLogic, type ChartPart } from '../ChartMenu';
+import { reportChartClone } from '../../reportChartMenu';
 import { donutOf, initialsOf, kpiOf, lineOf, partOf, rateOf, tableOf, validWidgets } from './widgets';
 
 /** Forms three rates can take in a 150px box; two-value gauges take fewer (see ChartTypeSelect). */
@@ -135,6 +136,22 @@ function logicOf(state: SlotState | undefined): ChartLogic | undefined {
  * platform composes — the concentric rings, a gauge, a table of people — the
  * card hands `renderLarge` its own body instead, so what enlarges is what was
  * on screen rather than a different chart of the same numbers.
+ *
+ * `verifiedReportWidget` marks a card whose numbers have been checked,
+ * statement for statement, against a real predefined report's widget — same
+ * SQL (or, where summed per school, the same total by construction), not
+ * merely the same subject (docs/06 §3, ADR-018/ADR-021 addenda). Only then
+ * does this card offer Print (server PDF rebuilds the report by
+ * `reportId`+widget id, so a mismatch would print a DIFFERENT chart than the
+ * one on screen) and per-widget Clone; every other card keeps today's
+ * whole-report-only clone and no Print, because a Dashboard slot id is not
+ * proof the numbers are the report's.
+ *
+ * `reportWidgetId` is that report's OWN id for the verified widget, where it
+ * differs from this card's own `id` — the Dashboard and the report each name
+ * their widgets for their own reasons (`bar-staff-ratio` here is the report's
+ * `bar-school-ratio`), and Print/Clone must address the report by ITS id, not
+ * borrow the Dashboard's. Absent means the two ids happen to coincide.
  */
 function CardMenu({
   state,
@@ -147,6 +164,9 @@ function CardMenu({
   chartSlot,
   renderLarge,
   draws,
+  verifiedReportWidget,
+  reportWidgetId,
+  parts,
 }: {
   state: SlotState | undefined;
   slot: string;
@@ -164,19 +184,36 @@ function CardMenu({
    * a widget by that name. Absent means `id` is itself the widget.
    */
   draws?: readonly { slot: string; widgetId: string }[] | undefined;
+  verifiedReportWidget?: boolean | undefined;
+  reportWidgetId?: string | undefined;
+  /**
+   * For a composite card whose constituent widgets each live in a DIFFERENT
+   * real report (rings/gauges, no single report holds all of it): the parts
+   * Clone and Print each pick from, in place of the this-chart/whole-report
+   * choice a single-report card gets. Passed straight through to ChartMenu —
+   * see its own doc comment on `parts`.
+   */
+  parts?: readonly ChartPart[] | undefined;
 }): ReactElement {
+  const reportBacked = verifiedReportWidget === true && reportId !== undefined;
+  const widgetId = reportWidgetId ?? id;
   return (
     <ChartMenu
       title={title}
-      source={{ kind: 'overview', slot, widgetId: id, ...(reportId === undefined ? {} : { reportId }) }}
+      source={
+        reportBacked
+          ? { kind: 'report', reportId, widgetId }
+          : { kind: 'overview', slot, widgetId: id, ...(reportId === undefined ? {} : { reportId }) }
+      }
       widget={widget}
       chartType={chartType}
       slot={chartSlot}
       renderLarge={renderLarge}
       insightParts={draws}
-      clone={reportId === undefined ? undefined : { baseReportId: reportId }}
+      clone={reportBacked ? reportChartClone(reportId, widgetId, {}) : reportId === undefined ? undefined : { baseReportId: reportId }}
       cloneReason="This card is built from the Dashboard's own query rather than from a report, so there is nothing for the clone endpoint to copy."
       logic={logicOf(state)}
+      parts={parts}
     />
   );
 }
@@ -347,6 +384,11 @@ export function RingsCard({ state, year, asOf, onOpen }: { state: SlotState | un
               { slot: 'rings', widgetId: 'ring-staff' },
               { slot: 'rings', widgetId: 'ring-total' },
             ]}
+            parts={[
+              { label: 'Student attendance', reportId: 'attendance-analytics', widgetId: 'table-attendance-rate' },
+              { label: 'Fee realisation', reportId: 'fee-collection', widgetId: 'table-realisation' },
+              { label: 'Staff attendance', reportId: 'staff-attendance', widgetId: 'table-attendance-rate' },
+            ]}
           />
         </>
       }
@@ -411,7 +453,7 @@ export function MonthlyCard({ state, onOpen }: { state: SlotState | undefined; o
         <>
           <button type="button" className="tinybtn dark" onClick={() => { onOpen('fee-collection'); }}><Icon name="calendar" />Monthly</button>
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot="monthly" id="bar-month" title="Monthly fee receipts" reportId="fee-collection" widget={widget} chartType={type} chartSlot={0} />
+          <CardMenu state={state} slot="monthly" id="bar-month" title="Monthly fee receipts" reportId="fee-collection" widget={widget} chartType={type} chartSlot={0} verifiedReportWidget reportWidgetId="line-month" />
         </>
       }
       notes={notesOf(state)}
@@ -448,7 +490,7 @@ export function AdmissionsCard({ state, onOpen }: { state: SlotState | undefined
         <>
           <ReportButton onClick={() => { onOpen('admissions-funnel'); }} />
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot="admissions_by_school" id="bar-school-admissions" title="New admissions" reportId="admissions-funnel" widget={widget} chartType={type} chartSlot={2} />
+          <CardMenu state={state} slot="admissions_by_school" id="bar-school-admissions" title="New admissions" reportId="admissions-funnel" widget={widget} chartType={type} chartSlot={2} verifiedReportWidget />
         </>
       }
       notes={notesOf(state)}
@@ -478,7 +520,7 @@ export function StaffRatioCard({ state, onOpen }: { state: SlotState | undefined
         <>
           <ReportButton onClick={() => { onOpen('student-staff-ratio'); }} />
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot="staff_ratio" id="bar-staff-ratio" title="Students per staff member" reportId="student-staff-ratio" widget={widget} chartType={type} chartSlot={0} />
+          <CardMenu state={state} slot="staff_ratio" id="bar-staff-ratio" title="Students per staff member" reportId="student-staff-ratio" widget={widget} chartType={type} chartSlot={0} verifiedReportWidget reportWidgetId="bar-school-ratio" />
         </>
       }
       notes={notesOf(state)}
@@ -491,7 +533,7 @@ export function StaffRatioCard({ state, onOpen }: { state: SlotState | undefined
 }
 
 /** Weekly Sales / Weekly Orders / Customer Analytics: a figure over a sparkline. */
-export function SparkCard({ state, kpiId, lineId, className, slot, title, slotKey, reportId }: { state: SlotState | undefined; kpiId: string; lineId: string; className?: string; slot: number; title: string; slotKey: string; reportId?: string }): ReactElement {
+export function SparkCard({ state, kpiId, lineId, className, slot, title, slotKey, reportId, verifiedReportWidget }: { state: SlotState | undefined; kpiId: string; lineId: string; className?: string; slot: number; title: string; slotKey: string; reportId?: string; verifiedReportWidget?: boolean }): ReactElement {
   const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === lineId) : undefined;
   const [type, setType] = useState<ChartType>('area');
   return (
@@ -501,7 +543,7 @@ export function SparkCard({ state, kpiId, lineId, className, slot, title, slotKe
       tools={
         <>
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot={slotKey} id={lineId} title={title} reportId={reportId} widget={widget} chartType={type} chartSlot={slot} />
+          <CardMenu state={state} slot={slotKey} id={lineId} title={title} reportId={reportId} widget={widget} chartType={type} chartSlot={slot} verifiedReportWidget={verifiedReportWidget} />
         </>
       }
       notes={notesOf(state)}
@@ -549,7 +591,7 @@ export function TopSchoolsCard({ state, onOpen }: { state: SlotState | undefined
       tools={
         <>
           <ReportButton onClick={() => { onOpen('fee-comparative'); }} label="Compare" />
-          <CardMenu state={state} slot="top_schools" id="table-schools" title="Top schools" reportId="fee-comparative" renderLarge={() => body} />
+          <CardMenu state={state} slot="top_schools" id="table-schools" title="Top schools" reportId="fee-comparative" renderLarge={() => body} verifiedReportWidget />
         </>
       }
       notes={notesOf(state)}
@@ -614,6 +656,7 @@ export function FeeHeadsCard({ state }: { state: SlotState | undefined }): React
             widget={donut}
             chartType={type}
             chartSlot={1}
+            verifiedReportWidget
             draws={[
               { slot: 'fee_heads', widgetId: 'donut-heads' },
               ...ACTIVITY.map(([lineId]) => ({ slot: 'fee_heads', widgetId: lineId })),
@@ -656,7 +699,7 @@ function billedLine(widgets: readonly Widget[]): string | undefined {
 // -- Format B ----------------------------------------------------------------------
 
 /** A "big" chart card of the B row: title, type menu, kebab, chart. */
-export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId, slotKey }: { state: SlotState | undefined; widgetId: string; title: string; slot: number; onOpen: (id: string) => void; reportId: string; slotKey: string }): ReactElement {
+export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId, slotKey, verifiedReportWidget }: { state: SlotState | undefined; widgetId: string; title: string; slot: number; onOpen: (id: string) => void; reportId: string; slotKey: string; verifiedReportWidget?: boolean | undefined }): ReactElement {
   const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === widgetId) : undefined;
   const [type, setType] = useChartType(widget);
   return (
@@ -672,7 +715,7 @@ export function BigChartCard({ state, widgetId, title, slot, onOpen, reportId, s
               make this one card's menu different from every other card's. */}
           <ReportButton onClick={() => { onOpen(reportId); }} />
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot={slotKey} id={widgetId} title={title} reportId={reportId} widget={widget} chartType={type} chartSlot={slot} />
+          <CardMenu state={state} slot={slotKey} id={widgetId} title={title} reportId={reportId} widget={widget} chartType={type} chartSlot={slot} verifiedReportWidget={verifiedReportWidget} />
         </>
       }
       notes={notesOf(state)}
@@ -810,6 +853,7 @@ export function LatePayersCard({ state }: { state: SlotState | undefined }): Rea
           title="Students paying late or not paying"
           reportId="fee-defaulters"
           renderLarge={() => body}
+          verifiedReportWidget
         />
       }
       notes={notesOf(state)}
@@ -923,6 +967,8 @@ export function InboxCard({ state, ratioState, onOpen }: { state: SlotState | un
                 widget={ratioWidget}
                 chartType={ratioType}
                 chartSlot={0}
+                verifiedReportWidget
+                reportWidgetId="bar-school-ratio"
               />
             </div>
           </div>
@@ -944,6 +990,7 @@ export function InboxCard({ state, ratioState, onOpen }: { state: SlotState | un
             title="Pending fees"
             reportId="fee-defaulters"
             renderLarge={() => body}
+            verifiedReportWidget
           />
         </div>
       </div>
@@ -981,6 +1028,13 @@ const AREA_SERIES = [
   ['line-attendance', 'Student attendance %', 2],
 ] as const;
 
+/** Which report's `line-month` widget each series' numbers are verified identical to. */
+const AREA_REPORTS: Record<(typeof AREA_SERIES)[number][0], string> = {
+  'line-receipts': 'fee-collection',
+  'line-staff': 'staff-attendance',
+  'line-attendance': 'attendance-analytics',
+};
+
 export function AreaCard({ state, series }: { state: SlotState | undefined; series?: string }): ReactElement {
   const palette = usePalette();
   /**
@@ -1003,8 +1057,24 @@ export function AreaCard({ state, series }: { state: SlotState | undefined; seri
           {/* Identified by the series ON SCREEN, not by the card: a reader who
               keeps "Student attendance %" wants that line on their board, and
               saving "the area card" would put whichever series happened to be
-              selected there instead. */}
-          <CardMenu state={state} slot="area" id={current[0]} title={current[1]} chartSlot={current[2]} />
+              selected there instead.
+
+              All three now carry a verified report widget: each draws the
+              same SUM(paidamount)/present-day/marked-day totals its matching
+              report's own monthly widget computes — a richer catalog query
+              fetches extra columns Home never reads, but the numbers these
+              three charts actually use are identical either way (see the
+              ADR-018/ADR-021 addenda, 2026-09-16). */}
+          <CardMenu
+            state={state}
+            slot="area"
+            id={current[0]}
+            title={current[1]}
+            chartSlot={current[2]}
+            reportId={AREA_REPORTS[current[0]]}
+            verifiedReportWidget
+            reportWidgetId="line-month"
+          />
         </>
       }
       title={
@@ -1035,7 +1105,7 @@ export function ModesCard({ state, onOpen }: { state: SlotState | undefined; onO
         <>
           <ReportButton onClick={() => { onOpen('fee-collection'); }} />
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot="modes" id="donut-mode" title="Payment modes" reportId="fee-collection" widget={widget} chartType={type} chartSlot={0} />
+          <CardMenu state={state} slot="modes" id="donut-mode" title="Payment modes" reportId="fee-collection" widget={widget} chartType={type} chartSlot={0} verifiedReportWidget />
         </>
       }
       notes={notesOf(state)}
@@ -1132,7 +1202,7 @@ export function CustomerCard({ state }: { state: SlotState | undefined }): React
       tools={
         <>
           <ChartTypeSelect value={type} onChange={setType} />
-          <CardMenu state={state} slot="late_weekly" id="line-late-week" title={k?.label ?? 'Students paying late'} reportId="fee-defaulters" widget={widget} chartType={type} chartSlot={2} />
+          <CardMenu state={state} slot="late_weekly" id="line-late-week" title={k?.label ?? 'Students paying late'} reportId="fee-defaulters" widget={widget} chartType={type} chartSlot={2} verifiedReportWidget />
         </>
       }
       notes={notesOf(state)}

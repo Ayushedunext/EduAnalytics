@@ -248,7 +248,7 @@ export function ReportEditor({ session, id, schoolIds, startEditing = false, onB
                 widget={widget}
                 clone={reportChartClone(report.base_report_id, widget.id, { reportTitle: report.name })}
                 cloneReason={NO_CLONE_REASON}
-                logic={drilled === undefined ? logic : { ...logic, activeQueryKey: drilled.query.key }}
+                logic={drilled === undefined ? logic : { ...logic, activeQueryKeys: [drilled.query.key] }}
               />
             </>
           );

@@ -390,7 +390,7 @@ export function DashboardPage({
                       logic={
                         drilled === undefined
                           ? logic
-                          : { ...logic, activeQueryKey: drilled.query.key }
+                          : { ...logic, activeQueryKeys: [drilled.query.key] }
                       }
                       compareYear={shownCompareYear ?? undefined}
                     />

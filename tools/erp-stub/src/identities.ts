@@ -60,6 +60,33 @@ export const IDENTITIES: Identity[] = [
     },
   },
   {
+    /**
+     * The only identity with an admission funnel to look at.
+     *
+     * The 2026-09-15 extract is the first to carry
+     * students_admission_data_set, and it carries it for 37 schools that are
+     * none of the St Marks or training schools below -- so every other
+     * identity opens Admissions Funnel on zero candidates, which is correct
+     * for those schools and demonstrates nothing. This one is scoped to the
+     * ten schools of the `lpsho` society, registered by hand in
+     * db/platform/seed/lpsho.sql. School names are codes: schools_data_set
+     * arrived empty. The society's roll, fees, staff and attendance are absent
+     * from the extract, so every other card draws empty for this scope.
+     */
+    key: 'director-lpsho',
+    label: 'Test Director — LPS Society (admission funnel data)',
+    note: 'Ten schools with a real admission funnel; no roll, fees or attendance in the extract.',
+    claims: {
+      sub: 'erp-user-6001',
+      name: 'Test Director',
+      role: 'DIRECTOR',
+      org_id: 'lpsho',
+      school_ids: ['lpsahr', 'lpsansal', 'lpseld', 'lpsjkp', 'lpspgr', 'lpsscity', 'lpssecb', 'lpssecc', 'lpssecd', 'lpsseci'],
+      default_school: 'lpsscity',
+      perms: ['fees.read', 'students.read', 'staff.read'],
+    },
+  },
+  {
     key: 'director',
     label: 'R. Mehta — Director, St Marks Society',
     note: 'All 3 schools. Can combine them and compare.',

@@ -532,6 +532,81 @@ export function StaffRatioCard({ state, onOpen }: { state: SlotState | undefined
   );
 }
 
+/**
+ * The admission funnel (View 1, 2026-09-17): the share of candidates admitted
+ * over the four stages as a bar. `kpi-funnel-conversion` is the headline and
+ * `bar-funnel` is Admissions Funnel's own widget, id for id, from the same
+ * statement — so the menu offers Print and per-chart Clone. Not clickable, for
+ * the reason `AdmissionsCard` gives; the Report button opens the report, where
+ * the conversion at each stage and each school's biggest drop are tabled.
+ */
+export function AdmissionFunnelCard({ state, onOpen }: { state: SlotState | undefined; onOpen: (id: string) => void }): ReactElement {
+  const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === 'bar-funnel') : undefined;
+  const [type, setType] = useChartType(widget);
+  return (
+    <Card
+      className="fillChart"
+      title="Admission funnel"
+      tools={
+        <>
+          <ReportButton onClick={() => { onOpen('admissions-funnel'); }} />
+          <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot="admission_funnel" id="bar-funnel" title="Admission funnel" reportId="admissions-funnel" widget={widget} chartType={type} chartSlot={1} verifiedReportWidget />
+        </>
+      }
+      notes={notesOf(state)}
+    >
+      <Slot state={state}>
+        {(widgets) => {
+          const k = kpiOf(widgets, 'kpi-funnel-conversion');
+          return (
+            <>
+              {/* No headline for a scope with no candidates: the chart's own empty state says so. */}
+              {k !== undefined && (
+                <div className="funnelVal">
+                  <b>{k.value}</b>
+                  <span>admitted</span>
+                  {k.delta !== undefined && <small>{k.delta}</small>}
+                </div>
+              )}
+              <Chart widget={widgets.find((w) => (w as { id?: unknown }).id === 'bar-funnel')} type={type} slot={1} fill />
+            </>
+          );
+        }}
+      </Slot>
+    </Card>
+  );
+}
+
+/**
+ * Admitted as a share of each school's own candidates, ranked — the funnel's
+ * by-school reading, beside it on View 1. `bar-school-conversion` is the
+ * report's widget from the same statement kept per school. Notes are on the
+ * funnel card beside this one, not repeated here.
+ */
+export function FunnelBySchoolCard({ state, onOpen }: { state: SlotState | undefined; onOpen: (id: string) => void }): ReactElement {
+  const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === 'bar-school-conversion') : undefined;
+  const [type, setType] = useChartType(widget);
+  return (
+    <Card
+      className="fillChart"
+      title="Admitted by school"
+      sub="Share of each school’s candidates · the report names where each school loses them"
+      tools={
+        <>
+          <ReportButton onClick={() => { onOpen('admissions-funnel'); }} />
+          <ChartTypeSelect value={type} onChange={setType} />
+          <CardMenu state={state} slot="admission_funnel" id="bar-school-conversion" title="Admitted by school" reportId="admissions-funnel" widget={widget} chartType={type} chartSlot={4} verifiedReportWidget />
+        </>
+      }
+    >
+      <Slot state={state}>
+        {(widgets) => <Chart widget={widgets.find((w) => (w as { id?: unknown }).id === 'bar-school-conversion')} type={type} slot={4} fill />}
+      </Slot>
+    </Card>
+  );
+}
+
 /** Weekly Sales / Weekly Orders / Customer Analytics: a figure over a sparkline. */
 export function SparkCard({ state, kpiId, lineId, className, slot, title, slotKey, reportId, verifiedReportWidget }: { state: SlotState | undefined; kpiId: string; lineId: string; className?: string; slot: number; title: string; slotKey: string; reportId?: string; verifiedReportWidget?: boolean }): ReactElement {
   const widget = state?.kind === 'ready' ? state.slot.widgets.find((w) => (w as { id?: unknown }).id === lineId) : undefined;

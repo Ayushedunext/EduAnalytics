@@ -295,6 +295,87 @@ describe('new admissions by school re-groups the tile’s own statement', () => 
 });
 
 /**
+ * The Dashboard card behind "Admission funnel" (View 1, 2026-09-17). One
+ * statement, the report's own; summed for the stages and kept per school for
+ * the card beside it. The stage order is the ERP's — application before
+ * registration — and a school that never logs enquiries is not reported as
+ * losing everyone at a stage it does not have.
+ */
+describe('the admission funnel sums the scope and keeps the schools apart', () => {
+  const funnel = () =>
+    result([
+      { school_id: 'a', queries: [query('admission_funnel', [{ candidates: 100, enquiries: 90, applications: 70, registrations: 60, admissions: 40 }])] },
+      { school_id: 'b', queries: [query('admission_funnel', [{ candidates: 100, enquiries: 0, applications: 80, registrations: 80, admissions: 60 }])] },
+    ]);
+
+  it('leads with admitted as a share of all candidates, with the earlier stages beneath it', async () => {
+    response = funnel();
+    const card = await build('admission_funnel');
+    const headline = card.widgets.find((w) => w.id === 'kpi-funnel-conversion') as KpiWidget;
+    expect(headline.value).toBe('50.0%');
+    expect(headline.delta).toBe('100 of 200 candidates');
+    expect(headline.breakdown?.map((p) => [p.label, p.value])).toEqual([
+      ['Enquired', '90'],
+      ['Applied', '150'],
+      ['Registered', '140'],
+    ]);
+  });
+
+  it('draws the stages in the order the ERP moves a candidate — application before registration', async () => {
+    response = funnel();
+    const card = await build('admission_funnel');
+    const bar = card.widgets.find((w) => w.id === 'bar-funnel') as { data: Record<string, unknown>[] };
+    expect(bar.data).toEqual([
+      { stage: 'Enquiry', candidates: 90 },
+      { stage: 'Application', candidates: 150 },
+      { stage: 'Registration', candidates: 140 },
+      { stage: 'Admission', candidates: 100 },
+    ]);
+  });
+
+  it('ranks schools by their own share admitted and names the biggest drop, skipping a stage a school never logs', async () => {
+    response = funnel();
+    const card = await build('admission_funnel');
+    const bySchool = card.widgets.find((w) => w.id === 'bar-school-conversion') as { data: Record<string, unknown>[] };
+    expect(bySchool.data).toEqual([
+      { school_name: 'Beta', conversion: 60 },
+      { school_name: 'Alpha', conversion: 40 },
+    ]);
+    const table = card.widgets.find((w) => w.id === 'table-school-funnel') as TableWidget;
+    expect(table.rows.map((r) => [r['school_name'], r['biggest_drop']])).toEqual([
+      ['Beta', 'Registration → Admission · keeps 75%'],
+      ['Alpha', 'Registration → Admission · keeps 67%'],
+    ]);
+  });
+
+  it('costs the one statement and nothing else', async () => {
+    response = result([{ school_id: 'a', queries: [] }]);
+    await build('admission_funnel');
+    expect(lastCall?.args['query_keys']).toEqual(['admission_funnel']);
+  });
+
+  it('draws both charts empty, with no headline, for a scope with no candidates', async () => {
+    response = result([
+      { school_id: 'a', queries: [query('admission_funnel', [{ candidates: 0, enquiries: 0, applications: 0, registrations: 0, admissions: 0 }])] },
+    ]);
+    const card = await build('admission_funnel');
+    expect(card.status).toBe('ok');
+    expect(card.widgets.map((w) => w.id)).toEqual(['bar-funnel', 'bar-school-conversion']);
+    for (const widget of card.widgets) expect((widget as { data: unknown[] }).data).toEqual([]);
+    expect(card.notes.join(' ')).toMatch(/No candidates are recorded/);
+  });
+
+  it('is not marked drillable — the Dashboard has no drill endpoint', async () => {
+    response = funnel();
+    const card = await build('admission_funnel');
+    for (const id of ['bar-funnel', 'bar-school-conversion']) {
+      const widget = card.widgets.find((w) => w.id === id);
+      expect((widget as { drillable?: unknown }).drillable, id).toBeUndefined();
+    }
+  });
+});
+
+/**
  * The Dashboard card behind "Students per staff member" (View 1). Re-groups
  * the SAME `roll` and `staff` statements the tiles and gauges cards already
  * run — the thing worth locking in, same as the admissions card above, is

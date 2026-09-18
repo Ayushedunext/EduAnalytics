@@ -460,6 +460,72 @@ function checkWidgetInvariants(widget: Widget, ctx: z.RefinementCtx): void {
       path: ['series'],
     });
   }
+
+  /**
+   * A bar/donut widget draws exactly one mark per ROW -- the renderer's axis
+   * literally counts rows (`categoryAxis` in react/widgets.tsx reads
+   * `rows.length`, with no dedup by category), so two rows sharing an x /
+   * label_field value do not draw as "the same bar twice", they draw as two
+   * separate, identically-labelled bars/slices. That is what a naive line->bar
+   * conversion produces when the source data is long-format (one row per
+   * category PER SERIES, e.g. a Billed row and a Collected row for each year):
+   * the bar count balloons past the category count and labels repeat.
+   *
+   * Comparing the same categories across a second dimension needs a `line`
+   * widget with `series` instead (docs/05's system prompt already tells the
+   * model this) -- this check is the code-side enforcement of that same rule,
+   * so a model that ignores the prompt gets a structured validation error
+   * instead of producing a spec that renders as garbage.
+   */
+  if (widget.type === 'bar' || widget.type === 'donut') {
+    const field = widget.type === 'bar' ? widget.x : widget.label_field;
+    const seen = new Set<string>();
+    for (const row of widget.data) {
+      const key = String(row[field] ?? '');
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `a ${widget.type} widget must have one row per "${field}" value -- "${key}" appears more than once; use a line widget with series to compare categories across a second dimension`,
+          path: ['data'],
+        });
+        break;
+      }
+      seen.add(key);
+    }
+  }
+
+  /**
+   * A `line.series` field NAMES A GROUPING COLUMN -- a handful of comparable
+   * lines (Billed vs Collected, this year vs last year), never one line per
+   * ROW. `pivot()` in react/vivid.tsx reads `row[series]` as the line's NAME,
+   * so pointing `series` at a near-unique column (a raw amount, an id) does
+   * not fail to parse -- it produces one "series" per distinct value, drawn as
+   * a legend of numbers and a scatter of one-point lines. That shape is what a
+   * live incident showed: a model chose the VALUE column as `series` instead
+   * of the category column it was meant to split by.
+   *
+   * Two independent tells, either one enough to reject:
+   *   - an absolute legend cap (12) -- a real multi-year, multi-fee-head
+   *     comparison can legitimately have a dozen-odd series, but not more;
+   *   - series count reaching row count on a dataset big enough for the
+   *     signal to mean something (more than 6 rows) -- that can only happen
+   *     when almost every row is its own "group", i.e. series is not
+   *     grouping anything. Gated on row count so a genuinely tiny chart (one
+   *     category, two series -- two rows total) is never a false positive.
+   */
+  if (widget.type === 'line' && widget.series !== undefined) {
+    const seriesField = widget.series;
+    const distinctSeries = new Set(widget.data.map((row) => String(row[seriesField] ?? '')));
+    const tooManyGroups = distinctSeries.size > 12;
+    const nearlyOnePerRow = widget.data.length > 6 && distinctSeries.size >= widget.data.length;
+    if (tooManyGroups || nearlyOnePerRow) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `a line widget's series field ("${seriesField}") produced ${String(distinctSeries.size)} distinct groups from ${String(widget.data.length)} rows -- series must split data into a SMALL number of comparable groups, not a value per row. This usually means the wrong column was used for series (a measure/value column instead of a category column).`,
+        path: ['series'],
+      });
+    }
+  }
 }
 
 const widgetUnion = z.discriminatedUnion('type', [
@@ -514,7 +580,30 @@ const draftCartesian = {
 
 export const widgetDraftSchema = z.discriminatedUnion('type', [
   kpiWidgetSchema,
-  z.object({ ...draftCartesian, type: z.literal('bar') }).strict(),
+  z
+    .object({
+      ...draftCartesian,
+      type: z.literal('bar'),
+      /**
+       * Several measures side by side per category — added 2026-09-16 after a
+       * live gap: comparing the SAME categories across two measures (billed vs
+       * collected, by year) has no other way to become a bar chart. Before
+       * this, the draft bar variant had no `series` at all (only the hydrated
+       * `barWidgetSchema` did), so a model asked for exactly that request
+       * could only ever answer with a `line` widget — "give me a bar chart"
+       * was a request Ask AI could never actually satisfy for this shape of
+       * data. Mirrors `barWidgetSchema.series`/`stacked` (same
+       * `series[0].field === y` and "stacked needs series" rules, enforced
+       * post-hydration by `checkWidgetInvariants` since the draft carries no
+       * `.strict()`-breaking refine of its own); requires SQL pivoted to one
+       * row per category with one column per measure, which `hydrateWidget`
+       * (services/ai-chat.ts) passes through unchanged onto the hydrated
+       * widget's `data`.
+       */
+      series: z.array(barSeriesSchema).min(2).optional(),
+      stacked: z.boolean().optional(),
+    })
+    .strict(),
   z
     .object({
       ...draftCartesian,

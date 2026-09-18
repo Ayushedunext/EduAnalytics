@@ -88,6 +88,103 @@ describe('chart-spec round trip (CODING §14 contract test)', () => {
     expect(r.ok).toBe(false);
   });
 
+  it('rejects a bar widget whose rows repeat a category value (long-format data mistaken for a bar)', () => {
+    // The shape a naive line->bar conversion produces from a `series`-grouped
+    // line chart's long-format rows: a Billed row and a Collected row for the
+    // same academic year, instead of one row per year. `categoryAxis` in
+    // react/widgets.tsx draws one bar per ROW with no dedup, so this is exactly
+    // the "16 bars for 8 years, repeated labels" bug this check exists to catch.
+    const r = validateChartSpec({
+      ...spec,
+      widgets: [
+        {
+          id: 'b1',
+          type: 'bar',
+          x: 'academic_year',
+          y: 'amount',
+          data: [
+            { academic_year: '2024-25', amount: 900000 },
+            { academic_year: '2024-25', amount: 750000 },
+          ],
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects a donut widget whose rows repeat a label_field value', () => {
+    const r = validateChartSpec({
+      ...spec,
+      widgets: [
+        {
+          id: 'd1',
+          type: 'donut',
+          label_field: 'mode',
+          value_field: 'amount',
+          data: [
+            { mode: 'Cash', amount: 100 },
+            { mode: 'Cash', amount: 50 },
+          ],
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('accepts a grouped bar with one row per category -- the correct shape for the same data', () => {
+    const r = validateChartSpec({
+      ...spec,
+      widgets: [
+        {
+          id: 'b1',
+          type: 'bar',
+          x: 'academic_year',
+          y: 'billed',
+          series: [
+            { field: 'billed', label: 'Billed' },
+            { field: 'collected', label: 'Collected' },
+          ],
+          data: [{ academic_year: '2024-25', billed: 900000, collected: 750000 }],
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects a line widget whose series field is really a value column -- one "series" per row, not a real grouping', () => {
+    // The live bug this catches: `series` pointed at the amount column
+    // instead of a metric/category column, so vivid.tsx's pivot() treated
+    // each distinct AMOUNT as its own series name -- a legend of raw numbers
+    // and a scatter of one-point lines instead of two comparable lines.
+    const data = Array.from({ length: 9 }, (_, i) => ({
+      academic_year: `${String(2018 + i)}-${String(19 + i).slice(-2)}`,
+      amount: 100000 * (i + 1) + i, // effectively unique per row
+    }));
+    const r = validateChartSpec({
+      ...spec,
+      widgets: [
+        { id: 'l1', type: 'line', x: 'academic_year', y: 'amount', series: 'amount', data },
+      ],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it('accepts a line widget whose series field is a real, small category grouping', () => {
+    const data = [
+      { academic_year: '2024-25', metric: 'Billed', amount: 900000 },
+      { academic_year: '2024-25', metric: 'Collected', amount: 750000 },
+      { academic_year: '2025-26', metric: 'Billed', amount: 950000 },
+      { academic_year: '2025-26', metric: 'Collected', amount: 800000 },
+    ];
+    const r = validateChartSpec({
+      ...spec,
+      widgets: [
+        { id: 'l1', type: 'line', x: 'academic_year', y: 'amount', series: 'metric', data },
+      ],
+    });
+    expect(r.ok).toBe(true);
+  });
+
   it('never throws on hostile input -- a half-render is worse than an error', () => {
     for (const bad of [null, undefined, 42, 'nope', [], { widgets: 'no' }]) {
       expect(() => validateChartSpec(bad)).not.toThrow();
@@ -129,6 +226,38 @@ describe('server-side hydration (AUDIT_REPORT C15)', () => {
         widgets: [{ id: 'b1', type: 'bar', query_ref: 'q1' }],
       }).ok,
     ).toBe(true);
+  });
+
+  it('accepts a draft bar widget with series -- Ask AI can ask for a grouped bar (billed vs collected by year), not only a line', () => {
+    const r = validateChartSpecDraft({
+      spec_version: 1,
+      title: 'Billed and collected, year by year',
+      widgets: [
+        {
+          id: 'b1',
+          type: 'bar',
+          x: 'academic_year',
+          y: 'billed',
+          query_ref: 'q1',
+          series: [
+            { field: 'billed', label: 'Billed' },
+            { field: 'collected', label: 'Collected' },
+          ],
+        },
+      ],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects a draft bar series of fewer than two entries -- one entry is not a "group"', () => {
+    const r = validateChartSpecDraft({
+      spec_version: 1,
+      title: 'Billed and collected, year by year',
+      widgets: [
+        { id: 'b1', type: 'bar', x: 'academic_year', y: 'billed', query_ref: 'q1', series: [{ field: 'billed', label: 'Billed' }] },
+      ],
+    });
+    expect(r.ok).toBe(false);
   });
 });
 

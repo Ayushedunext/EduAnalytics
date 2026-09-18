@@ -39,7 +39,7 @@ import { withMcp } from '../mcp/client.js';
 import type { RunMultiResult } from '../mcp/client.js';
 
 /** A `query_key` is just a label the model picks; it never touches SQL or scope. */
-const queryKeySchema = z
+export const queryKeySchema = z
   .string()
   .regex(/^[a-zA-Z0-9_]{1,40}$/, 'query_key must be short and alphanumeric (use "_" for spaces)');
 
@@ -128,15 +128,51 @@ export function redact(
   return safe ? { ...summary, value: row } : summary;
 }
 
-/** Build the Anthropic-facing tool definitions for one question's scope. */
+/**
+ * Build the Anthropic-facing tool definitions for one question's scope.
+ *
+ * `seedQueryKeys` — the query keys of the report being refined (`ai-chat.ts`'s
+ * `RefineSeedContext.queries`), when this turn is a "✎ Refine with AI" turn —
+ * adds `reuse_seed_query`, so a presentation-only change (a different chart
+ * type, colours, sort) never has to retype the seeded SQL to get it. Absent
+ * or empty (a fresh Ask AI question, nothing to reuse) omits the tool
+ * entirely rather than offering a key that can never resolve to anything.
+ */
 export function buildToolDefinitions(
   schoolIds: readonly string[],
+  seedQueryKeys?: readonly string[],
 ): { name: string; description: string; input_schema: object }[] {
   const schoolIdEnum = z.enum(schoolIds as [string, ...string[]]);
   const jsonSchema = (schema: z.ZodTypeAny): object =>
     zodToJsonSchema(schema, { $refStrategy: 'none', target: 'jsonSchema7' });
 
+  const reuseTool =
+    seedQueryKeys === undefined || seedQueryKeys.length === 0
+      ? []
+      : [
+          {
+            name: 'reuse_seed_query',
+            description:
+              'Re-run one of the CURRENT report\'s own queries (shown above, by its key) completely unchanged, against schools you pick from the scope. Prefer this over run_query/run_multi whenever the change you are making is ONLY about how the data is drawn (a different chart type, colours, sort, labels) and not about what data is shown — the SQL text is never retyped, so the numbers cannot silently drift from the chart the user is looking at.',
+            input_schema: jsonSchema(
+              z.object({
+                seed_query_key: z
+                  .enum(seedQueryKeys as [string, ...string[]])
+                  .describe('One of the query keys shown in "Its current SQL" above.'),
+                school_ids: z
+                  .array(schoolIdEnum)
+                  .min(1)
+                  .describe('Schools from the current scope to run this query against.'),
+                query_key: queryKeySchema.describe(
+                  'A short id you choose for THIS run\'s result, e.g. "q1" — reference it later from a widget via query_ref. May differ from seed_query_key.',
+                ),
+              }),
+            ),
+          },
+        ];
+
   return [
+    ...reuseTool,
     {
       name: 'get_dimensions',
       description:
@@ -185,6 +221,8 @@ export interface ToolExecContext {
   readonly catalog: SchemaCatalogLite;
   /** Full results by query_key, populated here and read by ai-chat.ts's hydration step. */
   readonly resultCache: Map<string, CachedResult>;
+  /** The report-being-refined's own queries, keyed the same way as in the seeded prompt — what `reuse_seed_query` resolves `seed_query_key` against. Absent on a fresh (non-refining) turn. */
+  readonly seedQueries?: readonly { key: string; sql: string }[] | undefined;
 }
 
 /** Dispatch one Claude tool call to MCP, and redact its result before returning. */
@@ -226,6 +264,39 @@ export async function executeTool(
       const outcome = await withMcp(ctx.session, ctx.correlationId, schoolIds, (mcp) =>
         mcp.call<RunMultiResult>('run_multi', { school_ids: schoolIds, sql }),
       );
+      const cached: CachedResult = { ...outcome, sql };
+      ctx.resultCache.set(queryKey, cached);
+      return redact(queryKey, cached, ctx.catalog);
+    }
+
+    /**
+     * Runs a SEED query's own SQL text unchanged — never anything the model
+     * wrote — so a presentation-only refinement ("same data, as a bar chart")
+     * cannot drift from the chart the user is looking at just because the
+     * model paraphrased the SQL while retyping it. `seed_query_key` is
+     * resolved against `ctx.seedQueries`, not the model's `args`, precisely so
+     * there is no `sql` field here for the model to fill in.
+     */
+    case 'reuse_seed_query': {
+      const schoolIds = (args['school_ids'] as unknown[]).map(String);
+      const seedKey = String(args['seed_query_key']);
+      const queryKey = String(args['query_key']);
+      if (ctx.resultCache.has(queryKey)) {
+        throw new Error(`query_key "${queryKey}" was already used in this turn — choose a different one.`);
+      }
+      const sql = ctx.seedQueries?.find((q) => q.key === seedKey)?.sql;
+      if (sql === undefined) {
+        throw new Error(`seed_query_key "${seedKey}" does not match any query on the report being refined.`);
+      }
+      const [soleSchoolId] = schoolIds;
+      const outcome =
+        soleSchoolId !== undefined && schoolIds.length === 1
+          ? await withMcp(ctx.session, ctx.correlationId, schoolIds, (mcp) =>
+              mcp.call<RunQueryResult>('run_query', { school_id: soleSchoolId, sql }),
+            )
+          : await withMcp(ctx.session, ctx.correlationId, schoolIds, (mcp) =>
+              mcp.call<RunMultiResult>('run_multi', { school_ids: schoolIds, sql }),
+            );
       const cached: CachedResult = { ...outcome, sql };
       ctx.resultCache.set(queryKey, cached);
       return redact(queryKey, cached, ctx.catalog);

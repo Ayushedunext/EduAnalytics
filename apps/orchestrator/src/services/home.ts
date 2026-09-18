@@ -110,6 +110,16 @@ const METRIC_SQL = {
     'ROUND(SUM(CASE WHEN balance_amount > 0 THEN balance_amount ELSE 0 END)) AS n ' +
     'FROM fee_compile_data_set GROUP BY academicyearname',
   /**
+   * The years candidates were admitted for — read only to NAME a year when the
+   * roll cannot (`academicYearsFresh`). A school whose admissions run in the
+   * ERP ahead of its enrolment has candidates for a year and no students in it
+   * yet; the 2026-09-15 extract carries 37 such schools. Cheap: the table is
+   * small and this asks it for one column.
+   */
+  admissionsByYear:
+    'SELECT academicyearname AS ay, COUNT(*) AS n FROM students_admission_data_set ' +
+    'GROUP BY academicyearname',
+  /**
    * Attendance for the tile, by month.
    *
    * Three things in this statement are not obvious and all three are forced by
@@ -468,6 +478,13 @@ export const DASHBOARD_GRID: readonly GridSlot[] = [
   { key: 'attendance-analytics', report: 'attendance-analytics' },
   { key: 'staff-attendance', report: 'staff-attendance' },
   { key: 'enrollment-overview', report: 'enrollment-overview' },
+  /**
+   * Added 2026-09-17, when the Sep-15 extract filled the funnel table. Its
+   * `DASHBOARD_PREVIEW` names the funnel bar, so the Student module's card
+   * draws the pipeline rather than one bar per school (which the Dashboard's
+   * own tile already shows). Drills on the report page, school → class → section.
+   */
+  { key: 'admissions-funnel', report: 'admissions-funnel' },
   { key: 'staff-overview', report: 'staff-overview' },
   { key: 'transport-analytics', report: 'transport-analytics' },
 ];
@@ -1169,12 +1186,26 @@ async function academicYearsFresh(
       school_ids: [...args.schoolIds],
       sql: METRIC_SQL.studentsByYear,
     });
-    if (outcomeOf(students).available) return yearsIn(students.rows);
+    const fromRoll = outcomeOf(students).available ? yearsIn(students.rows) : [];
+    if (fromRoll.length > 0) return fromRoll;
     /**
-     * Only reached when the roll could not be read at all — a permission
-     * refusal, or every school in the scope unreachable. Paying the fee scan
-     * then is the right trade: it is the difference between a page that opens
-     * and a page that cannot name a year to open on.
+     * The roll named no year — it could not be read (a permission refusal,
+     * every school unreachable) or it is empty for this scope. Admissions next,
+     * before fees, because it is the cheap one and the likelier one: a school
+     * whose admissions run in the ERP ahead of its enrolment has candidates
+     * for a year and no students in it yet (2026-09-17, the Sep-15 extract
+     * carries 37 such schools). A session without students.read is refused
+     * here as it was on the roll and falls through to the fee book.
+     */
+    const admissions = await mcp.call<RunMultiResult>('run_multi', {
+      school_ids: [...args.schoolIds],
+      sql: METRIC_SQL.admissionsByYear,
+    });
+    const fromAdmissions = outcomeOf(admissions).available ? yearsIn(admissions.rows) : [];
+    if (fromAdmissions.length > 0) return fromAdmissions;
+    /**
+     * Paying the fee scan last is the right trade: it is the difference between
+     * a page that opens and a page that cannot name a year to open on.
      */
     const fees = await mcp.call<RunMultiResult>('run_multi', {
       school_ids: [...args.schoolIds],
@@ -1291,7 +1322,7 @@ async function buildHomeFresh(
     });
   }
 
-  const { students, staff, fees, attendance } = await withMcp(
+  const { students, staff, fees, attendance, admissions } = await withMcp(
     args.session,
     args.correlationId,
     args.schoolIds,
@@ -1302,7 +1333,7 @@ async function buildHomeFresh(
        * running them in parallel costs one round trip instead of three and does
        * not widen that cap.
        */
-      const [students, staff, fees, attendance] = await Promise.all([
+      const [students, staff, fees, attendance, admissions] = await Promise.all([
         mcp.call<RunMultiResult>('run_multi', {
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.studentsByYear,
@@ -1319,8 +1350,18 @@ async function buildHomeFresh(
           school_ids: [...args.schoolIds],
           sql: METRIC_SQL.attendanceByMonth,
         }),
+        /**
+         * Read for its YEARS only (2026-09-17), so a scope with candidates and
+         * no roll yet can still name a year -- see `academicYearsFresh`, which
+         * is this strip's opening resolver and unions the same three sources.
+         * No tile is built from it.
+         */
+        mcp.call<RunMultiResult>('run_multi', {
+          school_ids: [...args.schoolIds],
+          sql: METRIC_SQL.admissionsByYear,
+        }),
       ]);
-      return { students, staff, fees, attendance };
+      return { students, staff, fees, attendance, admissions };
     },
   );
 
@@ -1348,27 +1389,31 @@ async function buildHomeFresh(
   const staffOutcome = outcomeOf(staff);
   const feesOutcome = outcomeOf(fees);
   const attendanceOutcome = outcomeOf(attendance);
+  const admissionsOutcome = outcomeOf(admissions);
 
   /**
    * The academic year comes from whichever metric could be read. Deriving it
    * from students alone meant a session without `students.read` lost the year
    * and therefore silently lost the FEES figure too — one missing permission
-   * cascading into an unrelated wrong number.
+   * cascading into an unrelated wrong number. Admissions is the third source
+   * (2026-09-17), in the same order `academicYearsFresh` tries them.
    */
   const derivedYear =
     (studentsOutcome.available ? latestYear(students.rows) : null) ??
+    (admissionsOutcome.available ? latestYear(admissions.rows) : null) ??
     (feesOutcome.available ? latestYear(fees.rows) : null);
 
   /**
    * The years the control offers. See `HomeSummary.academic_years` for why this
-   * is the union of the two metrics rather than the one the default comes from.
+   * is the union of the metrics rather than the one the default comes from.
    *
    * `academicYear` is in here by construction whenever it is not null — it is
-   * the maximum of one of the two sets being unioned — so the control can never
+   * the maximum of one of the sets being unioned — so the control can never
    * open showing a value that is not one of its own options.
    */
   const academicYears = yearsIn([
     ...(studentsOutcome.available ? students.rows : []),
+    ...(admissionsOutcome.available ? admissions.rows : []),
     ...(feesOutcome.available ? fees.rows : []),
   ]);
 

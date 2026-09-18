@@ -800,6 +800,70 @@ describe('Admissions Funnel', () => {
     expect(kpi(built.spec, 'kpi-conversion')?.value).toBe('40.0%');
     expect(built.logic.notes.join(' ')).toMatch(/reading of the data rather than a field in it/);
   });
+
+  /**
+   * The stage order is the ERP's — application BEFORE registration — and was
+   * measured, not assumed (catalog.ts, ADMISSIONS_FUNNEL). The one thing worth
+   * locking is that the bar never again rises in the middle.
+   */
+  it('draws the stages in the order the ERP moves a candidate, and tables the conversion at each', async () => {
+    response = result({
+      reportId: 'admissions-funnel',
+      title: 'Admissions Funnel',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [query('funnel', [{ candidates: 200, enquiries: 180, applications: 150, registrations: 120, admissions: 80 }])],
+        },
+      ],
+    });
+    const built = await build('admissions-funnel');
+    expect(bar(built.spec, 'bar-funnel')?.data).toEqual([
+      { stage: 'Enquiry', candidates: 180 },
+      { stage: 'Application', candidates: 150 },
+      { stage: 'Registration', candidates: 120 },
+      { stage: 'Admission', candidates: 80 },
+    ]);
+    expect(table(built.spec, 'table-funnel')?.rows).toEqual([
+      { stage: 'Enquiry', candidates: 180, of_previous: '—', of_all: '90.0%' },
+      { stage: 'Application', candidates: 150, of_previous: '83.3%', of_all: '75.0%' },
+      { stage: 'Registration', candidates: 120, of_previous: '80.0%', of_all: '60.0%' },
+      { stage: 'Admission', candidates: 80, of_previous: '66.7%', of_all: '40.0%' },
+    ]);
+  });
+
+  /**
+   * The by-school reading is the same statement kept per school. Ranked by the
+   * share admitted; the biggest drop skips a stage the school never logs, so a
+   * school that starts families at the application form is not reported as
+   * losing 100% of nobody at enquiry.
+   */
+  it('ranks schools by the share admitted and names where each loses candidates', async () => {
+    response = result({
+      reportId: 'admissions-funnel',
+      title: 'Admissions Funnel',
+      schools: [
+        {
+          school_id: 'stmarksmb',
+          queries: [query('funnel', [{ candidates: 100, enquiries: 90, applications: 70, registrations: 60, admissions: 40 }])],
+        },
+        {
+          school_id: 'stmarksj',
+          queries: [query('funnel', [{ candidates: 100, enquiries: 0, applications: 80, registrations: 80, admissions: 60 }])],
+        },
+      ],
+    });
+    const built = await build('admissions-funnel', ['stmarksmb', 'stmarksj']);
+    expect(bar(built.spec, 'bar-school-conversion')?.data).toEqual([
+      { school_name: 'Janakpuri', conversion: 60 },
+      { school_name: 'Meera Bagh', conversion: 40 },
+    ]);
+    const rows = table(built.spec, 'table-school-funnel')?.rows ?? [];
+    expect(rows.map((r) => [r['school_name'], r['admitted_share'], r['biggest_drop']])).toEqual([
+      ['Janakpuri', '60.0%', 'Registration → Admission · keeps 75%'],
+      ['Meera Bagh', '40.0%', 'Registration → Admission · keeps 67%'],
+    ]);
+  });
 });
 
 describe("Principal's Snapshot", () => {

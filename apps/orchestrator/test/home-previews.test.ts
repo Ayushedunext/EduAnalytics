@@ -42,6 +42,8 @@ const DASHBOARD_IDS = [
   'staff-overview',
   'admissions-funnel',
   'attendance-analytics',
+  /** Has a path and no preview, and is not on the grid: the subject of the ungridded-with-path case below. */
+  'trend-analysis',
 ] as const;
 
 /**
@@ -443,41 +445,66 @@ describe('what a card shows', () => {
    *
    * It takes whichever branch its OWN tables put it in, with nothing
    * special-cased for the module screen -- which is the point, and is why both
-   * branches are asserted here rather than one. Admissions Funnel grew a
-   * curated path on 2026-09-07 and so takes the DRILL branch; before that it
-   * took the lead branch, and a report still without a path (Library, the
-   * Principal's Snapshot) takes it today.
+   * branches are asserted here rather than one. Trend Analysis has a curated
+   * path and no declared preview, so it takes the DRILL branch; a report
+   * without a path (Library, the Principal's Snapshot) takes the lead branch.
+   * (Admissions Funnel was the subject until 2026-09-17, when it joined the
+   * grid with a declared preview -- see the test after these two.)
    */
   it('previews a built dashboard that the grid does not draw', async () => {
     buildDashboard.mockResolvedValue(
       specWith([
         {
-          id: 'bar-school-admissions',
+          id: 'bar-school',
           type: 'bar',
-          title: 'New admissions by school',
+          title: 'Collected by school',
           x: 'school_name',
-          y: 'students',
-          data: [{ school_name: 'Meera Bagh', students: 297 }],
+          y: 'collected',
+          data: [{ school_name: 'Meera Bagh', collected: 297 }],
         },
       ]),
     );
 
-    const preview = await build('admissions-funnel');
+    const preview = await build('trend-analysis');
 
     expect(preview.status).toBe('ok');
     expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
-      reportId: 'admissions-funnel',
-      queryKeys: [REAL_DRILL_QUERY['admissions-funnel']],
+      reportId: 'trend-analysis',
+      queryKeys: [REAL_DRILL_QUERY['trend-analysis']],
     });
     /** The drill entry, by id -- so the card the module screen draws is clickable. */
-    expect((preview.widget as { id: string }).id).toBe('bar-school-admissions');
+    expect((preview.widget as { id: string }).id).toBe('bar-school');
   });
 
   it('previews an ungridded dashboard with no path from its lead query', async () => {
-    noPathFor.add('admissions-funnel');
+    noPathFor.add('trend-analysis');
     buildDashboard.mockResolvedValue(
       specWith([
-        { id: 'bar-funnel', type: 'bar', title: 'Funnel', x: 's', y: 'n', data: [{ s: 'Enquiry', n: 4 }] },
+        { id: 'line-years', type: 'line', title: 'By year', x: 'y', y: 'n', data: [{ y: '2026-27', n: 4 }] },
+      ]),
+    );
+
+    const preview = await build('trend-analysis');
+
+    expect(preview.status).toBe('ok');
+    expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
+      reportId: 'trend-analysis',
+      queryKeys: [REAL_LEAD_QUERY['trend-analysis']],
+    });
+  });
+
+  /**
+   * The Student module's Admissions Funnel card draws the FUNNEL, not the drill
+   * entry (2026-09-17): `DASHBOARD_PREVIEW` names `bar-funnel` off the `funnel`
+   * statement, and the declared preview wins over the report's path -- the
+   * same trade the fee cards made, stated in docs/10 §2: the card is inert and
+   * opens the report, where the school → class → section drill still works.
+   */
+  it('previews Admissions Funnel as the funnel itself, by declared preview, not its drill entry', async () => {
+    buildDashboard.mockResolvedValue(
+      specWith([
+        { id: 'bar-funnel', type: 'bar', title: 'Candidates reaching each stage', x: 'stage', y: 'candidates', data: [{ stage: 'Enquiry', candidates: 4 }] },
+        { id: 'table-funnel', type: 'table', title: 'Conversion at each stage', columns: [{ field: 'stage', label: 'Stage' }], rows: [{ stage: 'Enquiry' }] },
       ]),
     );
 
@@ -486,8 +513,9 @@ describe('what a card shows', () => {
     expect(preview.status).toBe('ok');
     expect(buildDashboard.mock.calls[0]?.[0]).toMatchObject({
       reportId: 'admissions-funnel',
-      queryKeys: [REAL_LEAD_QUERY['admissions-funnel']],
+      queryKeys: ['funnel'],
     });
+    expect((preview.widget as { id: string }).id).toBe('bar-funnel');
   });
 
   it('carries the catalog’s own title and icon, not the report’s', async () => {

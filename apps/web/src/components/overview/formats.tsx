@@ -8,11 +8,13 @@ import { useState, type ReactElement } from 'react';
 import type { SessionResponse } from '../../api/client';
 import type { SlotState } from './useOverview';
 import {
+  AdmissionFunnelCard,
   AdmissionsCard,
   AreaCard,
   BigChartCard,
   CustomerCard,
   FeeHeadsCard,
+  FunnelBySchoolCard,
   GaugeCards,
   GaugesCCard,
   InboxCard,
@@ -29,7 +31,8 @@ import { Icon } from '../Icon';
 
 export const FORMAT_SLOTS = {
   A: ['tiles', 'rings', 'monthly', 'admissions_by_school', 'weekly_receipts', 'weekly_attendance', 'top_schools', 'fee_heads'],
-  B: ['years', 'students_by_year', 'att_status', 'top_students', 'lowest_students', 'staff_ratio', 'gauges', 'late_payers', 'pending_top'],
+  /** `admission_funnel` joined View 1 on 2026-09-17 (docs/10 §1.5) — one slot, two cards. */
+  B: ['years', 'students_by_year', 'att_status', 'admission_funnel', 'top_students', 'lowest_students', 'staff_ratio', 'gauges', 'late_payers', 'pending_top'],
   C: ['tiles', 'area', 'modes', 'rings', 'late_weekly'],
 } as const;
 
@@ -75,6 +78,12 @@ export function FormatB({ states, onOpen }: FormatProps): ReactElement {
         <BigChartCard state={states['years']} widgetId="line-years" title="Billed and collected, year by year" slot={0} onOpen={onOpen} reportId="trend-analysis" slotKey="years" verifiedReportWidget />
         <BigChartCard state={states['students_by_year']} widgetId="bar-years" title="Students enrolled, year by year" slot={2} onOpen={onOpen} reportId="trend-analysis" slotKey="students_by_year" verifiedReportWidget />
         <BigChartCard state={states['att_status']} widgetId="donut-status" title="Attendance recorded" slot={0} onOpen={onOpen} reportId="attendance-analytics" slotKey="att_status" verifiedReportWidget />
+      </div>
+      {/* The admission funnel and its by-school reading: one slot, fetched once,
+          two cards of the same statement (services/overview.ts `admission_funnel`). */}
+      <div className="row21">
+        <AdmissionFunnelCard state={states['admission_funnel']} onOpen={onOpen} />
+        <FunnelBySchoolCard state={states['admission_funnel']} onOpen={onOpen} />
       </div>
       <div className="rankingHead">
         <h2 className="h2B">{ranking === 'lowest' ? 'Lowest attendance' : 'Highest attendance'}</h2>

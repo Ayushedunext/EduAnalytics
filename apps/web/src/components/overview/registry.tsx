@@ -28,11 +28,13 @@ import type { SessionResponse } from '../../api/client';
 import type { MyViewChart } from '../../myView';
 import type { SlotState } from './useOverview';
 import {
+  AdmissionFunnelCard,
   AdmissionsCard,
   AreaCard,
   BigChartCard,
   CustomerCard,
   FeeHeadsCard,
+  FunnelBySchoolCard,
   GaugeCard,
   GaugesCCard,
   InboxCard,
@@ -140,6 +142,16 @@ export const OVERVIEW_CARDS: Readonly<Record<string, OverviewCardDef>> = {
     render: (c) => (
       <BigChartCard state={c.states['att_status']} widgetId="donut-status" title="Attendance recorded" slot={0} onOpen={c.onOpen} reportId="attendance-analytics" slotKey="att_status" />
     ),
+  },
+  'admission_funnel:bar-funnel': {
+    slots: ['admission_funnel'],
+    span: 8,
+    render: (c) => <AdmissionFunnelCard state={c.states['admission_funnel']} onOpen={c.onOpen} />,
+  },
+  'admission_funnel:bar-school-conversion': {
+    slots: ['admission_funnel'],
+    span: 4,
+    render: (c) => <FunnelBySchoolCard state={c.states['admission_funnel']} onOpen={c.onOpen} />,
   },
   'gauges:gauge-students': {
     slots: ['gauges'],

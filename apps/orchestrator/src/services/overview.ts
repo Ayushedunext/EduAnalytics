@@ -33,7 +33,7 @@ import { schoolNames } from '../db/registry.js';
 import { cacheGet, cacheKey, cacheSet, refreshInBackground } from '../cache/result-cache.js';
 import { coalesce } from '../cache/single-flight.js';
 import { config } from '../config.js';
-import { Merged } from './dashboards.js';
+import { FUNNEL_FIELDS, Merged, funnelBar, funnelConversion, funnelTotals, schoolFunnelWidgets } from './dashboards.js';
 import { OVERVIEW_REPORT_ID, runOverviewQueries } from './overview-queries.js';
 import { splitStaffTypes } from './staff-types.js';
 
@@ -73,6 +73,12 @@ export const OVERVIEW_SLOTS = {
    * which is what the card's "Report" button opens into.
    */
   staff_ratio: ['roll', 'staff'],
+  /**
+   * The admission funnel (View 1, 2026-09-17). One statement — the report's
+   * own `funnel`, under the overview report's key — summed for the stages and
+   * kept per school for the by-school card beside it.
+   */
+  admission_funnel: ['admission_funnel'],
   gauges: ['roll', 'att_today', 'admissions', 'staff_today'],
   late_payers: ['late_payers', 'pending_students'],
   pending_top: ['pending_students'],
@@ -310,6 +316,7 @@ const BUILDERS: Record<OverviewSlotKey, (merged: Merged, ctx: Ctx) => Built> = {
   top_students: buildTopStudents,
   lowest_students: buildLowestStudents,
   staff_ratio: buildStaffRatioPreview,
+  admission_funnel: buildAdmissionFunnel,
   gauges: buildGauges,
   late_payers: buildLatePayers,
   pending_top: buildPendingTop,
@@ -573,6 +580,76 @@ function buildStaffRatioPreview(merged: Merged, ctx: Ctx): Built {
       },
     ],
     notes: ['Staff are not linked to a class in this ERP. Open the report to see a school’s staff broken down by department.'],
+  };
+}
+
+/**
+ * The admission funnel (View 1, 2026-09-17): the share of candidates admitted,
+ * the four stages as a bar, and the same statement kept per school for
+ * "admitted by school" beside it.
+ *
+ * Every chart here is the REPORT's widget — same id, same builder
+ * (services/dashboards.ts `funnelBar`, `schoolFunnelWidgets`), same statement
+ * (`ADMISSION_FUNNEL_SQL` in the catalog) — which is what lets the card offer
+ * Print and per-chart Clone: both rebuild Admissions Funnel by widget id, and
+ * that is only honest while the card's numbers are the report's.
+ *
+ * Not drillable, for the reason `buildAdmissionsBySchool` gives: the
+ * Dashboard's slot API has no drill endpoint, and the report's curated path
+ * descends from the roll, not from the funnel.
+ */
+function buildAdmissionFunnel(merged: Merged, ctx: Ctx): Built {
+  if (!merged.succeeded('admission_funnel')) return { widgets: [] };
+  const totals = funnelTotals(merged.sumAll('admission_funnel', [...FUNNEL_FIELDS]));
+  if (totals === null) return { widgets: [] };
+
+  /**
+   * A scope with no candidates at all — the three St Marks schools against the
+   * Sep-15 extract, for one — draws both charts EMPTY, which the renderer
+   * shows as "No records available", rather than a headline of "— admitted, 0
+   * of 0" and a by-school card with no widget behind it. Zero candidates is a
+   * true answer and it is stated as one; a card that says its definition is
+   * invalid is a success-shaped failure (§10) for a definition that is fine.
+   */
+  if (totals.candidates === 0) {
+    const bar = funnelBar(totals);
+    return {
+      widgets: [
+        { ...bar, data: [] },
+        {
+          id: 'bar-school-conversion',
+          type: 'bar',
+          title: 'Admitted, as a share of candidates, by school',
+          x: 'school_name',
+          y: 'conversion',
+          x_title: 'School',
+          y_title: 'Admitted, % of candidates',
+          data: [],
+        },
+      ],
+      notes: [`No candidates are recorded for the selected schools in ${ctx.year}. The admission funnel fills only where the school runs its admissions through the ERP.`],
+    };
+  }
+
+  const widgets: Widget[] = [
+    kpi('kpi-funnel-conversion', `Candidates admitted · ${ctx.year}`, funnelConversion(totals), {
+      delta: `${count(totals.admissions)} of ${count(totals.candidates)} candidates`,
+      breakdown: parts([
+        ['Enquired', count(totals.enquiries)],
+        ['Applied', count(totals.applications)],
+        ['Registered', count(totals.registrations)],
+      ]),
+    }),
+    funnelBar(totals),
+  ];
+  const bySchool = schoolFunnelWidgets(merged.sumPerSchool('admission_funnel', [...FUNNEL_FIELDS]), ctx.scope);
+  if (bySchool !== null) widgets.push(bySchool.bar, bySchool.table);
+
+  return {
+    widgets,
+    notes: [
+      'Stages are read from the numbers the ERP issued each candidate, in the order this ERP moves them: enquiry, application, registration, admission. Open the report for the conversion at each stage and where each school loses candidates.',
+    ],
   };
 }
 

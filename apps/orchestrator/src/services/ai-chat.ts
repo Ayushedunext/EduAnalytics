@@ -38,6 +38,8 @@ import {
   type ChartSpec,
   type ChartSpecDraft,
   type DataRow,
+  type ValidationIssue,
+  type ValidationResult,
   type Widget,
   type WidgetDraft,
 } from '@sap/chart-spec';
@@ -162,7 +164,7 @@ export async function runAskAi(args: {
   const client = provider.createClient({ apiKey: keyInfo.apiKey, model: keyInfo.model });
   const systemPrompt = buildSystemPrompt(catalog, scope, seedContext);
 
-  const tools: ProviderTool[] = buildToolDefinitions(schoolIds).map((t) => ({
+  const tools: ProviderTool[] = buildToolDefinitions(schoolIds, seedContext?.queries.map((q) => q.key)).map((t) => ({
     name: t.name,
     description: t.description,
     inputSchema: t.input_schema,
@@ -182,9 +184,21 @@ export async function runAskAi(args: {
 
   let state = client.initialState(question);
   let draft: ChartSpecDraft | null = null;
+  let spec: ChartSpec | null = null;
   let nudged = false;
 
-  for (let iteration = 0; draft === null; iteration += 1) {
+  /** Feeds a rejected emit_report call back to the model so it can retry, same shape for every failure class below. */
+  const rejectEmit = (callId: string, issues: readonly ValidationIssue[]): void => {
+    state = client.withToolOutcomes(state, [
+      {
+        callId,
+        name: 'emit_report',
+        error: `That report was invalid: ${formatIssues(issues)}. Fix it and call emit_report again.`,
+      },
+    ]);
+  };
+
+  for (let iteration = 0; spec === null; iteration += 1) {
     if (iteration >= config.AI_CHAT_MAX_TOOL_CALLS) {
       throw new PlatformError({
         code: ERROR_CODES.AI_PROVIDER_ERROR,
@@ -212,20 +226,47 @@ export async function runAskAi(args: {
     const emitCall = toolCalls.find((c) => c.name === 'emit_report');
     if (emitCall !== undefined) {
       const shapeCheck = validateChartSpecDraft(emitCall.args);
-      const inlineCheck = shapeCheck.ok ? assertNoInlineData(emitCall.args) : shapeCheck;
-      if (shapeCheck.ok && inlineCheck.ok) {
-        draft = shapeCheck.value;
-        break;
+      if (!shapeCheck.ok) {
+        rejectEmit(emitCall.id, shapeCheck.issues);
+        continue;
       }
-      const issues = shapeCheck.ok ? (inlineCheck.ok ? [] : inlineCheck.issues) : shapeCheck.issues;
-      state = client.withToolOutcomes(state, [
-        {
-          callId: emitCall.id,
-          name: 'emit_report',
-          error: `That report was invalid: ${formatIssues(issues)}. Fix it and call emit_report again.`,
-        },
-      ]);
-      continue;
+      const inlineCheck = assertNoInlineData(emitCall.args);
+      if (!inlineCheck.ok) {
+        rejectEmit(emitCall.id, inlineCheck.issues);
+        continue;
+      }
+      // Shape-valid and free of inline data, but a bar/donut widget can still
+      // hydrate into a semantically broken spec — e.g. rows that repeat a
+      // category value (checkWidgetInvariants in packages/chart-spec/src/spec.ts,
+      // the code-side enforcement of docs/05 §2's "one row per category" rule),
+      // or a query_ref that was never run. Fed back the same way a shape
+      // failure already is, so the model gets a chance to fix and re-emit
+      // instead of the turn crashing or a garbled chart reaching the user.
+      const hydrationCheck = tryHydrate(shapeCheck.value, resultCache, scope, correlationId);
+      if (!hydrationCheck.ok) {
+        rejectEmit(emitCall.id, hydrationCheck.issues);
+        continue;
+      }
+      // A refinement whose widget fields match an existing chart on this
+      // report but whose query_ref traces back to SQL that isn't one of the
+      // report's own saved statements — verified against resultCache, never
+      // trusted from the model's tool choice. See checkSeedReuse's docstring.
+      //
+      // Enforced on EVERY attempt, not just the first: a live incident showed
+      // a SECOND attempt (after already being corrected once) still not
+      // reusing the seed query. The false-positive risk (a legitimately
+      // different, same-shaped query gets one extra round-trip) is far
+      // cheaper than the alternative of letting a second silently-wrong
+      // answer through — worst case this loop ends at AI_CHAT_MAX_TOOL_CALLS
+      // with an honest error, never a garbled chart.
+      const reuseIssue = seedContext === undefined ? null : checkSeedReuse(shapeCheck.value, seedContext, resultCache);
+      if (reuseIssue !== null) {
+        rejectEmit(emitCall.id, [reuseIssue]);
+        continue;
+      }
+      draft = shapeCheck.value;
+      spec = hydrationCheck.value;
+      break;
     }
 
     if (toolCalls.length === 0) {
@@ -243,7 +284,13 @@ export async function runAskAi(args: {
     for (const call of toolCalls) {
       toolsInvoked.push(call.name);
       try {
-        const summary = await executeTool(call.name, call.args, { session, correlationId, catalog, resultCache });
+        const summary = await executeTool(call.name, call.args, {
+          session,
+          correlationId,
+          catalog,
+          resultCache,
+          seedQueries: seedContext?.queries,
+        });
         outcomes.push({ callId: call.id, name: call.name, output: summary });
       } catch (err) {
         outcomes.push({
@@ -256,8 +303,17 @@ export async function runAskAi(args: {
     state = client.withToolOutcomes(state, outcomes);
   }
 
+  if (spec === null || draft === null) {
+    // Unreachable: the loop above only exits once both are set together, or by
+    // throwing. Guards the narrowing for TypeScript rather than asserting it away.
+    throw new PlatformError({
+      code: ERROR_CODES.AI_PROVIDER_ERROR,
+      message: 'Ask AI could not build a valid report from that answer.',
+      correlationId,
+    });
+  }
+
   onEvent({ type: 'status', step: 'Building chart' });
-  const spec = hydrate(draft, resultCache, scope, correlationId);
   const queries: AskAiQuery[] = [...resultCache].map(([key, result]) => ({ key, sql: result.sql }));
 
   await auditSink.write({
@@ -338,6 +394,8 @@ export function buildSystemPrompt(
           '',
           "If the user is asking a QUESTION about this chart (e.g. \"why is X higher than Y\"), answer it in the report's narrative and you may re-emit essentially the same chart (same fields, same grouping) with fresh numbers — do not invent a different chart shape just because you were asked something. If the user is asking for a CHANGE (a different chart type, a different filter, a different grouping, a different time range), produce an updated report reflecting that change. Unless the user explicitly asks to add more charts, keep the answer to the SAME NUMBER of widgets as shown above — refining one chart should not turn it into a multi-chart dashboard.",
           '',
+          'If the requested change is ONLY about how the data is drawn (chart type, colours, sort, labels) and the user did not ask for different data (same filters, same scope, same grouping, same time range — "same data" or "same numbers" said explicitly is this case), call reuse_seed_query with the matching seed_query_key INSTEAD of run_query/run_multi — do not retype the SQL shown above yourself, even to copy it exactly, because a retyped copy can silently drift (a simplified WHERE, a dropped join, a "cleaned up" GROUP BY) while still looking plausible, and the user has no way to tell until the numbers stop matching what they were already looking at. Only write new SQL with run_query/run_multi when the request itself changes what is being asked for.',
+          '',
         ]),
     'Rules:',
     '- Call get_dimensions for a school before filtering on a text value (class names, fee heads, categories, …) you have not seen verified for that school — never guess a label.',
@@ -350,7 +408,9 @@ export function buildSystemPrompt(
     '- emit_report widgets reference query_ref, the query_key of the run that will fill them — never put data rows into emit_report; the platform attaches real rows itself. A kpi widget is the only type where you write the display `value` string yourself, and only from a value you were shown.',
     '- Prefer the fewest queries that answer the question.',
     '- If you ran more than one query while narrowing down an answer (a probe, then a corrected version), the query_ref you put in emit_report MUST be the one whose SQL actually matches every filter the user asked for (e.g. "last two years") — never a broader or exploratory query you ran earlier on the way there.',
-    '- A bar or donut widget has ONE flat category axis: every row you attach to it must have a distinct `x` (or `label_field`) value, because the renderer draws one bar/slice per row with no way to tell two identically-labelled rows apart. If comparing the SAME categories across multiple periods or groups (e.g. this year vs last year, month by month), GROUP BY producing one row per category is wrong — use a line widget instead, with `x` as the category and `series` set to the grouping field (e.g. academic year); the renderer draws one coloured line per series value on a shared category axis, which is the only widget type that supports more than one value per category.',
+    '- A bar or donut widget has ONE flat category axis: every row you attach to it must have a distinct `x` (or `label_field`) value, because the renderer draws one bar/slice per row with no way to tell two identically-labelled rows apart. Comparing the SAME categories across two or more measures (billed vs collected, this year vs last year) needs one row PER CATEGORY with one column PER MEASURE, never one row per (category, measure) pair — write that as a pivot (`SUM(CASE WHEN metric = \'Billed\' THEN amount END) AS billed, SUM(CASE WHEN metric = \'Collected\' THEN amount END) AS collected`, `GROUP BY` the category) and you have two valid ways to draw it: a `bar` widget with `series: [{field, label}, ...]` naming those columns (bars grouped per category — this is what "as a bar chart" means for this shape of data, and `series[0].field` must equal `y`), or a `line` widget with `x` as the category and `series` set to the grouping field on LONG-format rows instead (one coloured line per series value). Pick whichever the user asked for; do not silently substitute one for the other.',
+    '- Every query that feeds a bar, line or donut widget MUST end in an explicit ORDER BY on the field that becomes the category axis (the `x` or `label_field`), in its natural sequence — chronological for an academic year/month/date, not alphabetical. GROUP BY does not guarantee row order in MySQL: without an ORDER BY, categories can come back in an arbitrary or partial order (e.g. "2017-18" trailing after "2024-25"), which misleads a reader before they read a single number.',
+    '- A line widget\'s `series` MUST name a CATEGORY column (a handful of repeating labels — a metric name, a fee head, "this year"/"last year") never a measure/value column (an amount, a count) and never a column that is close to unique per row (a date, an id). `series` splits the data into a SMALL number of comparable lines; pointing it at a value column produces one line per number instead of a real comparison.',
     '',
     'Schema:',
     JSON.stringify(catalog, null, 2),
@@ -360,6 +420,12 @@ export function buildSystemPrompt(
 /**
  * Attach real, cached rows onto the draft's widgets by query_ref. Never the
  * model's output. Exported for ai-chat-hydrate.test.ts.
+ *
+ * Throws on failure. `custom-reports.ts`'s replay path and this file's own
+ * tests want exactly that — a persisted report that no longer hydrates is a
+ * genuine error, not something to retry against a live model. The in-turn
+ * emit_report loop in `runAskAi` wants the opposite (a chance for the model
+ * to fix it and call emit_report again), which is what `tryHydrate` is for.
  */
 export function hydrate(
   draft: ChartSpecDraft,
@@ -369,18 +435,7 @@ export function hydrate(
 ): ChartSpec {
   const widgets: Widget[] = draft.widgets.map((w) => hydrateWidget(w, cache, correlationId));
 
-  const spec = {
-    spec_version: 1 as const,
-    title: draft.title,
-    ...(draft.narrative === undefined ? {} : { narrative: draft.narrative }),
-    widgets,
-    meta: {
-      scope,
-      generated_at: new Date().toISOString(),
-      served_from: 'replica' as const,
-    },
-  };
-
+  const spec = buildSpec(draft, widgets, scope);
   const parsed = chartSpecSchema.safeParse(spec);
   if (!parsed.success) {
     throw new PlatformError({
@@ -391,6 +446,134 @@ export function hydrate(
     });
   }
   return parsed.data;
+}
+
+function buildSpec(draft: ChartSpecDraft, widgets: Widget[], scope: readonly { school_id: string; school_name: string }[]) {
+  return {
+    spec_version: 1 as const,
+    title: draft.title,
+    ...(draft.narrative === undefined ? {} : { narrative: draft.narrative }),
+    widgets,
+    meta: {
+      scope,
+      generated_at: new Date().toISOString(),
+      served_from: 'replica' as const,
+    },
+  };
+}
+
+/**
+ * Non-throwing hydrate for the `emit_report` retry loop in `runAskAi`.
+ *
+ * A shape-valid, no-inline-data draft can still hydrate into a semantically
+ * broken spec — a query_ref that was never run, or (the case that prompted
+ * this) a bar/donut widget whose rows repeat a category value, which
+ * `checkWidgetInvariants` in `packages/chart-spec/src/spec.ts` now rejects.
+ * Both failure classes are surfaced as `ValidationIssue`s here so the caller
+ * can feed them back to the model as an emit_report error and let it retry,
+ * exactly like a shape-invalid draft already does, instead of either
+ * crashing the turn or silently handing the user a garbled chart.
+ */
+export function tryHydrate(
+  draft: ChartSpecDraft,
+  cache: ReadonlyMap<string, CachedResult>,
+  scope: readonly { school_id: string; school_name: string }[],
+  correlationId: string,
+): ValidationResult<ChartSpec> {
+  const widgets: Widget[] = [];
+  for (const w of draft.widgets) {
+    if (w.type !== 'kpi' && !cache.has(w.query_ref)) {
+      const issue: ValidationIssue = {
+        path: `widgets.${w.id}.query_ref`,
+        message: `query_ref "${w.query_ref}" was never run`,
+      };
+      return { ok: false, issues: [issue] };
+    }
+    widgets.push(hydrateWidget(w, cache, correlationId));
+  }
+
+  const parsed = chartSpecSchema.safeParse(buildSpec(draft, widgets, scope));
+  if (!parsed.success) {
+    return {
+      ok: false,
+      issues: parsed.error.issues.map((i) => ({
+        path: i.path.length === 0 ? '<root>' : i.path.join('.'),
+        message: i.message,
+      })),
+    };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/**
+ * The fields that make two cartesian/donut widgets "about the same data" —
+ * `undefined` for kpi/table, which this check does not apply to.
+ */
+function shapeKey(widget: {
+  readonly type: string;
+  readonly x?: string;
+  readonly y?: string;
+  readonly label_field?: string;
+  readonly value_field?: string;
+}): string | undefined {
+  if ((widget.type === 'bar' || widget.type === 'line') && widget.x !== undefined && widget.y !== undefined) {
+    return `${widget.x}|${widget.y}`;
+  }
+  if (widget.type === 'donut' && widget.label_field !== undefined && widget.value_field !== undefined) {
+    return `${widget.label_field}|${widget.value_field}`;
+  }
+  return undefined;
+}
+
+/**
+ * Catches a refinement that quietly rewrote the data instead of reusing it —
+ * the bug that prompted `reuse_seed_query` (ai-tools.ts) to exist in the
+ * first place. A prompt instruction to prefer that tool is not enforcement:
+ * a live incident showed the model still writing fresh SQL for a "same data,
+ * different chart type" request, and the fresh SQL was wrong (a different
+ * total, a narrower year range, no deterministic order) — silently, with
+ * nothing to say so.
+ *
+ * This checks the OUTCOME rather than trusting the tool choice: if an
+ * emitted widget's `x`/`y` (or `label_field`/`value_field`) matches an
+ * existing widget on the report being refined, its query_ref's actual SQL
+ * text (from `resultCache`, never from the model) MUST match one of the
+ * report's own seeded queries verbatim. A widget whose fields say "this is
+ * the same chart" but whose SQL was never one of the report's own statements
+ * is exactly the failure mode observed — reject it and let the retry loop
+ * point the model at `reuse_seed_query` instead of accepting silently wrong
+ * numbers. A widget with fields that don't match anything seeded is a
+ * genuinely new question and passes through untouched.
+ */
+export function checkSeedReuse(
+  draft: ChartSpecDraft,
+  seedContext: RefineSeedContext,
+  cache: ReadonlyMap<string, CachedResult>,
+): ValidationIssue | null {
+  const seedShapes = new Set(
+    seedContext.widgets.map((w) => shapeKey(w)).filter((k): k is string => k !== undefined),
+  );
+  if (seedShapes.size === 0) return null;
+  const seedSqls = new Set(seedContext.queries.map((q) => q.sql.trim()));
+
+  for (const widget of draft.widgets) {
+    const key = shapeKey(widget);
+    if (key === undefined || !seedShapes.has(key)) continue;
+    if (widget.type === 'kpi') continue;
+    const result = cache.get(widget.query_ref);
+    if (result === undefined || seedSqls.has(result.sql.trim())) continue;
+    return {
+      path: `widgets.${widget.id}.query_ref`,
+      message:
+        `this widget's fields ("${key}") match an existing chart on the report being refined, but its ` +
+        `query_ref ("${widget.query_ref}") does not reuse any of the report's saved queries verbatim — ` +
+        'it looks like new SQL was written for what should be the same data. If you mean to show the SAME ' +
+        'data, call reuse_seed_query with the matching seed_query_key instead of run_query/run_multi; do not ' +
+        'retype the SQL yourself, even to copy it. If this genuinely is different data, change what the ' +
+        'query asks for so the fields reflect that.',
+    };
+  }
+  return null;
 }
 
 export function hydrateWidget(
@@ -420,6 +603,8 @@ export function hydrateWidget(
         x: widget.x,
         y: widget.y,
         data: rows,
+        ...(widget.series === undefined ? {} : { series: widget.series }),
+        ...(widget.stacked === undefined ? {} : { stacked: widget.stacked }),
       };
     case 'line':
       return {

@@ -87,8 +87,27 @@ function okMulti(rows: (Record<string, unknown> & { school_id: string })[]) {
   };
 }
 
-/** Queued in call order: students, staff, outstanding, attendance (services/home.ts). */
+/**
+ * Queued in call order: students, staff, outstanding, attendance, admissions
+ * (services/home.ts). The fifth is read for its YEARS only (2026-09-17) and a
+ * test that does not queue it gets `unanswered()` — no school answered, so it
+ * contributes nothing — which keeps every four-entry queue below meaning what
+ * it did.
+ */
 let queue: unknown[] = [];
+
+function unanswered() {
+  return {
+    rows: [],
+    columns: [],
+    truncated: false,
+    masked_columns: [],
+    per_school: [] as SchoolStatus[],
+    schools_succeeded: 0,
+    schools_failed: 0,
+    as_of: '2026-08-19T10:00:00.000Z',
+  };
+}
 
 vi.mock('../src/mcp/client.js', () => ({
   withMcp: async (
@@ -100,7 +119,7 @@ vi.mock('../src/mcp/client.js', () => ({
     let index = 0;
     return fn({
       call: (_tool: string) => {
-        const next = queue[index];
+        const next = queue[index] ?? unanswered();
         index += 1;
         return Promise.resolve(next);
       },
@@ -172,6 +191,43 @@ function kpis(spec: { widgets: { type: string }[] }) {
 
 beforeEach(() => {
   queue = [];
+});
+
+/**
+ * A scope with candidates and no roll yet — a school whose admissions run in
+ * the ERP ahead of its enrolment (the 2026-09-15 extract carries 37 of them).
+ * The strip must still name a year, or no card on the Dashboard can load.
+ */
+describe('the academic year falls back to admissions when the roll and the fee book name none', () => {
+  it('opens on the year the candidates were admitted for, and offers it', async () => {
+    queue = [
+      ok([]),
+      ok([{ stafftype: 'Permanent', n: 12 }]),
+      ok([]),
+      ok([]),
+      ok([{ ay: '2026-27', n: 8516 }, { ay: '2027-28', n: 1257 }]),
+    ];
+
+    const summary = await build();
+
+    expect(summary.academic_year).toBe('2027-28');
+    expect(summary.academic_years).toEqual(['2027-28', '2026-27']);
+  });
+
+  it('still prefers the roll’s year when the roll has one', async () => {
+    queue = [
+      ok([{ ay: '2025-26', gender: 'Girl', n: 100 }]),
+      ok([{ stafftype: 'Permanent', n: 12 }]),
+      ok([]),
+      ok([]),
+      ok([{ ay: '2026-27', n: 8516 }]),
+    ];
+
+    const summary = await build();
+
+    expect(summary.academic_year).toBe('2025-26');
+    expect(summary.academic_years).toEqual(['2026-27', '2025-26']);
+  });
 });
 
 describe('a metric that could not be read is never rendered as a number', () => {

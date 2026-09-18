@@ -1321,7 +1321,33 @@ const STUDENT_STAFF_RATIO: PredefinedReport = {
  * Rail 6 masks a column by its ORIGIN, so an aggregate is not masked — correct
  * here, and worth knowing before someone adds a raw identifier column to this
  * report and assumes masking will cover it.
+ *
+ * -- The order of the stages is the ERP's, not the English word order ---------
+ * Measured on the 2026-09-15 extract (37 schools, 19,942 candidates): a
+ * candidate applies BEFORE registering. 2,956 candidates hold an application
+ * number and no registration number, none the reverse, and in every one of the
+ * 369 candidates with both dates recorded the registration follows the
+ * application (12.8 days later on average). The funnel is therefore enquiry →
+ * application → registration → admission, and `ADMISSION_STAGES` in
+ * services/dashboards.ts draws it in that order. The column order below is
+ * immaterial to the SQL and is left as it was.
  */
+
+/**
+ * The one statement behind every funnel figure — on the report AND on the
+ * Dashboard card (`DASHBOARD_OVERVIEW.admission_funnel`). Shared as a constant
+ * so the two cannot drift: the card's Print and per-widget Clone rebuild the
+ * REPORT by widget id (docs/06 §3, overview/cards.tsx `verifiedReportWidget`),
+ * which is only honest while the card's numbers are the report's numbers.
+ */
+const ADMISSION_FUNNEL_SQL =
+  'SELECT COUNT(*) AS candidates, ' +
+  "SUM(CASE WHEN enquiryno IS NOT NULL AND enquiryno <> '' THEN 1 ELSE 0 END) AS enquiries, " +
+  "SUM(CASE WHEN registrationno IS NOT NULL AND registrationno <> '' THEN 1 ELSE 0 END) AS registrations, " +
+  "SUM(CASE WHEN applicationno IS NOT NULL AND applicationno <> '' THEN 1 ELSE 0 END) AS applications, " +
+  "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
+  'FROM students_admission_data_set WHERE academicyearname = :academic_year';
+
 const ADMISSIONS_FUNNEL: PredefinedReport = {
   id: 'admissions-funnel',
   title: 'Admissions Funnel',
@@ -1332,14 +1358,9 @@ const ADMISSIONS_FUNNEL: PredefinedReport = {
   queries: [
     {
       key: 'funnel',
-      description: 'Candidates reaching each stage, inferred from the numbers the ERP issued',
-      sql:
-        'SELECT COUNT(*) AS candidates, ' +
-        "SUM(CASE WHEN enquiryno IS NOT NULL AND enquiryno <> '' THEN 1 ELSE 0 END) AS enquiries, " +
-        "SUM(CASE WHEN registrationno IS NOT NULL AND registrationno <> '' THEN 1 ELSE 0 END) AS registrations, " +
-        "SUM(CASE WHEN applicationno IS NOT NULL AND applicationno <> '' THEN 1 ELSE 0 END) AS applications, " +
-        "SUM(CASE WHEN admissionno IS NOT NULL AND admissionno <> '' THEN 1 ELSE 0 END) AS admissions " +
-        'FROM students_admission_data_set WHERE academicyearname = :academic_year',
+      description:
+        'Candidates reaching each stage — enquiry, application, registration, admission — inferred from the numbers the ERP issued',
+      sql: ADMISSION_FUNNEL_SQL,
     },
     {
       key: 'by_class',
@@ -2914,6 +2935,22 @@ const DASHBOARD_OVERVIEW: PredefinedReport = {
         'WHERE academicyearname = :academic_year AND deactivation_date IS NULL ' +
         "AND isOldStudent = 'No' " +
         'GROUP BY gender ORDER BY students DESC',
+    },
+    /**
+     * The admission funnel, for the Dashboard's funnel card (2026-09-17).
+     *
+     * Byte-identical to Admissions Funnel's own `funnel` statement, by sharing
+     * the constant rather than by copying it — see `ADMISSION_FUNNEL_SQL`. The
+     * card offers Print and per-chart Clone, both of which rebuild the REPORT's
+     * widget, and that is only honest while this statement IS the report's.
+     * One row per school; the orchestrator sums the scope for the funnel and
+     * keeps the rows apart for the by-school reading beside it.
+     */
+    {
+      key: 'admission_funnel',
+      description:
+        'Candidates reaching each admission stage — enquiry, application, registration, admission — inferred from the numbers the ERP issued',
+      sql: ADMISSION_FUNNEL_SQL,
     },
     {
       key: 'fees',

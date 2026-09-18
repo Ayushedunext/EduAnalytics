@@ -23,7 +23,14 @@
  * at 25 schools by the MCP layer.
  */
 
-import { chartSpecSchema, type ChartSpec, type Tone, type Widget } from '@sap/chart-spec';
+import {
+  chartSpecSchema,
+  type BarWidget,
+  type ChartSpec,
+  type TableWidget,
+  type Tone,
+  type Widget,
+} from '@sap/chart-spec';
 import { ERROR_CODES, PlatformError } from '@sap/shared';
 import type { SessionClaims } from '../auth/session.js';
 import { withMcp } from '../mcp/client.js';
@@ -431,6 +438,10 @@ export const WIDGET_QUERY_KEYS: Partial<Record<DashboardId, Readonly<Record<stri
     'bar-school-admissions': 'new_by_class',
     'bar-new-class': 'new_by_class',
     'bar-funnel': 'funnel',
+    /** The funnel's step conversions and its by-school reading: the same statement, re-grouped (2026-09-17). */
+    'table-funnel': 'funnel',
+    'bar-school-conversion': 'funnel',
+    'table-school-funnel': 'funnel',
     'bar-class': 'by_class',
     'table-class': 'by_class',
     'donut-gender': 'by_gender',
@@ -695,6 +706,11 @@ export const DASHBOARD_PREVIEW: Partial<Record<DashboardId, DashboardPreview>> =
   /* The gender mix of the roll. A split of a whole, which is a ring; the
      headcount itself is already the first tile in the strip above. */
   'enrollment-overview': { query: 'by_gender', widget_id: 'donut-gender', kind: 'donut' },
+  /* The funnel itself — candidates reaching each stage — rather than the drill
+     entry (new admissions by school), which the Dashboard's own tile already
+     shows. Where the pipeline leaks is the question a Student module card is
+     opened for, and one bar per school does not answer it (2026-09-17). */
+  'admissions-funnel': { query: 'funnel', widget_id: 'bar-funnel', kind: 'bar' },
 };
 
 /**
@@ -3929,13 +3945,7 @@ function buildAdmissionsFunnel(merged: Merged, { year, scope }: BuildContext): D
   /** Non-null by construction; test/drill.test.ts asserts the table is honest. */
   const path = DRILL_PATHS['admissions-funnel'] as DrillPath;
 
-  const funnel = merged.sumAll('funnel', [
-    'candidates',
-    'enquiries',
-    'registrations',
-    'applications',
-    'admissions',
-  ]);
+  const funnel = funnelTotals(merged.sumAll('funnel', [...FUNNEL_FIELDS]));
   const byClass = merged.sumBy('by_class', 'classname', ['candidates', 'admissions'], 'seq');
   const byStatus = merged.sumBy('by_status', 'candidate_statusid', ['candidates']);
   const byGender = merged.sumBy('by_gender', 'gender', ['candidates', 'admissions']);
@@ -3998,39 +4008,39 @@ function buildAdmissionsFunnel(merged: Merged, { year, scope }: BuildContext): D
   }
 
   if (funnel !== null) {
-    const candidates = num(funnel['candidates']);
-    const admissions = num(funnel['admissions']);
     widgets.push(
       {
         id: 'kpi-candidates',
         type: 'kpi',
         label: `Candidates · ${year}`,
-        value: count(candidates),
+        value: count(funnel.candidates),
         tone: 'neutral',
       },
-      { id: 'kpi-admitted', type: 'kpi', label: 'Admitted', value: count(admissions), tone: 'positive' },
+      { id: 'kpi-admitted', type: 'kpi', label: 'Admitted', value: count(funnel.admissions), tone: 'positive' },
+      /**
+       * "Candidates admitted", not "Enquiry to admission" (renamed 2026-09-17):
+       * the denominator is every candidate, and a candidate is not always an
+       * enquiry — some schools start a family at the application form and
+       * issue no enquiry number at all.
+       */
       {
         id: 'kpi-conversion',
         type: 'kpi',
-        label: 'Enquiry to admission',
-        value: candidates > 0 ? `${((admissions / candidates) * 100).toFixed(1)}%` : '—',
+        label: 'Candidates admitted',
+        value: funnelConversion(funnel),
         tone: 'neutral',
       },
     );
 
-    widgets.push({
-      id: 'bar-funnel',
-      type: 'bar',
-      title: 'Candidates reaching each stage',
-      x: 'stage',
-      y: 'candidates',
-      data: [
-        { stage: 'Enquiry', candidates: num(funnel['enquiries']) },
-        { stage: 'Registration', candidates: num(funnel['registrations']) },
-        { stage: 'Application', candidates: num(funnel['applications']) },
-        { stage: 'Admission', candidates: admissions },
-      ],
-    });
+    widgets.push(funnelBar(funnel), funnelTable(funnel));
+
+    /**
+     * The by-school reading is the same statement kept apart per school
+     * rather than a query of its own — the fan-out already answered once per
+     * school, and `sumPerSchool` reads that instead of scanning again.
+     */
+    const bySchool = schoolFunnelWidgets(merged.sumPerSchool('funnel', [...FUNNEL_FIELDS]), scope);
+    if (bySchool !== null) widgets.push(bySchool.bar, bySchool.table);
   }
 
   if (byClass.length > 0) {
@@ -4105,8 +4115,194 @@ function buildAdmissionsFunnel(merged: Merged, { year, scope }: BuildContext): D
     notes: [
       'New admissions is counted off the roll — students the ERP marks as new to the school this academic year — and not off the funnel below it. The two answer different questions and will not agree: a school that does not issue admission numbers through the ERP has a full roll and an empty funnel.',
       'The stages are read from the numbers the ERP issued each candidate — an enquiry number means the enquiry stage was reached, an admission number means admitted. The table has no stage column and no stage dates, so this is a reading of the data rather than a field in it.',
+      'The stages are in the order this ERP moves a candidate through them: enquiry, application, registration, admission. A candidate applies before registering — the extract holds candidates with an application number and no registration number, never the reverse.',
+      'Some schools start a family at the application form and issue no enquiry number, so their enquiry stage reads lower than their application stage. Compare schools on admitted as a share of candidates; read a stage-to-stage drop only where the school logs the earlier stage.',
       'Status ids are shown as ids because no status lookup was supplied with this dataset. Compare them against the inferred stages above rather than assuming the two agree.',
     ],
+  };
+}
+
+// -- The admission funnel, shared by the report and the Dashboard card ----------------
+
+/**
+ * The funnel's stages, in the order this ERP moves a candidate through them.
+ *
+ * Application comes BEFORE registration. That is not the English word order,
+ * and it was measured rather than assumed (mcp-server/reports/catalog.ts,
+ * ADMISSIONS_FUNNEL): candidates hold an application number without a
+ * registration number, never the reverse, and every dated pair registers after
+ * applying. Drawn in word order the funnel rises in the middle, which reads as a
+ * data error and is a stage order error.
+ *
+ * `field` is the column the `funnel` statement counts the stage under.
+ */
+export const ADMISSION_STAGES: readonly { stage: string; field: Exclude<keyof FunnelTotals, 'candidates'> }[] = [
+  { stage: 'Enquiry', field: 'enquiries' },
+  { stage: 'Application', field: 'applications' },
+  { stage: 'Registration', field: 'registrations' },
+  { stage: 'Admission', field: 'admissions' },
+];
+
+/** Every column the `funnel` statement answers with, for `sumAll` and `sumPerSchool`. */
+export const FUNNEL_FIELDS = ['candidates', 'enquiries', 'applications', 'registrations', 'admissions'] as const;
+
+export interface FunnelTotals {
+  readonly candidates: number;
+  readonly enquiries: number;
+  readonly applications: number;
+  readonly registrations: number;
+  readonly admissions: number;
+}
+
+export function funnelTotals(row: Record<string, unknown> | null): FunnelTotals | null {
+  if (row === null) return null;
+  return {
+    candidates: num(row['candidates']),
+    enquiries: num(row['enquiries']),
+    applications: num(row['applications']),
+    registrations: num(row['registrations']),
+    admissions: num(row['admissions']),
+  };
+}
+
+/**
+ * Admitted as a share of ALL candidates — the one figure every funnel surface
+ * leads with. Over candidates rather than over enquiries because a candidate
+ * is not always an enquiry (see the report's notes), and a rate whose
+ * denominator a school can shrink by skipping a stage is not a rate.
+ */
+export function funnelConversion(t: FunnelTotals): string {
+  return stageShare(t.admissions, t.candidates);
+}
+
+function stageShare(reached: number, of: number): string {
+  return of > 0 ? `${((reached / of) * 100).toFixed(1)}%` : '—';
+}
+
+/**
+ * The funnel bar. The SAME widget on the report and on the Dashboard card —
+ * same id, same title, same rows from the same statement — which is what lets
+ * the card offer Print and per-chart Clone (overview/cards.tsx
+ * `verifiedReportWidget`): both rebuild the report by this id.
+ */
+export function funnelBar(t: FunnelTotals): BarWidget {
+  return {
+    id: 'bar-funnel',
+    type: 'bar',
+    title: 'Candidates reaching each stage',
+    x: 'stage',
+    y: 'candidates',
+    x_title: 'Stage',
+    y_title: 'Candidates',
+    data: ADMISSION_STAGES.map((s) => ({ stage: s.stage, candidates: t[s.field] })),
+  };
+}
+
+/**
+ * Step conversions as a table, because the bar renderer has no per-bar
+ * annotation and a funnel's finding IS the step — "71% of enquiries applied" —
+ * not the four heights. Server-formatted like every figure (ADR-021).
+ */
+export function funnelTable(t: FunnelTotals): TableWidget {
+  return {
+    id: 'table-funnel',
+    type: 'table',
+    title: 'Conversion at each stage',
+    columns: [
+      { field: 'stage', label: 'Stage' },
+      { field: 'candidates', label: 'Candidates', align: 'right' },
+      { field: 'of_previous', label: 'Of previous stage', align: 'right' },
+      { field: 'of_all', label: 'Of all candidates', align: 'right' },
+    ],
+    rows: ADMISSION_STAGES.map((s, i) => {
+      const previous = i === 0 ? undefined : ADMISSION_STAGES[i - 1];
+      return {
+        stage: s.stage,
+        candidates: t[s.field],
+        of_previous: previous === undefined ? '—' : stageShare(t[s.field], t[previous.field]),
+        of_all: stageShare(t[s.field], t.candidates),
+      };
+    }),
+  };
+}
+
+/**
+ * The step where a school loses the largest share of the candidates that
+ * reached it. A stage the school never logs (zero reached) cannot be where it
+ * loses anyone, so that step is skipped rather than reported as a 100% loss
+ * into it — the note on the report says why some schools have no enquiries.
+ */
+function biggestDrop(t: FunnelTotals): string {
+  let worst: { label: string; kept: number } | undefined;
+  for (let i = 1; i < ADMISSION_STAGES.length; i += 1) {
+    const from = ADMISSION_STAGES[i - 1];
+    const to = ADMISSION_STAGES[i];
+    if (from === undefined || to === undefined || t[from.field] <= 0) continue;
+    const kept = t[to.field] / t[from.field];
+    if (worst === undefined || kept < worst.kept) worst = { label: `${from.stage} → ${to.stage}`, kept };
+  }
+  return worst === undefined ? '—' : `${worst.label} · keeps ${(worst.kept * 100).toFixed(0)}%`;
+}
+
+/**
+ * The by-school reading of the funnel: admitted as a share of candidates, one
+ * bar per school, ranked; and a table naming each school's biggest drop.
+ *
+ * Not drillable anywhere it is drawn. On the report the curated path descends
+ * from new admissions (the roll), not from the funnel; on the Dashboard there
+ * is no drill endpoint at all (services/overview.ts).
+ */
+export function schoolFunnelWidgets(
+  perSchool: readonly { school_id: string; totals: Record<string, number> }[],
+  scope: readonly { school_id: string; school_name: string }[],
+): { bar: BarWidget; table: TableWidget } | null {
+  const schoolName = new Map(scope.map((entry) => [entry.school_id, entry.school_name]));
+  const rows = perSchool
+    .flatMap((entry) => {
+      const t = funnelTotals(entry.totals);
+      return t === null || t.candidates <= 0 ? [] : [{ school_name: schoolName.get(entry.school_id) ?? entry.school_id, t }];
+    })
+    .map((r) => ({ ...r, conversion: Math.round((r.t.admissions / r.t.candidates) * 1000) / 10 }))
+    .sort((a, b) => b.conversion - a.conversion);
+  if (rows.length === 0) return null;
+
+  return {
+    bar: {
+      id: 'bar-school-conversion',
+      type: 'bar',
+      title: 'Admitted, as a share of candidates, by school',
+      x: 'school_name',
+      y: 'conversion',
+      x_title: 'School',
+      y_title: 'Admitted, % of candidates',
+      data: rows.map((r) => ({ school_name: r.school_name, conversion: r.conversion })),
+    },
+    table: {
+      id: 'table-school-funnel',
+      type: 'table',
+      title: 'Where each school loses candidates',
+      columns: [
+        { field: 'school_name', label: 'School' },
+        { field: 'candidates', label: 'Candidates', align: 'right' },
+        { field: 'enquiries', label: 'Enquired', align: 'right' },
+        { field: 'applications', label: 'Applied', align: 'right' },
+        { field: 'registrations', label: 'Registered', align: 'right' },
+        { field: 'admissions', label: 'Admitted', align: 'right' },
+        { field: 'admitted_share', label: 'Admitted, % of candidates', align: 'right', sort_field: 'conversion' },
+        { field: 'biggest_drop', label: 'Biggest drop' },
+      ],
+      rows: rows.map((r) => ({
+        school_name: r.school_name,
+        candidates: r.t.candidates,
+        enquiries: r.t.enquiries,
+        applications: r.t.applications,
+        registrations: r.t.registrations,
+        admissions: r.t.admissions,
+        admitted_share: funnelConversion(r.t),
+        conversion: r.conversion,
+        biggest_drop: biggestDrop(r.t),
+      })),
+    },
   };
 }
 

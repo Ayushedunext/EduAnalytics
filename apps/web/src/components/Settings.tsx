@@ -72,7 +72,7 @@ export function Settings({ session, onAiStatusChange }: Props): JSX.Element {
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[980px]">
+      <div className="px-7 py-6 max-w-[1900px]">
         <h1 className="page-title">Settings · AI &amp; Messaging</h1>
 
         {error !== null && <div className="notice mt-4">{error}</div>}

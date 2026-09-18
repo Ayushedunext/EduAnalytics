@@ -153,7 +153,7 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1100px]">
+      <div className="px-7 py-6 max-w-[1900px]">
         <div className="reportsHead">
           <div className="min-w-0">
             <h1 className="page-title">Schedule</h1>

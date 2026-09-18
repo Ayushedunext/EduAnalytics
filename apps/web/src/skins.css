@@ -27,7 +27,12 @@
   font-family: Poppins, system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.45;
 }
 .skin--B { font-family: Nunito, Poppins, system-ui, sans-serif; }
-.skin .app { max-width: 1360px; margin: 0 auto; padding: 18px 18px 40px; }
+/* 1900px, matching the per-page max-w-[1900px] caps (DashboardPage.tsx,
+   Modules.tsx, MyReports.tsx, ReportEditor.tsx) -- this wraps every route via
+   Shell.tsx, so a narrower cap here overrides those and strands the grid at a
+   reading-column width on any wide monitor regardless of what each page asks
+   for. */
+.skin .app { max-width: 1900px; margin: 0 auto; padding: 18px 18px 40px; }
 .skin svg.i { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.12em; flex-shrink: 0; }
 .skin button:focus-visible, .skin select:focus-visible, .skin input:focus-visible, .skin a:focus-visible { outline: 2px solid var(--c0); outline-offset: 2px; }
 

@@ -140,7 +140,7 @@ function AgentsHome({
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1400px]">
+      <div className="px-7 py-6 max-w-[1900px]">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
           <div>
             <h1 className="page-title">Workflow Agents</h1>
@@ -317,7 +317,7 @@ function AgentRunsView({
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1400px]">
+      <div className="px-7 py-6 max-w-[1900px]">
         <div className="flex items-center gap-3 flex-wrap mb-1">
           <button type="button" className="btn btnGhost" onClick={onBack}>← Agents</button>
           <h1 className="page-title" style={{ marginBottom: 0 }}>{agentName} — Runs & History</h1>
@@ -529,7 +529,7 @@ function AgentBuilder({
 
   return (
     <main className="flex-1 overflow-y-auto">
-      <div className="px-7 py-6 max-w-[1400px]">
+      <div className="px-7 py-6 max-w-[1900px]">
         <div className="flex items-center gap-3 flex-wrap mb-1">
           <button type="button" className="btn btnGhost" onClick={onBack}>← Agents</button>
           <input

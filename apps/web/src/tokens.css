@@ -1784,7 +1784,11 @@ body {
 .stepBody { flex: 1; min-width: 0; }
 .stepTitle { font-size: 14px; font-weight: 600; color: var(--color-text-primary); margin: 3px 0 6px; }
 .stepMuted { font-weight: 400; color: var(--color-text-muted); }
-.stepText { font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.7; margin: 0; }
+/* Capped independently of .stepCard's own width: the card is free to grow and
+   fill a wide page (so it reads as a full box, not a column stranded in dead
+   space), but a paragraph stretched to that same width is a much harder read
+   -- prose keeps its own measure regardless of what the box around it does. */
+.stepText { font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.7; margin: 0; max-width: 640px; }
 .stepText code {
   background: var(--color-surface-sunken); border-radius: 4px; padding: 1px 5px; font-size: 12px;
 }

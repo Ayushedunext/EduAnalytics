@@ -14,6 +14,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import { config, isProduction } from './config.js';
 import { assertPlatformDbReachable } from './db/platform-db.js';
+import { ensureAgentTables } from './db/agents-schema-bootstrap.js';
 import { pruneExpiredNonces } from './auth/nonce.js';
 import { withCorrelationId, requireSession } from './middleware/context.js';
 import { requireCsrfToken } from './middleware/csrf.js';
@@ -118,6 +119,9 @@ app.use(errorHandler);
 
 await assertPlatformDbReachable();
 console.log('[orchestrator] platform DB reachable');
+
+await ensureAgentTables();
+console.log('[orchestrator] agent tables present');
 
 const pruned = await pruneExpiredNonces();
 if (pruned > 0) console.log(`[orchestrator] pruned ${pruned} expired launch nonces`);

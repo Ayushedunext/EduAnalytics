@@ -50,6 +50,7 @@ import {
   throttleRecordFailure,
 } from './logins.js';
 import { esc, loginPage } from './login-page.js';
+import { toErpLaunchClaims } from './launch-claims.js';
 
 /**
  * The repo-root `.env`, named explicitly -- the same file, loaded the same way,
@@ -388,6 +389,67 @@ async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<v
   sendHtml(res, 200, handoffPage(await signFor(identity.key, 'none')));
 }
 
+/**
+ * GET /rest/analytics/erp/launchClaims -- the ERP's OTHER integration shape.
+ *
+ * The path is the real one, so pointing the orchestrator at the live ERP is a
+ * change of host and nothing else. Where the signed path pushes a token to the
+ * platform, this one waits to be called: the orchestrator fetches claims with a
+ * bearer token, which is token introspection (launch-claims.ts explains what is
+ * reproduced and why).
+ *
+ * The bearer token here IS the identity key -- `Bearer director`. The real
+ * ERP's token is opaque and resolved against their session store, but HOW that
+ * token reaches the platform at menu-click time is the one piece of the
+ * integration the ERP team has not specified. Rather than invent a handoff that
+ * is theirs to design, the stub short-circuits it and models only the part that
+ * is known: the call, its headers, and the response.
+ *
+ * PICKER MODE ONLY, for the reason the 404 below already gives for
+ * /launch-analytics: this endpoint hands out a Director's claims to anyone who
+ * can name an identity, so leaving it reachable in login mode would make the
+ * password form decorative. Staging uses the signed path, which is the one the
+ * platform is actually meant to ship.
+ */
+function handleLaunchClaims(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  const header = req.headers.authorization ?? '';
+  const bearer = header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';
+  const identity = findIdentity(bearer);
+
+  const sendJson = (status: number, body: unknown): void => {
+    res.writeHead(status, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    res.end(JSON.stringify(body, null, 2));
+  };
+
+  if (identity === undefined) {
+    console.warn('[erp-stub] launchClaims: unknown or missing bearer identity');
+    // Shape unknown: the ERP team has not said what their endpoint returns on a
+    // bad token (one of the open questions). A bare 401 is the safe placeholder
+    // -- the platform must treat any non-200 as "no launch" regardless.
+    sendJson(401, { error: 'unauthorized' });
+    return;
+  }
+
+  /**
+   * The real request carries `database: <opaque handle>`. Logged, not enforced:
+   * whether it selects a school, an org or a physical database is still an open
+   * question, and a stub that rejected the wrong value would be inventing a
+   * contract rather than reproducing one.
+   */
+  const database = req.headers['database'];
+  const expired = url.searchParams.get('fault') === 'expired';
+
+  console.log(
+    '[erp-stub] launchClaims for ' + identity.key +
+      ' (database=' + (typeof database === 'string' ? database : 'absent') + ')' +
+      (expired ? ' [fault=expired]' : ''),
+  );
+  sendJson(200, toErpLaunchClaims(identity, { expired }));
+}
+
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? '/', 'http://localhost:' + String(PORT));
 
@@ -424,6 +486,11 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     // all. A front door with an unlocked side entrance is not a front door.
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
+    return;
+  }
+
+  if (url.pathname === '/rest/analytics/erp/launchClaims') {
+    handleLaunchClaims(req, res, url);
     return;
   }
 
@@ -491,4 +558,10 @@ server.listen(PORT, BIND_HOST, () => {
   console.log('[erp-stub] JWKS at  http://' + BIND_HOST + ':' + String(PORT) + '/.well-known/jwks.json');
   console.log('[erp-stub] key id   ' + keys.kid);
   console.log('[erp-stub] launch   ' + LAUNCH_URL);
+  if (MODE === 'picker') {
+    console.log(
+      '[erp-stub] claims   http://' + BIND_HOST + ':' + String(PORT) +
+        '/rest/analytics/erp/launchClaims  (Authorization: Bearer <identity>)',
+    );
+  }
 });

@@ -5,8 +5,8 @@
 # `npm ci` and four chances for them to drift apart.
 #
 #   deps         -- the workspace's node_modules, cached on the lockfile alone
-#   packages     -- @sap/shared and @sap/chart-spec compiled to dist/
-#   service      -- orchestrator / mcp-server / erp-stub (no browser)
+#   packages     -- the four shared packages compiled to dist/
+#   service      -- mcp-server / agent-runtime / erp-stub (no browser)
 #   orchestrator -- service + Chromium, for PDF export
 #   web-build    -- compiles the SPA bundle
 #   web          -- a static file server holding that bundle
@@ -19,8 +19,8 @@
 # the deployment. When there is a production build target, it belongs in a
 # sibling stage and CI should publish it -- not in a hand-edited staging file.
 #
-# The two SHARED PACKAGES are the exception, and are compiled -- not as a policy
-# choice but because they publish themselves that way. Both declare
+# The SHARED PACKAGES are the exception, and are compiled -- not as a policy
+# choice but because they publish themselves that way. All four declare
 # `"main": "./dist/index.js"`, so importing them resolves to dist/ regardless of
 # what is running the importer. See the `packages` stage.
 #
@@ -32,13 +32,34 @@ FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 
 # Manifests only, so that editing a source file does not invalidate the install
-# layer. Every workspace's package.json must be present before `npm ci` -- npm
-# resolves the whole tree at once and fails on a workspace it cannot find.
+# layer. EVERY workspace's package.json must be listed here -- this list is not
+# derived from anything, so a new workspace is invisible to it until somebody
+# adds a line.
+#
+# The original note here said npm "fails on a workspace it cannot find". It does
+# not, and that is the dangerous part: `npm ci` succeeds and reports a plausible
+# package count. What it silently omits is the ABSENT workspace's own tree --
+# measured on 2026-09-21, `apps/agent-runtime/node_modules` came out empty while
+# every listed workspace's was populated, so that service could not have started
+# in this image no matter what the compose file asked it to do.
+#
+# (Other workspaces are unaffected: this lockfile nests `drizzle-orm` under each
+# workspace that declares it rather than hoisting it, so the orchestrator
+# resolves its own copy and always did. Check from the workspace directory, not
+# from /app -- resolving from the root reports a false failure.)
+#
+# If you add a workspace, add it here, and prove it:
+#
+#     docker build -f deploy/staging/Dockerfile --target deps -t t .
+#     docker run --rm t sh -c 'ls apps/<new>/node_modules | wc -l'   # not 0
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json      packages/shared/
 COPY packages/chart-spec/package.json  packages/chart-spec/
+COPY packages/agent-graph/package.json packages/agent-graph/
+COPY packages/mailer/package.json      packages/mailer/
 COPY apps/orchestrator/package.json    apps/orchestrator/
 COPY apps/mcp-server/package.json      apps/mcp-server/
+COPY apps/agent-runtime/package.json   apps/agent-runtime/
 COPY apps/web/package.json             apps/web/
 COPY tools/erp-stub/package.json       tools/erp-stub/
 
@@ -54,15 +75,15 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci --no-audit --fund=false
 
 
-# ── The two shared packages, compiled ────────────────────────────────────────
+# ── The shared packages, compiled ────────────────────────────────────────────
 #
 # EVERY other stage needs this, including the ones that only run TypeScript
 # through tsx and look like they should not.
 #
-# @sap/shared and @sap/chart-spec both declare `"main": "./dist/index.js"`, so
-# an import of `@sap/shared` resolves to compiled output no matter who is doing
-# the importing -- tsx compiles the file it is given, it does not compile the
-# workspace dependencies that file imports. Locally the dist directories exist
+# All four of these declare `"main": "./dist/index.js"`, so an import of
+# `@sap/shared` (or `@sap/agent-graph`, or `@sap/mailer`) resolves to compiled
+# output no matter who is doing the importing -- tsx compiles the file it is
+# given, it does not compile the workspace dependencies that file imports. Locally the dist directories exist
 # because `npm run build` has been run at some point; in a clean build context
 # they do not, and .dockerignore excludes them by design (stale local output
 # silently shadowing a fresh build is a bad way to deploy).
@@ -77,7 +98,7 @@ WORKDIR /app
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages/ ./packages/
 
-RUN npm run build -w @sap/shared -w @sap/chart-spec
+RUN npm run build -w @sap/shared -w @sap/chart-spec -w @sap/agent-graph -w @sap/mailer
 
 
 # ── The default runtime: every service that does not need a browser ──────────
@@ -103,6 +124,31 @@ COPY --from=packages /app/packages ./packages
 COPY apps/     ./apps/
 COPY tools/    ./tools/
 COPY db/       ./db/
+
+# -- The nested workspace node_modules, put back --------------------------------
+#
+# This is not belt-and-braces; without it the image does not run.
+#
+# `npm ci` does not hoist everything: this lockfile places `drizzle-orm` under
+# `apps/orchestrator/node_modules`, `apps/agent-runtime/node_modules` and
+# `packages/agent-graph/node_modules` rather than at the root. The `COPY
+# --from=deps /app/node_modules` above carries only the ROOT tree, and the three
+# source copies just above overwrite each workspace directory from the build
+# context -- where `.dockerignore` excludes `**/node_modules` by design. The
+# nested installs are therefore wiped by the very copies that bring the source.
+#
+# Measured 2026-09-21: `apps/orchestrator/node_modules` was empty in this image
+# and the orchestrator could not resolve `drizzle-orm` at all -- it builds
+# cleanly and dies on its first import of services/agents.ts. Present since the
+# Workflow Agents slice introduced the first nested dependency.
+#
+# Copying the deps stage's own workspace directories back over the source is
+# what fixes it, and it is deliberately NOT a list of paths: those directories
+# hold only package.json (identical content) and node_modules, COPY merges
+# rather than replaces, so this stays correct when a workspace is added.
+COPY --from=deps /app/apps     ./apps
+COPY --from=deps /app/packages ./packages
+COPY --from=deps /app/tools    ./tools
 
 # The migration one-shot in docker-compose.yml runs set-replica-host.mjs from
 # here after `db:migrate --seed`.

@@ -254,6 +254,63 @@ services:
       retries: 5
       start_period: 20s
 
+  # ── The Workflow Agents engine (ADR-022) ──────────────────────────────────
+  #
+  # Absent from this file until 2026-09-21, which is why agents have never run
+  # on staging: the scheduler, the trigger evaluator and the run orchestrator
+  # all live in this one service, and nothing here started it. The orchestrator
+  # is a PRODUCER only -- it writes repeatable jobs onto the `agents` queue at
+  # publish time and never consumes one (queue/agent-queue.ts) -- so without
+  # this container a published agent sits in Redis and nothing ever fires.
+  #
+  # No ports and no healthcheck endpoint: it serves no HTTP at all. It is a
+  # queue worker, and "healthy" for it means the process is up and BullMQ is
+  # connected, which compose cannot ask it and nothing else depends on.
+  #
+  # It reaches school data ONLY through the MCP server (ADR-006/023), exactly as
+  # the orchestrator does, and signs the same out-of-band call context -- hence
+  # the shared MCP_CONTEXT_SECRET. It talks to the platform DB directly for its
+  # own tables (agents, runs, steps, message_log), which are platform-owned.
+  agent-runtime:
+    <<: *node-image
+    command: ["npm", "run", "start", "-w", "@sap/agent-runtime"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *platform-db
+      NODE_ENV: production
+
+      MCP_URL: http://mcp-server:3100/mcp
+      MCP_CONTEXT_SECRET: ${MCP_CONTEXT_SECRET}
+
+      # The same Redis the orchestrator enqueues onto. One queue, one consumer.
+      REDIS_URL: redis://redis:6379
+
+      # The email transport (ADR-035), same sink the orchestrator uses.
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_FROM: ${SMTP_FROM:-analytics@staging.invalid}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-School Analytics (staging)}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+
+      # Platform-level guardrails (ADR-025). Defaults match the documented ones
+      # and are overridable per environment, because staging is where somebody
+      # will want to demonstrate a send at 21:00 without waiting for morning.
+      QUIET_HOURS_START: ${QUIET_HOURS_START:-20}
+      QUIET_HOURS_END: ${QUIET_HOURS_END:-7}
+      DAILY_MESSAGE_CAP_PER_SCHOOL: ${DAILY_MESSAGE_CAP_PER_SCHOOL:-2000}
+      AUTO_PAUSE_AFTER_FAILURES: ${AUTO_PAUSE_AFTER_FAILURES:-5}
+    restart: unless-stopped
+
   # ── Mailpit: the email transport, and a wall around it ────────────────────
   #
   # Staging runs its own mail sink for the same reason local development does,

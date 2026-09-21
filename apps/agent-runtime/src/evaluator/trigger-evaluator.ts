@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { FETCH_SOURCE_SQL, agentGraphSchema } from '@sap/agent-graph';
+import { FETCH_SOURCE_SQL, UNPOPULATED_FIELDS, agentGraphSchema } from '@sap/agent-graph';
 import * as agentDbSchema from '@sap/agent-graph/db-schema';
 import { db } from '../db/client.js';
 import { withAgentMcp } from '../mcp/client.js';
@@ -84,11 +84,16 @@ export async function evaluateAgent(agentId: string): Promise<{ matched: number;
       /**
        * Source-agnostic on purpose: every `FETCH_SOURCES` entry's SQL already
        * aliases its columns to that source's declared `fields`
-       * (@sap/agent-graph), so the row IS the record — spread as-is, with
-       * `parent_phone` forced to `null` because no source can supply it
+       * (@sap/agent-graph), so the row IS the record — spread as-is, with every
+       * CONTACT field forced to `null` because no source can supply one
        * (docs/11 §2 item 10), rather than trusting a query to remember to.
+       *
+       * Forced from `UNPOPULATED_FIELDS` rather than field by field, so the day
+       * item 10 is answered the list empties in one place and the real columns
+       * flow straight through.
        */
-      const recordRef: Record<string, unknown> = { ...row, parent_phone: null };
+      const recordRef: Record<string, unknown> = { ...row };
+      for (const field of UNPOPULATED_FIELDS) recordRef[field] = null;
       const studentId = row['student_id'];
 
       /** docs/07 §3: "auto-derived DEDUP KEY (agent+node+record+date)". */

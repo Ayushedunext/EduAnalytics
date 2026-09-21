@@ -227,6 +227,12 @@ export const openApiDocument: OpenApiDocument = {
     { name: 'Custom reports', description: 'Clone-to-edit and AI-saved reports, versioned (ADR-018).' },
     { name: 'Ask AI', description: 'Natural-language questions, streamed (ADR-030). BYOK-gated.' },
     { name: 'Settings', description: 'Org AI configuration and school messaging channels.' },
+    {
+      name: 'Schedules',
+      description:
+        'Scheduled report delivery (ADR-037). A schedule stores a request and a pinned authority — ' +
+        'never a rendered report — and re-validates its scope on every firing.',
+    },
     { name: 'Operations', description: 'Container probes and this document.' },
   ],
   components: {
@@ -917,6 +923,120 @@ export const openApiDocument: OpenApiDocument = {
           status: { type: 'string', enum: ['connected', 'not_connected'] },
           detail: { type: ['string', 'null'] },
           requirement: { type: 'string' },
+        },
+      },
+      ScheduleDelivery: {
+        type: 'object',
+        required: ['at', 'status', 'error', 'trigger'],
+        properties: {
+          at: { type: 'string', format: 'date-time' },
+          status: {
+            type: 'string',
+            enum: [
+              'sent',
+              'failed',
+              'skipped_scope_empty',
+              'skipped_channel_not_connected',
+              'skipped_paused',
+            ],
+            description:
+              'Every skip names its own reason: "not sent" with no reason is the state a school ' +
+              'admin cannot act on (CODING_GUIDELINES §10).',
+          },
+          error: { type: ['string', 'null'] },
+          trigger: {
+            type: 'string',
+            enum: ['schedule', 'manual'],
+            description: '"Send now" runs the identical path, so this is the only honest difference.',
+          },
+        },
+      },
+      Schedule: {
+        type: 'object',
+        required: [
+          'id',
+          'report_id',
+          'report_kind',
+          'report_title',
+          'days',
+          'time',
+          'tz',
+          'channel',
+          'recipient',
+          'school_ids',
+          'school_names',
+          'paused',
+          'created_at',
+          'last_delivery',
+        ],
+        properties: {
+          id: { type: 'string' },
+          report_id: { type: 'string' },
+          report_kind: { type: 'string', enum: ['predefined', 'custom'] },
+          report_title: {
+            type: 'string',
+            description:
+              'The title as it read when the schedule was made — a label. A delivery re-reads the ' +
+              'catalog’s, so a renamed report is not sent under its old name.',
+          },
+          days: {
+            type: 'array',
+            items: { type: 'integer', minimum: 0, maximum: 6 },
+            description: '`Date#getDay` numbering — 0 = Sunday, which is also cron’s.',
+          },
+          time: { type: 'string', example: '07:30' },
+          tz: {
+            type: 'string',
+            example: 'Asia/Kolkata',
+            description:
+              'The SCHOOL’s clock, not the reader’s: a director in another timezone who asks for ' +
+              '07:30 means the school’s 07:30.',
+          },
+          channel: { type: 'string', enum: ['email', 'whatsapp'] },
+          recipient: { type: 'string' },
+          school_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'The scope CAPTURED at save time, intersected server-side with the creator’s token. A ' +
+              'label on this response: the delivery re-intersects it against the registry before ' +
+              'reading anything (ADR-037).',
+          },
+          school_names: { type: 'array', items: { type: 'string' } },
+          paused: { type: 'boolean' },
+          created_at: { type: 'string', format: 'date-time' },
+          last_delivery: {
+            oneOf: [ref('ScheduleDelivery'), { type: 'null' }],
+            description: 'The last attempt, so a row says what happened and not only what is planned.',
+          },
+        },
+      },
+      ScheduleInput: {
+        type: 'object',
+        required: ['report_id', 'days', 'time', 'recipient'],
+        properties: {
+          report_id: { type: 'string' },
+          report_kind: { type: 'string', enum: ['predefined', 'custom'], default: 'predefined' },
+          report_title: { type: 'string' },
+          days: { type: 'array', items: { type: 'integer', minimum: 0, maximum: 6 }, minItems: 1 },
+          time: { type: 'string', example: '07:30' },
+          channel: {
+            type: 'string',
+            enum: ['email', 'whatsapp'],
+            default: 'email',
+            description:
+              'WhatsApp is accepted by the column and refused by the API: it needs a verified ' +
+              'Business account and approved templates (docs/11 §2 items 4/8). Storing a schedule ' +
+              'that could never fire would be worse than refusing it.',
+          },
+          recipient: { type: 'string' },
+          school_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'A REQUEST, never an authority. Intersected with the session’s token scope; the ' +
+              'intersection is what is stored. Empty means "everything this session can see".',
+          },
         },
       },
       SettingsResponse: {
@@ -1963,6 +2083,46 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    '/api/settings/channels/{schoolId}/{channel}/connect': {
+      post: {
+        tags: ['Settings'],
+        summary: 'Connect a school’s messaging channel. Email only.',
+        description:
+          'Records STATE — `status = connected`, `provider = SMTP` — and captures no credential, ' +
+          'because there is none to capture: the mail transport is the deployment’s configuration ' +
+          '(ADR-035), not a per-school secret. SMS and WhatsApp are refused: connecting them needs ' +
+          'a DLT registration or a BSP token that this platform has nowhere safe to hold, and a ' +
+          'flag flipped without them would tell a school it can send messages it cannot ' +
+          '(ADR-024, docs/11 §2 items 4/8). Admin-only, and scope-checked like its disconnect twin.',
+        parameters: [
+          { name: 'schoolId', in: 'path', required: true, schema: { type: 'string' } },
+          {
+            name: 'channel',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', enum: ['email', 'sms', 'whatsapp'] },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'The channel rows after the change.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['channels'],
+                  properties: { channels: { type: 'array', items: ref('ChannelRow') } },
+                },
+              },
+            },
+          },
+          '400': errorResponse('VALIDATION_FAILED — not a channel this product supports.'),
+          '401': errorResponse('SESSION_INVALID.'),
+          '403': errorResponse('PERMISSION_DENIED — admin only · SCOPE_VIOLATION — school out of scope.'),
+          '409': errorResponse('CHANNEL_NOT_CONNECTED — SMS/WhatsApp cannot be connected yet.'),
+        },
+      },
+    },
     '/api/settings/channels/{schoolId}/{channel}/disconnect': {
       post: {
         tags: ['Settings'],
@@ -1995,6 +2155,168 @@ export const openApiDocument: OpenApiDocument = {
           '400': errorResponse('VALIDATION_FAILED — not a channel this product supports.'),
           '401': errorResponse('SESSION_INVALID.'),
           '403': errorResponse('SCOPE_VIOLATION — that school is not in this session’s scope.'),
+        },
+      },
+    },
+
+    // -- Scheduled report delivery (ADR-037) --------------------------------
+
+    '/api/schedules': {
+      get: {
+        tags: ['Schedules'],
+        summary: 'The caller’s scheduled report deliveries.',
+        description:
+          'Own schedules only. A schedule carries its creator’s pinned authority and an address ' +
+          'they chose, and editing one re-pins that authority — so another reader in the same trust ' +
+          'sees neither (ADR-037).',
+        responses: {
+          '200': {
+            description: 'The caller’s schedules, newest first.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['schedules'],
+                  properties: { schedules: { type: 'array', items: ref('Schedule') } },
+                },
+              },
+            },
+          },
+          '401': errorResponse('SESSION_INVALID.'),
+        },
+      },
+      post: {
+        tags: ['Schedules'],
+        summary: 'Create a scheduled delivery.',
+        description:
+          '`school_ids` is a REQUEST, never an authority: the orchestrator intersects it with the ' +
+          'session’s verified token scope and stores the intersection, together with the creator’s ' +
+          'role and perms — an unattended delivery never reads beyond what its creator could ' +
+          '(ADR-037, CODING_GUIDELINES §8). Email only today; WhatsApp is refused with its reason ' +
+          'named (docs/11 §2 items 4/8).',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: ref('ScheduleInput') } },
+        },
+        responses: {
+          '201': {
+            description: 'The stored schedule, with the scope the server actually captured.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['schedule'],
+                  properties: { schedule: ref('Schedule') },
+                },
+              },
+            },
+          },
+          '400': errorResponse('VALIDATION_FAILED — no day chosen, bad time, bad address, or WhatsApp.'),
+          '401': errorResponse('SESSION_INVALID.'),
+          '403': errorResponse('PERMISSION_DENIED — none of the requested schools are in scope.'),
+        },
+      },
+    },
+
+    '/api/schedules/{id}': {
+      put: {
+        tags: ['Schedules'],
+        summary: 'Replace a schedule.',
+        description:
+          'Re-pins the creator’s role and perms to whoever saved it: an edit is a fresh statement ' +
+          'of intent, and it is the only way a schedule whose owner’s role changed is brought back ' +
+          'into line (ADR-037).',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: ref('ScheduleInput') } },
+        },
+        responses: {
+          '200': {
+            description: 'The updated schedule.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['schedule'],
+                  properties: { schedule: ref('Schedule') },
+                },
+              },
+            },
+          },
+          '400': errorResponse('VALIDATION_FAILED.'),
+          '401': errorResponse('SESSION_INVALID.'),
+          '404': errorResponse('REPORT_DEFINITION_NOT_FOUND — no such schedule, or not the caller’s.'),
+        },
+      },
+      delete: {
+        tags: ['Schedules'],
+        summary: 'Delete a schedule.',
+        description:
+          'Soft-deleted: `schedule_deliveries` rows are the audit trail for reports that really ' +
+          'went out, and a hard delete would cascade away the evidence (docs/08 §7).',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '204': { description: 'Deleted. Its repeatable job is removed.' },
+          '401': errorResponse('SESSION_INVALID.'),
+          '404': errorResponse('REPORT_DEFINITION_NOT_FOUND.'),
+        },
+      },
+    },
+
+    '/api/schedules/{id}/pause': {
+      post: {
+        tags: ['Schedules'],
+        summary: 'Pause or resume a schedule.',
+        description:
+          'Pausing REMOVES the repeatable queue job rather than leaving the worker to check a ' +
+          'column — a paused schedule whose job still ran would depend on a guard nobody can see ' +
+          'from the queue.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: { paused: { type: 'boolean', default: true } },
+              },
+            },
+          },
+        },
+        responses: {
+          '204': { description: 'Applied.' },
+          '401': errorResponse('SESSION_INVALID.'),
+          '404': errorResponse('REPORT_DEFINITION_NOT_FOUND.'),
+        },
+      },
+    },
+
+    '/api/schedules/{id}/send-now': {
+      post: {
+        tags: ['Schedules'],
+        summary: 'Run this schedule’s delivery now.',
+        description:
+          'The identical path a scheduled firing takes (ADR-037) — so what a reader tests on Monday ' +
+          'afternoon is what arrives on Tuesday morning. 202, not 200: the delivery is queued, ' +
+          'because it re-runs the report and renders a PDF. The outcome appears as the schedule’s ' +
+          '`last_delivery`.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: {
+          '202': {
+            description: 'Queued.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['queued'],
+                  properties: { queued: { type: 'boolean' } },
+                },
+              },
+            },
+          },
+          '401': errorResponse('SESSION_INVALID.'),
+          '404': errorResponse('REPORT_DEFINITION_NOT_FOUND.'),
         },
       },
     },

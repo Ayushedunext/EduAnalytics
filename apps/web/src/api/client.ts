@@ -843,6 +843,100 @@ export function disconnectChannel(
   );
 }
 
+export function connectChannel(
+  schoolId: string,
+  channel: string,
+): Promise<{ channels: ChannelRow[] }> {
+  return request<{ channels: ChannelRow[] }>(
+    `/api/settings/channels/${encodeURIComponent(schoolId)}/${encodeURIComponent(channel)}/connect`,
+    { method: 'POST' },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled report delivery (ADR-037)
+//
+// Note what is NOT sent: an authority. `school_ids` travels as a REQUEST and
+// the orchestrator intersects it with the session's token scope before storing
+// it — the same rule every other endpoint here follows (CODING_GUIDELINES §8).
+// ---------------------------------------------------------------------------
+
+export type ScheduleChannel = 'email' | 'whatsapp';
+export type ScheduleReportKind = 'predefined' | 'custom';
+
+export interface ScheduleDeliveryRow {
+  at: string;
+  status: string;
+  error: string | null;
+  trigger: 'schedule' | 'manual';
+}
+
+export interface ScheduleRow {
+  id: string;
+  report_id: string;
+  report_kind: ScheduleReportKind;
+  report_title: string;
+  /** `Date#getDay` numbering — 0 = Sunday. One numbering, SPA to cron. */
+  days: number[];
+  time: string;
+  tz: string;
+  channel: ScheduleChannel;
+  recipient: string;
+  /** What the schedule was saved with. A label — the delivery re-validates it. */
+  school_ids: string[];
+  school_names: string[];
+  paused: boolean;
+  created_at: string;
+  last_delivery: ScheduleDeliveryRow | null;
+}
+
+export interface ScheduleInput {
+  report_id: string;
+  report_kind: ScheduleReportKind;
+  report_title: string;
+  days: number[];
+  time: string;
+  channel: ScheduleChannel;
+  recipient: string;
+  school_ids: string[];
+}
+
+export function listSchedules(): Promise<{ schedules: ScheduleRow[] }> {
+  return request<{ schedules: ScheduleRow[] }>('/api/schedules');
+}
+
+export function createSchedule(body: ScheduleInput): Promise<{ schedule: ScheduleRow }> {
+  return request<{ schedule: ScheduleRow }>('/api/schedules', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateSchedule(id: string, body: ScheduleInput): Promise<{ schedule: ScheduleRow }> {
+  return request<{ schedule: ScheduleRow }>(`/api/schedules/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function setSchedulePaused(id: string, paused: boolean): Promise<void> {
+  return request<void>(`/api/schedules/${encodeURIComponent(id)}/pause`, {
+    method: 'POST',
+    body: JSON.stringify({ paused }),
+  });
+}
+
+export function deleteSchedule(id: string): Promise<void> {
+  return request<void>(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** Queues the same delivery a firing would run (ADR-037) — 202, not a result. */
+export function sendScheduleNow(id: string): Promise<{ queued: boolean }> {
+  return request<{ queued: boolean }>(`/api/schedules/${encodeURIComponent(id)}/send-now`, {
+    method: 'POST',
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Workflow Agents (docs/07) — the graph shape itself is imported from
 // @sap/agent-graph, not redeclared, so the builder and the server can never

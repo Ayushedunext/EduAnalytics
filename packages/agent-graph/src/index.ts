@@ -19,3 +19,4 @@ export * from './templates.js';
 export * from './queue-contract.js';
 export * from './channel-resolution.js';
 export * from './fetch-source-sql.js';
+export * from './render-message.js';

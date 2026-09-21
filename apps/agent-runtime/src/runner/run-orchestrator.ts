@@ -18,15 +18,23 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
+  CONTACT_FIELD_BY_CHANNEL,
   agentGraphSchema,
   isMessageAction,
   isSandboxProvider,
+  isSmtpProvider,
+  messageSubject,
+  renderMessageBody,
+  unresolvedSlots,
   type AgentGraph,
   type AgentNode,
+  type MessageActionData,
 } from '@sap/agent-graph';
+import { MailerError } from '@sap/mailer';
 import * as agentDbSchema from '@sap/agent-graph/db-schema';
 import { db } from '../db/client.js';
 import { resolveEffectiveChannel } from '../channels/resolve.js';
+import { emailTransport } from '../channels/email.js';
 import { checkGuardrails, recordRunOutcome } from '../guardrails/guardrails.js';
 import { agentQueue } from '../queue/queue.js';
 
@@ -245,7 +253,29 @@ async function executeMessageAction(node: AgentNode, run: RunRow, stepId: number
 
   const guard = await checkGuardrails({ schoolId: run.schoolId });
   const record = run.recordRef as Record<string, unknown>;
-  const recipient = record['parent_phone'];
+
+  /**
+   * Addressing, in ADR-036's order: the node's own `recipient` first, then the
+   * record's contact field, then nothing.
+   *
+   * The order is the decision, not a fallback. A staff-addressed flow ("email
+   * the principal when attendance drops below 60%") is addressed to somebody
+   * who is not in the result set at all, so the node's field must win where it
+   * is set; and a node that leaves it empty keeps exactly the behaviour below,
+   * so the day a real contact column exists (docs/11 §2 item 10) every such
+   * node starts using it with no edit and no migration.
+   *
+   * The record's field is chosen BY CHANNEL (`CONTACT_FIELD_BY_CHANNEL`), not
+   * fixed to one column. An address is not channel-agnostic: an email needs an
+   * address and a WhatsApp message needs a number, and reading one column for
+   * both would hand a phone number to an SMTP server the first day item 10 is
+   * answered — failing every email with a provider error that reads like an
+   * outage rather than like a mapping mistake. It costs nothing to be right
+   * about this now and is expensive to discover later, because today every one
+   * of these fields is null and the bug is invisible.
+   */
+  const recordContact = record[CONTACT_FIELD_BY_CHANNEL[node.data.primary]];
+  const recipient = node.data.recipient ?? recordContact;
 
   const baseLog = {
     runId: run.runId,
@@ -281,26 +311,114 @@ async function executeMessageAction(node: AgentNode, run: RunRow, stepId: number
 
   if (typeof recipient !== 'string' || recipient === '') {
     /** docs/11 §2 item 10: no contact column exists in the catalogued schema
-     * yet, so this fires for every real record today outside sandbox mode —
-     * see this file's module doc and the trigger evaluator's. A structured,
-     * logged non-send, never a fabricated phone number. */
+     * yet, so outside sandbox mode this fires for every record whose node did
+     * not name its own address (ADR-036) — see this file's module doc and the
+     * trigger evaluator's. A structured, logged non-send, never a fabricated
+     * phone number. Publish-time flow linting refuses an email node in this
+     * state, so reaching it means a version published before that rule existed. */
     await insertMessageLog({ ...baseLog, status: 'failed', error: 'no parent contact information available (docs/11 §2 item 10)' });
     return { status: 'failed', error: 'no recipient contact information available' };
   }
 
   /**
-   * No BSP/SMTP/DLT integration is wired yet (docs/11 §2 items 4/8 — provider
-   * choice and whether the ERP already has a sender relationship are still
-   * open). This is the one point in the whole pipeline where a real provider
-   * call would go; everything upstream of it (guardrails, dedup, template
-   * resolution, branch selection) is real and already exercised end to end in
-   * dry-run.
+   * -- The send (ADR-035) ---------------------------------------------------
+   *
+   * This was for a long time the one point in the pipeline where a real
+   * provider call would go and did not; everything upstream of it — guardrails,
+   * dedup, branch selection, template resolution — was real and exercised only
+   * in dry-run. Email now goes out here. SMS and WhatsApp still do not, and
+   * deliberately: docs/11 §2 items 4/8 gate a DLT entity, a registered sender
+   * id, a BSP account and a verified WABA, none of which any amount of code
+   * substitutes for.
+   *
+   * The channel row says only WHICH transport applies (`provider = 'SMTP'`);
+   * where that transport is and how to authenticate to it is this deployment's
+   * configuration, never a stored channel credential — the split ADR-035 draws
+   * and ADR-024 always required.
    */
+  if (node.data.primary === 'email' && effective.status === 'connected' && isSmtpProvider(effective.provider)) {
+    return sendEmail(node.data, run, baseLog, record, recipient);
+  }
+
   await insertMessageLog({ ...baseLog, status: 'failed', error: 'messaging provider not yet connected (docs/11 §2 items 4/8)' });
   return { status: 'failed', error: 'messaging provider not yet connected' };
 }
 
-async function insertMessageLog(fields: {
+/**
+ * One email, through this deployment's transport (ADR-035).
+ *
+ * [MANDATORY] CODING_GUIDELINES §11: a provider failure is a structured
+ * `message_log` row and a failed STEP, never a thrown exception — the run still
+ * walks on to an End node. §13 applies just as hard in the other direction: the
+ * body, the subject and the address are school data and contact PII, so they go
+ * to `message_log` (which carries that exemption, per 0009_agents.sql's PII
+ * note) and never to this process's stdout.
+ */
+async function sendEmail(
+  data: MessageActionData,
+  run: RunRow,
+  baseLog: Omit<MessageLogFields, 'status'>,
+  record: Record<string, unknown>,
+  recipient: string,
+): Promise<NodeOutcome> {
+  /**
+   * The body is the node's rendered template. Until the Template Manager exists
+   * (docs/07 §4, ADR-024 — listed as unbuilt in docs/11's 2026-09-15 entry)
+   * there is no approved BODY anywhere to render instead, only an approved ID,
+   * which publish-time linting has already checked. So the approved-template
+   * rule holds at the strength it currently can: a node may only reference a
+   * template on the seed list, and what it sends is the text its author saw in
+   * the builder. `renderMessageBody` is the same function that drew that
+   * preview, which is what stops the two from disagreeing.
+   */
+  const body = renderMessageBody(data.template_preview, record);
+  const missing = unresolvedSlots(data.template_preview, record);
+
+  /**
+   * A message with an unfilled slot is not sent. "Dear parent, {{student.name}}
+   * has been absent" is worse than no message: it goes out under the school's
+   * name, it cannot be recalled, and the failure is invisible to everyone
+   * except the family that received it. Recorded WITH the slot names, so the
+   * run history says which variable was missing rather than "failed".
+   */
+  if (missing.length > 0) {
+    const error = `message not sent — unresolved template variables: ${missing.join(', ')}`;
+    await insertMessageLog({ ...baseLog, recipient, status: 'failed', error: error.slice(0, 255) });
+    return { status: 'failed', error };
+  }
+
+  const [agentRow] = await db
+    .select({ name: agentDbSchema.agents.name })
+    .from(agentDbSchema.agents)
+    .where(eq(agentDbSchema.agents.id, run.agentId));
+
+  try {
+    const result = await emailTransport().send({
+      to: recipient,
+      subject: messageSubject(agentRow?.name ?? ''),
+      text: body,
+      correlationId: run.runId,
+    });
+    await insertMessageLog({ ...baseLog, recipient, status: 'sent', providerRef: result.providerRef });
+    return {
+      status: 'succeeded',
+      payloadOut: { channel: 'email', provider_ref: result.providerRef, mode: 'smtp' },
+    };
+  } catch (error) {
+    /**
+     * `MailerError.message` is already plain language with nothing sensitive in
+     * it (@sap/mailer translates provider errors for exactly this row — the rule
+     * `message_log.error` documents). Anything else is reported as a refusal
+     * rather than re-thrown, because a stack trace out of an SMTP client can
+     * carry the envelope, recipient included.
+     */
+    const reason = error instanceof MailerError ? error.message : 'The mail server refused the message.';
+    await insertMessageLog({ ...baseLog, recipient, status: 'failed', error: reason.slice(0, 255) });
+    return { status: 'failed', error: reason };
+  }
+}
+
+interface MessageLogFields {
   runId: string;
   runStepId: number;
   schoolId: string;
@@ -310,7 +428,9 @@ async function insertMessageLog(fields: {
   status: 'sent' | 'failed' | 'skipped_dedup' | 'skipped_quiet_hours' | 'skipped_cap' | 'skipped_guardrail';
   error?: string;
   providerRef?: string;
-}): Promise<void> {
+}
+
+async function insertMessageLog(fields: MessageLogFields): Promise<void> {
   await db.insert(agentDbSchema.messageLog).values({
     runId: fields.runId,
     runStepId: fields.runStepId,

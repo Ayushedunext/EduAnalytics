@@ -60,7 +60,7 @@ function absenceAlertGraph(): AgentGraph {
           fallback: 'sms',
           template_id: 'absence-3rd-day',
           template_preview:
-            'Dear parent, {{student.name}} ({{student.class}}) has been absent for {{days}} consecutive days. Please contact the school office.',
+            'Dear parent, {{student.name}} ({{student.class}}) has been absent for {{consecutive_days}} consecutive days. Please contact the school office.',
           also_notify_staff: true,
         },
       },

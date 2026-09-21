@@ -8,22 +8,23 @@
  *
  * -- What this screen is honest about ------------------------------------------
  *
- * 1. It does not send. There is no scheduler, no PDF job and no channel worker
- *    behind these rows yet, so every row says so and the page says so once at
- *    the top. A saved schedule is a draft on this device (schedules.ts). A page
- *    that showed "Active ● next run Monday" over nothing would be the worst
- *    version of this feature — the reader would stop checking their inbox.
+ * 1. It sends, now (ADR-037). This screen used to carry a banner saying nothing
+ *    was being delivered, because nothing was: no scheduler, no PDF job, no
+ *    transport. All three exist, so the banner is gone and every row instead
+ *    reports what actually happened on the last attempt — including the skips,
+ *    with their reasons. **Send now** is on every row, so a reader can prove
+ *    delivery without waiting until Monday.
  *
- * 2. It does not claim a channel works. Whether a school can send on email or
- *    WhatsApp is the server's answer (`/api/settings`, services/channels.ts),
- *    and it is `not_connected` for every school today. The option is shown
- *    either way — docs/10 §3, "locked ≠ hidden" — with the missing piece named
- *    and Settings one click away, exactly as the AI lock does it.
+ * 2. It does not claim a channel works. Whether a school can send on email is
+ *    the server's answer (`/api/settings`, services/channels.ts), and a school
+ *    that has not connected it is named rather than glossed over. WhatsApp is
+ *    shown and refused — docs/10 §3, "locked ≠ hidden" — with the missing piece
+ *    named and Settings one click away, exactly as the AI lock does it.
  *
  * 3. It does not widen scope. A schedule records the schools the reader had
  *    selected when they saved it, as a statement of what the report covers; the
- *    delivery run will resolve scope from the owner's session at send time
- *    (Invariant 2), so this list is a label and never an authorisation.
+ *    delivery re-validates that set against the registry at send time
+ *    (ADR-037), so this list is a label and never an authorisation.
  *
  * -- Why the report list is both catalogs --------------------------------------
  * A reader schedules what they read, and half of what they read is their own
@@ -42,6 +43,7 @@ import {
 } from '../api/client';
 import { Icon } from './Icon';
 import {
+  describeDelivery,
   describeSchedule,
   nextRun,
   useSchedules,
@@ -55,6 +57,12 @@ import {
 } from '../schedules';
 
 interface Props {
+  /**
+   * Kept although this screen no longer reads it: `App.tsx` passes the session
+   * to every page, and a row's school NAMES now come from the server with the
+   * schedule (they are the scope it actually captured, which can be narrower
+   * than this session's current selection).
+   */
   session: SessionResponse;
   /** The served catalog, already filtered by what this session may open. */
   dashboards: readonly DashboardCard[];
@@ -80,9 +88,19 @@ const CHANNEL_META: Record<DeliveryChannel, { label: string; icon: string; hint:
   whatsapp: {
     label: 'WhatsApp',
     icon: '📱',
-    hint: 'A short summary message with the PDF attached.',
+    hint: 'Needs a verified Business account and approved templates — not set up yet.',
     placeholder: '+91 98765 43210',
   },
+};
+
+/**
+ * WhatsApp is on the screen and cannot be chosen (docs/10 §3, locked ≠ hidden;
+ * docs/11 §2 items 4/8). The server refuses it too — `services/schedules.ts`
+ * validates the channel — so this is the reason shown where the choice is made,
+ * not the enforcement.
+ */
+const BLOCKED_CHANNELS: Partial<Record<DeliveryChannel, string>> = {
+  whatsapp: 'WhatsApp delivery needs a verified Business account and approved message templates, which are not set up yet.',
 };
 
 /** The presets that cover most of what a school actually asks for. */
@@ -92,7 +110,7 @@ const DAY_PRESETS: readonly { label: string; days: readonly Weekday[] }[] = [
   { label: 'Mondays only', days: [1] },
 ];
 
-export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Props): JSX.Element {
+export function Schedule({ dashboards, schoolIds, onOpenSettings }: Props): JSX.Element {
   const schedules = useSchedules();
   /**
    * The catalogs the picker offers. Both are optional to the page: a reader who
@@ -145,11 +163,20 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
     return { connected: rows.length > 0 && missing.length === 0, missing };
   }
 
-  /** Nothing has been set up yet, so the panel is showing the worked examples. */
-  const showingExamples = schedules.all.some((s) => s.example === true);
+  /**
+   * Rows whose Send-now has been pressed this session.
+   *
+   * Local, and deliberately not read back from the server: the delivery is
+   * queued and renders a PDF, so there is a gap of seconds in which the stored
+   * row still describes the PREVIOUS attempt. Saying "Sending…" on the row the
+   * reader just pressed is the only thing on screen that knows what they did.
+   */
+  const [sending, setSending] = useState<ReadonlySet<string>>(new Set());
 
-  const schoolName = (id: string): string =>
-    session.scope.find((s) => s.school_id === id)?.school_name ?? id;
+  async function sendNow(id: string): Promise<void> {
+    setSending((current) => new Set(current).add(id));
+    await schedules.sendNow(id);
+  }
 
   return (
     <main className="flex-1 overflow-y-auto">
@@ -158,8 +185,8 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
           <div className="min-w-0">
             <h1 className="page-title">Schedule</h1>
             <div className="page-sub">
-              Have a report delivered to you on the days and at the time you choose — by email or
-              on WhatsApp.
+              Have a report delivered to you on the days and at the time you choose. It is re-run
+              against fresh data and arrives as the same branded PDF the Export button produces.
             </div>
           </div>
           {editing === null && (
@@ -170,6 +197,10 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
         </div>
 
         {loadNote !== null && <div className="notice mt-4">{loadNote}</div>}
+        {/* The server's own words — a refusal a reader can act on ("WhatsApp
+            needs a verified Business account") is worth more than a generic
+            "could not save" this screen would have to invent. */}
+        {schedules.error !== null && <div className="notice mt-4">{schedules.error}</div>}
 
         {editing !== null && (
           <ScheduleForm
@@ -180,27 +211,22 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
             channelState={channelState}
             onOpenSettings={onOpenSettings}
             onCancel={() => { setEditing(null); }}
-            onSave={(draft) => {
-              if (editing === 'new') schedules.add(draft);
-              else schedules.update({ ...editing, ...draft });
-              setEditing(null);
+            onSave={async (draft) => {
+              /* The form stays open on a refusal. Closing it would discard what
+                 the reader typed in exchange for an error message about it. */
+              const saved =
+                editing === 'new' ? await schedules.add(draft) : await schedules.update(editing.id, draft);
+              if (saved) setEditing(null);
             }}
           />
         )}
 
         <section className="card reportsPanel mt-4">
           <h3 className="reportsPanelTitle">Your schedules</h3>
-          {showingExamples && (
-            /* Said before the rows, not after them: a reader who takes the
-               first row for their own has already been misled by the time a
-               footnote explains it. */
-            <p className="schedPanelNote">
-              These three are <b>examples</b>, to show what a schedule looks like. Press{' '}
-              <b>Use this</b> on one to make it yours, or start a new one above.
-            </p>
-          )}
 
-          {schedules.all.length === 0 ? (
+          {schedules.loading ? (
+            <p className="reportsEmpty">Loading your schedules…</p>
+          ) : schedules.all.length === 0 ? (
             <p className="reportsEmpty">
               No schedules yet. Press <b>＋ New schedule</b> to have a report reach you on a day and
               time that suits you — a fee-collection summary every Monday morning, say, or
@@ -212,6 +238,7 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
                 const meta = CHANNEL_META[schedule.channel];
                 const { missing } = channelState(schedule.channel);
                 const next = nextRun(schedule.days, schedule.time);
+                const last = schedule.lastDelivery === null ? null : describeDelivery(schedule.lastDelivery);
                 return (
                   <div key={schedule.id} className={`schedRow${schedule.paused ? ' schedRow--paused' : ''}`}>
                     <span className="schedRowIcon" aria-hidden="true">{meta.icon}</span>
@@ -226,15 +253,31 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
                         {schedule.recipient}
                       </div>
                       <div className="schedRowMeta">
-                        {schedule.schoolIds.length === 0
-                          ? 'Scope: as selected at send time'
-                          : `Covers ${schedule.schoolIds.map(schoolName).join(', ')}`}
+                        {/* The NAMES the server resolved, not ids mapped here: the
+                            stored set is the intersection it captured, which can be
+                            narrower than what this session currently has selected. */}
+                        {schedule.schoolNames.length === 0
+                          ? 'Scope: resolved at send time'
+                          : `Covers ${schedule.schoolNames.join(', ')}`}
                         {schedule.paused
                           ? ' · Paused'
                           : next === null
                             ? ''
-                            : ` · Would run ${next}`}
+                            : ` · Next ${next}`}
                       </div>
+
+                      {/* What actually happened, not only what is planned. A row a
+                          reader returns to a week later is the whole audit surface
+                          they have, so a skip states its own reason. */}
+                      {last !== null && schedule.lastDelivery !== null && (
+                        <div className={`schedRowLast schedRowLast--${last.tone}`}>
+                          {last.text} · {new Date(schedule.lastDelivery.at).toLocaleString()}
+                        </div>
+                      )}
+                      {sending.has(schedule.id) && (
+                        <div className="schedRowLast">Sending now — refresh in a moment to see the outcome.</div>
+                      )}
+
                       {missing.length > 0 && (
                         <div className="schedRowWarn">
                           {meta.label} is not connected for {missing.join(', ')} —{' '}
@@ -245,47 +288,40 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
                         </div>
                       )}
                     </div>
-                    <span className="pill soon">
-                      {schedule.example === true ? 'Example' : 'Not sending yet'}
+                    <span className={`pill ${schedule.paused ? 'soon' : 'live'}`}>
+                      {schedule.paused ? 'Paused' : '● Active'}
                     </span>
-                    {schedule.example === true ? (
-                      <div className="schedRowActions">
-                        <button
-                          type="button"
-                          className="btn btnOutline"
-                          onClick={() => { setEditing(schedule); }}
-                        >
-                          Use this
-                        </button>
-                        <button type="button" className="btn btnGhost" onClick={schedules.dismissExamples}>
-                          Dismiss
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="schedRowActions">
-                        <button
-                          type="button"
-                          className="btn btnGhost"
-                          onClick={() => { schedules.setPaused(schedule.id, !schedule.paused); }}
-                        >
-                          {schedule.paused ? 'Resume' : 'Pause'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btnOutline"
-                          onClick={() => { setEditing(schedule); }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btnGhost"
-                          onClick={() => { schedules.remove(schedule.id); }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
+                    <div className="schedRowActions">
+                      <button
+                        type="button"
+                        className="btn btnOutline"
+                        disabled={sending.has(schedule.id)}
+                        onClick={() => { void sendNow(schedule.id); }}
+                      >
+                        Send now
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btnGhost"
+                        onClick={() => { void schedules.setPaused(schedule.id, !schedule.paused); }}
+                      >
+                        {schedule.paused ? 'Resume' : 'Pause'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btnGhost"
+                        onClick={() => { setEditing(schedule); }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btnGhost"
+                        onClick={() => { void schedules.remove(schedule.id); }}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -293,17 +329,21 @@ export function Schedule({ session, dashboards, schoolIds, onOpenSettings }: Pro
           )}
         </section>
 
-        {/* The disclaimer sits at the foot of the screen, after the thing it is
-            about — but it is also on every row as a pill, because a row is what
-            a reader looks at a week from now. */}
+        {/* What is and is not live, at the foot of the screen — the honest
+            successor to the "nothing is being delivered yet" banner this page
+            carried until ADR-035/037. Email really sends; the rest does not, and
+            a reader choosing a channel should learn that here rather than from a
+            report that never arrives. */}
         <div className="schedNote">
-          <span className="schedNoteIcon">🛠️</span>
+          <span className="schedNoteIcon">✉️</span>
           <div>
-            <b>Nothing is being delivered yet.</b> Scheduled sending is still being built — this
-            screen sets up what you want and keeps it on this device, and no email or WhatsApp
-            message has gone to anyone. When delivery goes live, a scheduled report is re-run
-            against fresh data and sent as the same branded PDF the Export button produces
-            (docs/06 §6), on the channels your school has connected in Settings ▸ Messaging.
+            <b>Email delivery is live.</b> A scheduled report is re-run against fresh data at the
+            time you chose — in school time (IST) — and sent as the same branded PDF the Export
+            button produces, to the schools this schedule covers and that your access still
+            includes. <b>WhatsApp is not available yet:</b> it needs a verified Business account and
+            approved message templates, which are a provisioning step rather than a build. Email
+            has to be connected for a school in <b>Settings ▸ Messaging</b> before its reports can
+            go out.
           </div>
         </div>
       </div>
@@ -333,7 +373,8 @@ function ScheduleForm({
   channelState: (channel: DeliveryChannel) => { connected: boolean; missing: string[] };
   onOpenSettings: () => void;
   onCancel: () => void;
-  onSave: (draft: NewSchedule) => void;
+  /** Resolves once the server has accepted or refused — the card stays open on a refusal. */
+  onSave: (draft: NewSchedule) => Promise<void>;
 }): JSX.Element {
   const [reportKey, setReportKey] = useState(
     initial === null ? (options[0] === undefined ? '' : optionKey(options[0])) : `${initial.reportKind}:${initial.reportId}`,
@@ -344,6 +385,8 @@ function ScheduleForm({
   const [recipient, setRecipient] = useState(initial?.recipient ?? '');
   /** Only after a failed submit — a form that scolds while you are still typing is worse than one that waits. */
   const [showErrors, setShowErrors] = useState(false);
+  /** The save is a round trip now; the button must stop being pressable during it. */
+  const [saving, setSaving] = useState(false);
 
   const report = options.find((o) => optionKey(o) === reportKey);
   const state = channelState(channel);
@@ -351,6 +394,8 @@ function ScheduleForm({
 
   const problems: string[] = [];
   if (report === undefined) problems.push('Pick the report you want delivered.');
+  const blocked = BLOCKED_CHANNELS[channel];
+  if (blocked !== undefined) problems.push(blocked);
   if (days.length === 0) problems.push('Pick at least one day of the week.');
   if (!isValidRecipient(channel, recipient)) {
     problems.push(
@@ -364,21 +409,32 @@ function ScheduleForm({
     setDays((current) => (current.includes(day) ? current.filter((d) => d !== day) : [...current, day]));
   }
 
-  function submit(): void {
+  async function submit(): Promise<void> {
     if (problems.length > 0 || report === undefined) {
       setShowErrors(true);
       return;
     }
-    onSave({
-      reportId: report.id,
-      reportKind: report.kind,
-      reportTitle: report.title,
-      days,
-      time,
-      channel,
-      recipient: recipient.trim(),
-      schoolIds: [...schoolIds],
-    });
+    setSaving(true);
+    try {
+      await onSave({
+        reportId: report.id,
+        reportKind: report.kind,
+        reportTitle: report.title,
+        days,
+        time,
+        channel,
+        /**
+         * The schools SELECTED right now, sent as a request. The orchestrator
+         * intersects it with this session's token scope and stores the
+         * intersection (ADR-037) — this app never sends an authoritative
+         * school id and could not make one stick if it did.
+         */
+        recipient: recipient.trim(),
+        schoolIds: [...schoolIds],
+      });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -471,21 +527,28 @@ function ScheduleForm({
           {(Object.keys(CHANNEL_META) as DeliveryChannel[]).map((id) => {
             const info = CHANNEL_META[id];
             const status = channelState(id);
+            const unavailable = BLOCKED_CHANNELS[id];
             return (
-              <label key={id} className={`schedChannel${channel === id ? ' on' : ''}`}>
+              /* Shown and refused, not hidden (docs/10 §3). The server validates
+                 the channel too — this is the reason, where the choice is. */
+              <label
+                key={id}
+                className={`schedChannel${channel === id ? ' on' : ''}${unavailable === undefined ? '' : ' schedChannel--locked'}`}
+              >
                 <input
                   type="radio"
                   name="sched-channel"
                   value={id}
                   checked={channel === id}
+                  disabled={unavailable !== undefined}
                   onChange={() => { setChannel(id); }}
                 />
-                <span className="schedChannelIcon" aria-hidden="true">{info.icon}</span>
+                <span className="schedChannelIcon" aria-hidden="true">{unavailable === undefined ? info.icon : '🔒'}</span>
                 <span className="schedChannelBody">
                   <b>{info.label}</b>
                   <span className="schedChannelHint">{info.hint}</span>
                 </span>
-                {status.connected && <span className="pill live">● Connected</span>}
+                {unavailable === undefined && status.connected && <span className="pill live">● Connected</span>}
               </label>
             );
           })}
@@ -532,8 +595,8 @@ function ScheduleForm({
       )}
 
       <div className="stepActions">
-        <button type="button" className="btn btnPrimary" onClick={submit}>
-          {initial === null ? 'Save schedule' : 'Save changes'}
+        <button type="button" className="btn btnPrimary" disabled={saving} onClick={() => { void submit(); }}>
+          {saving ? 'Saving…' : initial === null ? 'Save schedule' : 'Save changes'}
         </button>
         <button type="button" className="btn btnGhost" onClick={onCancel}>
           Cancel

@@ -32,6 +32,18 @@ export interface FlowLintContext {
   readonly connectedChannels: ReadonlySet<ChannelId>;
   /** Template ids with an APPROVED status in the Template Manager (ADR-024). */
   readonly approvedTemplateIds: ReadonlySet<string>;
+  /**
+   * Whether a record this agent fetches can supply a contact address at all
+   * (docs/11 §2 item 10). `false` everywhere today: no parent or guardian
+   * contact column exists in the catalogued schema, so a record cannot address
+   * anything.
+   *
+   * Passed in rather than assumed so this module stays pure — the same reason
+   * channel and template state are passed in — and so the day item 10 is
+   * answered, the lint below relaxes by flipping one caller's flag instead of
+   * by editing a rule.
+   */
+  readonly recordCanSupplyContact?: boolean;
 }
 
 const TRIGGER_KIND_SET = new Set<string>(['schedule', 'manual', 'email_received', 'erp_event']);
@@ -118,6 +130,44 @@ export function validateGraph(
         errors.push({
           node_id: node.id,
           message: 'This node references a template that is not approved yet.',
+        });
+      }
+
+      /**
+       * -- Addressing (ADR-036) ---------------------------------------------
+       *
+       * Two rules, and the second is the one that matters.
+       *
+       * A `recipient` on a node whose primary channel is SMS or WhatsApp is
+       * refused outright: addressing on those channels is inseparable from the
+       * DLT/WABA sender registration that docs/11 §2 items 4/8 still gate, and
+       * accepting a phone number here would make the builder look like it had
+       * unblocked a channel that still cannot send at all.
+       *
+       * And an email node that can reach nobody is refused AT PUBLISH, rather
+       * than discovered at 10:31 as a `message_log` row nobody is reading. This
+       * is CODING_GUIDELINES §10's fail-loud rule applied at the only moment
+       * where the author is still present to fix it: today no record can supply
+       * a contact (item 10), so an email node without its own `recipient` is a
+       * node that will fail every time it runs.
+       */
+      if (node.data.recipient !== undefined && node.data.primary !== 'email') {
+        errors.push({
+          node_id: node.id,
+          message:
+            `A recipient address can only be set on an email message. "${node.data.primary}" addressing needs a registered sender (DLT/WABA) that is not set up yet.`,
+        });
+      }
+
+      if (
+        node.data.primary === 'email' &&
+        node.data.recipient === undefined &&
+        ctx.recordCanSupplyContact !== true
+      ) {
+        errors.push({
+          node_id: node.id,
+          message:
+            'This email has no recipient. No contact column exists in the school data yet (docs/11 §2 item 10), so enter the address this message should go to.',
         });
       }
     }

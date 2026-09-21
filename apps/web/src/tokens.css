@@ -2176,6 +2176,12 @@ body {
   transition: border-color 0.14s ease, background-color 0.14s ease;
 }
 .schedChannel.on { border-color: var(--color-primary); background: var(--color-primary-soft); }
+/* Locked, not hidden (docs/10 §3): the option keeps its place in the row so a
+   reader can see the product HAS a WhatsApp channel, and reads as unavailable
+   rather than as a styling accident. Not `display:none`, and not full opacity
+   either — the label still has to be legible enough to explain itself. */
+.schedChannel--locked { opacity: 0.6; cursor: not-allowed; }
+.schedChannel--locked input { cursor: not-allowed; }
 .schedChannelIcon { font-size: 17px; }
 .schedChannelBody { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .schedChannelBody b { font-size: 13.5px; color: var(--color-text-primary); }
@@ -2218,6 +2224,15 @@ body {
   font-size: 11.5px; color: #8a5a0b; margin-top: 5px; line-height: 1.5;
   border-left: 2px solid var(--color-amber); padding-left: 9px;
 }
+/* The last delivery's outcome. Three tones because the three cases are
+   genuinely different to a reader: it went, it was skipped for a reason they
+   can fix, or it failed. A single grey line for all three would bury the one
+   that needs them. */
+.schedRowLast { font-size: 11.5px; margin-top: 5px; line-height: 1.5; color: var(--color-text-muted); }
+.schedRowLast--ok { color: var(--color-text-secondary); }
+.schedRowLast--warn { color: #8a5a0b; }
+.schedRowLast--bad { color: var(--color-danger); }
+
 .schedRowActions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .schedRowActions .btn { padding: 6px 12px; font-size: 12px; }
 
@@ -2246,6 +2261,39 @@ body {
   background: var(--color-disabled);
 }
 .agentDot.on { background: var(--color-success); }
+
+/* The agent's state, legible.
+ *
+ * It rendered as a generic `.pill` — 9.5px of muted grey on the sunken surface
+ * — which is the right weight for a passive tag and the wrong one for the
+ * single word that says whether this thing is RUNNING. Somebody reading the
+ * builder needs to know at a glance that their edits are going into a draft
+ * that sends nothing, and "Draft" in the page's faintest colour was the one
+ * label on screen that could be missed entirely.
+ *
+ * Bigger, bolder, bordered, and carrying its own dot so the state reads even
+ * before the word does. Scoped to this badge rather than changed on `.pill`,
+ * which is a shared, deliberately quiet component used on a dozen screens. */
+.agentStatusPill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  border-radius: var(--radius-pill); padding: 4px 11px; border: 1px solid transparent;
+}
+.agentStatusPill::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0;
+}
+.agentStatusPill.is-live {
+  background: var(--color-success-soft); color: #2f6a23; border-color: #a9d69b;
+}
+.agentStatusPill.is-paused {
+  background: var(--color-warning-soft); color: #7a5b06; border-color: #e6cd84;
+}
+/* Draft is deliberately the flattest of the three — it is the resting state —
+   but it is now a real border and real text colour rather than a whisper. */
+.agentStatusPill.is-draft {
+  background: var(--color-surface-sunken); color: var(--color-text-secondary);
+  border-color: var(--color-border-strong);
+}
 .agentBody { flex: 1; min-width: 0; }
 .agentBody b { font-size: 13.5px; color: var(--color-text-primary); }
 .agentMeta { font-size: 11.5px; color: var(--color-text-muted); margin: 2px 0 0; line-height: 1.5; }
@@ -2294,15 +2342,28 @@ body {
 .agentField label {
   display: block; font-size: 12px; font-weight: 600; color: var(--color-text-secondary); margin-bottom: 5px;
 }
+/* Every text-ish input, listed by type because that is how this block was
+   written — an unlisted type renders with no border at all, which reads as
+   "there is no field here" rather than as a styling miss (found 2026-09-21,
+   when the ADR-036 recipient input was added as type=email). */
 .agentField input[type='text'],
 .agentField input[type='number'],
+.agentField input[type='email'],
+.agentField input[type='tel'],
 .agentField select,
 .agentField textarea {
   width: 100%; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm);
   padding: 8px 10px; font-size: 13px; font-family: var(--font-sans); color: var(--color-text-primary);
   background: var(--color-surface);
 }
-.agentField textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
+/* The message box is the one field on this screen somebody WRITES in rather
+   than picks from, and at 60px it showed three lines behind a scrollbar — the
+   whole message was never visible at once, so nobody could read what their
+   school was about to send without scrolling a box inside a scrolling page.
+   Roomy enough for every template in the gallery to sit open. */
+.agentField textarea {
+  resize: vertical; min-height: 132px; line-height: 1.65; font-size: 13.5px; padding: 11px 12px;
+}
 .agentInline { display: flex; gap: 8px; align-items: center; }
 .agentInline > * { flex: 1; min-width: 0; }
 .agentChecklist { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
@@ -2320,20 +2381,50 @@ body {
 .agentBranchLabel.branchTrue { color: #3d7a2f; }
 .agentBranchLabel.branchFalse { color: #a8375a; }
 
+/* The chart follows the reader instead of scrolling away.
+ *
+ * It was a fixed 520px box at the top of a column whose neighbour is several
+ * screens tall, so it spent most of the page as empty canvas below and nothing
+ * at all beside the panels being edited. Sticky + viewport height means the
+ * flow is always on screen, always as large as the window allows, and the dead
+ * space underneath is gone because there is no longer a bottom to run out of.
+ *
+ * `top` clears the app's sticky header; the `calc` leaves the same gap beneath
+ * so the box never runs under the fold. */
 .agentFlowPreview {
-  height: 520px; border: 1px solid var(--color-border); border-radius: var(--radius-card);
+  position: sticky; top: 16px;
+  height: calc(100vh - 150px); min-height: 480px;
+  border: 1px solid var(--color-border); border-radius: var(--radius-card);
   background: var(--color-surface-sunken); overflow: hidden;
+}
+@media (max-width: 980px) {
+  /* One column: the chart is above the panels, so sticking it would cover them. */
+  .agentFlowPreview { position: static; height: 460px; }
 }
 /* @xyflow/react node content — plain divs styled here rather than in the
    library's own CSS, so a node reads as this app's card language, not the
-   library's default theme. */
+   library's default theme.
+ *
+ * -- Why the library's own node box is switched off ------------------------
+ * `@xyflow/react/dist/style.css` gives `.react-flow__node-default` a width of
+ * 150px plus its own border, padding, radius and background. Our content div
+ * sits INSIDE that and asks for at least 160px, so every node drew two
+ * rectangles with the inner one hanging out of the right-hand edge — the
+ * misalignment was not in our box, it was our box being wider than the one the
+ * library had already drawn around it. Neutralising the outer element is the
+ * fix rather than shrinking ours: a node should be one rectangle, sized by its
+ * text, and there is no version of two nested boxes here that is correct. */
+.react-flow__node-default {
+  width: auto; padding: 0; border: none; border-radius: 0;
+  background: transparent; box-shadow: none; font-size: inherit; color: inherit;
+}
 .flowNode {
   border-radius: var(--radius-sm); border: 1px solid var(--color-border-strong);
-  background: var(--color-surface); padding: 8px 12px; font-size: 12px; min-width: 160px;
-  box-shadow: var(--shadow-xs);
+  background: var(--color-surface); padding: 10px 14px; font-size: 12px; min-width: 170px;
+  box-shadow: var(--shadow-xs); text-align: left;
 }
-.flowNode b { display: block; font-size: 12.5px; color: var(--color-text-primary); }
-.flowNode span { color: var(--color-text-muted); font-size: 11px; }
+.flowNode b { display: block; font-size: 13px; color: var(--color-text-primary); line-height: 1.35; }
+.flowNode span { display: block; color: var(--color-text-muted); font-size: 11px; margin-top: 2px; }
 .flowNode.trigger { border-color: var(--color-primary); }
 .flowNode.condition { border-color: var(--color-amber); }
 .flowNode.action-true { border-color: var(--color-success); }

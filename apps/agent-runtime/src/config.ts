@@ -6,6 +6,7 @@
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import { smtpConfigSchema, smtpCredentialIssue } from '@sap/mailer';
 
 dotenv.config({ path: fileURLToPath(new URL('../../../.env', import.meta.url)), quiet: true });
 
@@ -38,7 +39,14 @@ const schema = z.object({
   AUTO_PAUSE_AFTER_FAILURES: z.coerce.number().int().positive().default(5),
 
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-});
+})
+  /**
+   * The email transport (ADR-035). Merged from @sap/mailer rather than
+   * restated, because apps/orchestrator reads the same variables for scheduled
+   * deliveries and a deployment sets them once — two hand-written copies of one
+   * config shape is the drift CODING_GUIDELINES §1 forbids.
+   */
+  .merge(smtpConfigSchema);
 
 const parsed = schema.safeParse(process.env);
 
@@ -47,6 +55,18 @@ if (!parsed.success) {
   for (const issue of parsed.error.issues) {
     console.error(`  ${issue.path.join('.')}: ${issue.message}`);
   }
+  process.exit(1);
+}
+
+/**
+ * The both-or-neither SMTP credential rule, checked at boot for the reason §10
+ * gives: a half-configured relay fails on the first scheduled send at 07:30,
+ * where nobody is watching, instead of here, where somebody is.
+ */
+const credentialIssue = smtpCredentialIssue(parsed.data);
+if (credentialIssue !== null) {
+  console.error('[agent-runtime] invalid configuration:');
+  console.error(`  ${credentialIssue}`);
   process.exit(1);
 }
 

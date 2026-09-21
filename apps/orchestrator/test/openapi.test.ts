@@ -27,6 +27,7 @@ import { reportRouter } from '../src/routes/report.js';
 import { customReportsRouter } from '../src/routes/custom-reports.js';
 import { settingsRouter } from '../src/routes/settings.js';
 import { aiRouter } from '../src/routes/ai.js';
+import { schedulesRouter } from '../src/routes/schedules.js';
 
 /**
  * Every router `server.ts` mounts. Listed rather than discovered: a new router
@@ -42,6 +43,7 @@ const ROUTERS: readonly Router[] = [
   customReportsRouter,
   settingsRouter,
   aiRouter,
+  schedulesRouter,
 ];
 
 /**

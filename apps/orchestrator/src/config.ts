@@ -13,6 +13,7 @@
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import { smtpConfigSchema, smtpCredentialIssue } from '@sap/mailer';
 
 /**
  * The repo-root `.env`, named explicitly.
@@ -171,7 +172,19 @@ const schema = z.object({
     .transform((v) => v !== 'false' && v !== '0'),
 
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-});
+})
+  /**
+   * The email transport (ADR-035) — scheduled report deliveries leave through
+   * it. Merged from @sap/mailer rather than restated here, because
+   * apps/agent-runtime reads the same variables for message action nodes and a
+   * deployment sets them once; two hand-written copies of one config shape is
+   * the drift CODING_GUIDELINES §1 forbids for a shared contract.
+   *
+   * Note what is NOT here: which schools may send on email. That is channel
+   * state in `school_channels`/`org_channels` (ADR-024/034), resolved per
+   * school, and no SMTP credential ever goes near it.
+   */
+  .merge(smtpConfigSchema);
 
 const parsed = schema.safeParse(process.env);
 
@@ -180,6 +193,19 @@ if (!parsed.success) {
   for (const issue of parsed.error.issues) {
     console.error(`  ${issue.path.join('.')}: ${issue.message}`);
   }
+  process.exit(1);
+}
+
+/**
+ * The both-or-neither SMTP credential rule (@sap/mailer), checked at boot for
+ * the reason §10 gives: a half-configured relay fails on the first scheduled
+ * delivery at 07:30, where nobody is watching, instead of here, where somebody
+ * is.
+ */
+const smtpIssue = smtpCredentialIssue(parsed.data);
+if (smtpIssue !== null) {
+  console.error('[orchestrator] invalid configuration:');
+  console.error(`  ${smtpIssue}`);
   process.exit(1);
 }
 

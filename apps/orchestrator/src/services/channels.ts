@@ -13,19 +13,25 @@
  * never widens them.
  *
  * -- What is NOT here ----------------------------------------------------------
- * Credentials. Connecting a channel for real means an SMTP host and password, a
- * DLT entity with a registered sender id, or a BSP account with approved
- * templates — each with its own vault, its own verification call and, per
- * docs/07 §4, its own multi-week provisioning programme. This module records
- * STATE. A "Connect" button that captured a password today would be writing a
- * secret into a table with no encryption behind it.
+ * Credentials — still, and that has not softened. What HAS changed (ADR-035) is
+ * where the line falls for email. Connecting SMS means a DLT entity with a
+ * registered sender id; WhatsApp means a BSP account with a verified WABA and
+ * approved templates; each has its own vault, its own verification call and,
+ * per docs/07 §4, its own multi-week provisioning programme. Email means a
+ * host, a port and a from-address — and those are DEPLOYMENT configuration
+ * (@sap/mailer, read from the environment), not a per-school secret. So this
+ * module still records STATE only: `provider = 'SMTP'` says which transport
+ * applies to a school, and says nothing about how to reach it. A "Connect"
+ * button that captured a password would still be writing a secret into a table
+ * with no encryption behind it, which is why the one below captures none.
  */
 
 import type { RowDataPacket } from 'mysql2';
 import { ERROR_CODES, PlatformError, type Role } from '@sap/shared';
-import { resolveChannel, type ChannelRowState } from '@sap/agent-graph';
+import { SMTP_PROVIDER, resolveChannel, type ChannelRowState } from '@sap/agent-graph';
 import { platformDb } from '../db/platform-db.js';
 import { auditSink } from '../db/audit.js';
+import { config } from '../config.js';
 
 export const CHANNELS = ['email', 'sms', 'whatsapp'] as const;
 export type ChannelId = (typeof CHANNELS)[number];
@@ -39,7 +45,14 @@ const CHANNEL_META: Record<ChannelId, { title: string; icon: string; requirement
   email: {
     title: 'Email (SMTP)',
     icon: '✉️',
-    requirement: 'Needs the school’s SMTP host and a from-address.',
+    /**
+     * Reworded 2026-09-21 (ADR-035). It used to read "needs the school's SMTP
+     * host and a from-address", which described a per-school credential this
+     * platform was never going to hold. The transport is the deployment's, so
+     * what an admin is actually deciding here is whether this school sends
+     * email at all.
+     */
+    requirement: 'Sends through the platform’s configured mail transport — no credentials needed here.',
   },
   sms: {
     title: 'SMS (DLT)',
@@ -160,9 +173,11 @@ export async function connectedChannelIds(orgId: string, schoolId: string): Prom
  * "flags dependent agents until reconnected or edited", so one click can stop a
  * school's fee reminders going out.
  *
- * There is deliberately no `connect` counterpart yet. Connecting requires
- * credentials this platform cannot yet hold safely, and a button that flipped
- * the flag without them would claim a school can send messages it cannot.
+ * `connectChannel` below is its counterpart — for email only, for the reason
+ * ADR-035 gives. SMS and WhatsApp still have none, and still for the original
+ * reason: connecting them requires credentials this platform cannot yet hold
+ * safely, and a button that flipped the flag without them would claim a school
+ * can send messages it cannot.
  */
 export async function disconnectChannel(args: {
   schoolId: string;
@@ -202,5 +217,88 @@ export async function disconnectChannel(args: {
     action: 'disconnected',
     school_id: args.schoolId,
     summary: `${args.channel} disconnected`,
+  });
+}
+
+/**
+ * Connect a channel.
+ *
+ * Email only (ADR-035). This writes STATE — `status = 'connected'`,
+ * `provider = 'SMTP'` — and captures nothing else, because there is nothing
+ * else to capture: where the transport is and how to authenticate to it is
+ * deployment configuration that the operator already holds, and which this
+ * platform must never copy into a school row.
+ *
+ * SMS and WhatsApp are refused here rather than silently ignored. A button that
+ * flipped the flag for WhatsApp would put a school one click from an agent that
+ * publishes, fires, and fails at every send — the flow lint would pass, because
+ * the lint reads exactly this state.
+ *
+ * Admin-only, like the AI key and like `disconnectChannel`: docs/08 §7 files
+ * "channel connect/disconnect" under the same config-change heading as key
+ * save/replace.
+ */
+export async function connectChannel(args: {
+  schoolId: string;
+  channel: ChannelId;
+  actorSub: string;
+  orgId: string;
+  role: Role;
+  correlationId: string;
+}): Promise<void> {
+  if (args.role !== 'ADMIN') {
+    throw new PlatformError({
+      code: ERROR_CODES.PERMISSION_DENIED,
+      message: 'Contact your admin to change messaging channels.',
+      details: { required_role: 'ADMIN' },
+      correlationId: args.correlationId,
+    });
+  }
+
+  if (args.channel !== 'email') {
+    throw new PlatformError({
+      code: ERROR_CODES.CHANNEL_NOT_CONNECTED,
+      message:
+        args.channel === 'sms'
+          ? 'SMS needs a DLT-registered entity and an approved sender ID before it can be connected.'
+          : 'WhatsApp needs a verified Business account and approved message templates before it can be connected.',
+      details: { channel: args.channel, blocked_by: 'docs/11 §2 items 4/8' },
+      correlationId: args.correlationId,
+    });
+  }
+
+  await platformDb.query(
+    `INSERT INTO school_channels (school_id, channel, status, provider, detail, updated_by)
+     VALUES (?, ?, 'connected', ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       status     = 'connected',
+       provider   = VALUES(provider),
+       detail     = VALUES(detail),
+       updated_by = VALUES(updated_by)`,
+    [
+      args.schoolId,
+      args.channel,
+      SMTP_PROVIDER,
+      /**
+       * The from-address, shown on the Settings row. ADR-035's trade-off is
+       * that one deployment-wide address sends for every school until per-org
+       * configuration exists, and it says that belongs on screen rather than
+       * left for an admin to read off a received header.
+       */
+      `Sends from ${config.SMTP_FROM}`,
+      args.actorSub,
+    ],
+  );
+
+  await auditSink.write({
+    kind: 'config.changed',
+    at: new Date().toISOString(),
+    actor_sub: args.actorSub,
+    org_id: args.orgId,
+    correlation_id: args.correlationId,
+    subject: 'channel',
+    action: 'connected',
+    school_id: args.schoolId,
+    summary: `${args.channel} connected (${SMTP_PROVIDER})`,
   });
 }

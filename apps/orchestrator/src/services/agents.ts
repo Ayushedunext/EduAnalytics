@@ -293,6 +293,14 @@ export async function publishAgent(args: {
   const lint = validateGraph(graph, {
     connectedChannels: connectedEverywhere ?? new Set(),
     approvedTemplateIds: new Set(SEED_APPROVED_TEMPLATE_IDS),
+    /**
+     * Stated rather than defaulted (ADR-036). No parent or guardian contact
+     * column exists in the catalogued schema (docs/11 §2 item 10), so no record
+     * this agent fetches can address anything — which is what makes an email
+     * node without its own `recipient` a publish-time error rather than a
+     * discovery at 10:31. The day item 10 is answered, this flips here, once.
+     */
+    recordCanSupplyContact: false,
   });
   if (!lint.ok) {
     throw new PlatformError({

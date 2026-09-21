@@ -29,6 +29,10 @@ import { customReportsRouter } from './routes/custom-reports.js';
 import { settingsRouter } from './routes/settings.js';
 import { aiRouter } from './routes/ai.js';
 import { agentsRouter } from './routes/agents.js';
+import { schedulesRouter } from './routes/schedules.js';
+import { startScheduleWorker } from './queue/schedule-queue.js';
+import { deliverSchedule, rearmSchedules } from './services/schedules.js';
+import { closeEmailTransport } from './services/email.js';
 import { closePdfRenderer } from './services/pdf.js';
 import { closeCache } from './cache/result-cache.js';
 
@@ -113,6 +117,7 @@ app.use(customReportsRouter);
 app.use(settingsRouter);
 app.use(aiRouter);
 app.use(agentsRouter);
+app.use(schedulesRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -121,6 +126,34 @@ await assertPlatformDbReachable();
 console.log('[orchestrator] platform DB reachable');
 
 await runPendingMigrations();
+
+/**
+ * Scheduled report delivery (ADR-037).
+ *
+ * Two things, in this order. The WORKER first, because a schedule re-armed
+ * before anything can consume it would queue deliveries nobody runs; then the
+ * re-arm, which replays `report_schedules` into BullMQ's repeatable jobs.
+ *
+ * The replay is not belt-and-braces. BullMQ keeps repeatable definitions in
+ * Redis, and this project's Redis runs with persistence deliberately off
+ * (docker-compose.yml), so the schedules do not survive a Redis restart. The
+ * platform DB is the source of truth; this is what makes that true in practice
+ * rather than only on paper.
+ */
+startScheduleWorker(async (job) => {
+  await deliverSchedule(job.scheduleId, job.trigger);
+}).on('failed', (job, err) => {
+  /**
+   * Reaching here means `deliverSchedule` itself threw, which it is written not
+   * to — every delivery outcome, including every failure, is a
+   * `schedule_deliveries` row. So this is an infrastructure fault (the DB went
+   * away mid-write), and it is logged rather than swallowed.
+   */
+  console.error(`[orchestrator] schedule job ${job?.id ?? '?'} failed:`, err);
+});
+
+const rearmed = await rearmSchedules();
+if (rearmed > 0) console.log(`[orchestrator] re-armed ${String(rearmed)} report schedule(s)`);
 
 const pruned = await pruneExpiredNonces();
 if (pruned > 0) console.log(`[orchestrator] pruned ${pruned} expired launch nonces`);
@@ -153,7 +186,7 @@ app.listen(config.ORCHESTRATOR_PORT, () => {
  */
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
-    void Promise.allSettled([closePdfRenderer(), closeCache()]).then(() => {
+    void Promise.allSettled([closePdfRenderer(), closeCache(), closeEmailTransport()]).then(() => {
       process.exit(0);
     });
   });

@@ -36,7 +36,7 @@ import {
   readAiConfig,
   saveApiKey,
 } from '../services/ai-config.js';
-import { disconnectChannel, isChannelId, readChannels } from '../services/channels.js';
+import { connectChannel, disconnectChannel, isChannelId, readChannels } from '../services/channels.js';
 
 export const settingsRouter = Router();
 
@@ -170,6 +170,59 @@ settingsRouter.post(
         correlationId: req.correlationId,
       });
       res.json({ ai: config, error: null });
+    })().catch(next);
+  },
+);
+
+/**
+ * POST /api/settings/channels/:schoolId/:channel/connect — email only (ADR-035).
+ *
+ * The mirror image of the disconnect below, down to the scope check, and
+ * deliberately not a general "set status" endpoint: the service refuses
+ * anything but email, so a route that grew a `status` parameter could never be
+ * used to mark WhatsApp connected. What the caller is choosing is whether this
+ * school sends email; it supplies no credential, because there is none to
+ * supply — the transport is the deployment's configuration.
+ */
+settingsRouter.post(
+  '/api/settings/channels/:schoolId/:channel/connect',
+  (req: Request, res: Response, next: NextFunction): void => {
+    void (async () => {
+      const session = requireSession(req);
+
+      const rawSchool = req.params['schoolId'];
+      const schoolId = typeof rawSchool === 'string' ? rawSchool : '';
+      const rawChannel = req.params['channel'];
+      const channel = typeof rawChannel === 'string' ? rawChannel : '';
+
+      if (!isChannelId(channel)) {
+        throw new PlatformError({
+          code: ERROR_CODES.VALIDATION_FAILED,
+          message: 'That is not a messaging channel this product supports.',
+          correlationId: req.correlationId,
+        });
+      }
+
+      /** Scope layer 1 (ADR-007) — same check, same reason, as the disconnect below. */
+      const scope = await scopeOf(session);
+      if (!scope.some((s) => s.school_id === schoolId)) {
+        throw new PlatformError({
+          code: ERROR_CODES.SCOPE_VIOLATION,
+          message: 'That school is not in your access scope.',
+          correlationId: req.correlationId,
+        });
+      }
+
+      await connectChannel({
+        schoolId,
+        channel,
+        actorSub: session.sub,
+        orgId: session.org_id,
+        role: session.role,
+        correlationId: req.correlationId,
+      });
+
+      res.json({ channels: await readChannels(session.org_id, scope) });
     })().catch(next);
   },
 );

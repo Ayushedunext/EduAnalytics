@@ -1,0 +1,25 @@
+{
+  "name": "@sap/mailer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The email transport (ADR-035): one narrow send interface over SMTP, configured per deployment, shared by apps/orchestrator's scheduled deliveries and apps/agent-runtime's message action nodes. Server-only — apps/web must never depend on this (CODING_GUIDELINES §1).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.16",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.17"
+  }
+}

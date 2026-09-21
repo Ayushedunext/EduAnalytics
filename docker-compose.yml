@@ -74,3 +74,81 @@ services:
       start_period: 2s
 
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Mailpit -- the local SMTP transport (ADR-035).
+  #
+  # WHY A CONTAINER AND NOT A REAL MAILBOX
+  #
+  # ADR-035 draws the credential boundary at the channel row: which schools may
+  # send on email is state in the platform DB, but HOW this deployment puts
+  # bytes on the wire is process configuration. Locally that configuration
+  # points here. Mailpit takes no credentials at all -- no user, no password, no
+  # TLS handshake to get wrong -- so developing and demonstrating the email path
+  # involves handling no secret whatsoever, which is the property that made it
+  # the right local transport rather than a real relay with a test account.
+  #
+  # It also CANNOT deliver. Every message it accepts stops in its own inbox at
+  # :8025 and nothing leaves the machine, so a mistyped address in a flow or a
+  # schedule reaches a web UI instead of a real person. That is worth more here
+  # than fidelity: the one failure mode a development mail path must not have is
+  # actually mailing somebody.
+  #
+  # WHAT A GREEN RUN AGAINST THIS PROVES, AND WHAT IT DOES NOT
+  #
+  # It proves the pipeline: guardrails, dedup, template resolution, branch
+  # selection, PDF render, attachment, MIME, and the message_log/schedule_
+  # deliveries row that records the attempt. It proves NOTHING about
+  # deliverability -- Mailpit accepts every address and every envelope, so SPF,
+  # DKIM alignment, bounce handling and spam placement stay entirely untested
+  # until a production transport is configured (ADR-035, trade-offs).
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: sap-mailpit
+
+    # PORTS 1026/8026, not Mailpit's own 1025/8025 -- and this is the Redis
+    # story above repeating itself, confirmed rather than anticipated. The first
+    # `docker compose up` with the defaults failed outright:
+    #
+    #   Bind for 0.0.0.0:1025 failed: port is already allocated
+    #
+    # The holder was `edutrack-mailpit`, the same neighbouring project whose
+    # Redis this file was written about, published on 0.0.0.0 and healthy for
+    # days. A bind conflict is the LUCKY version of that collision: it fails
+    # loudly. Had this service come up first, or had that one been bound to a
+    # different interface, the two would have shared an inbox -- and a shared
+    # inbox is worse than a shared cache, because the thing being mixed together
+    # is a Fee Defaulters PDF with children's names in it and somebody else's
+    # test mail. Binding away from the default means this project's transport
+    # cannot be silently substituted: if this container is down, SMTP_HOST
+    # refuses the connection and a delivery records "could not reach the mail
+    # server", which is a fact. A wrong-but-working mailbox is not.
+    #
+    # Loopback-only, both ports, for the reason the Redis note gives: what
+    # passes through here is school data, and 0.0.0.0 would publish the inbox,
+    # with no authentication in front of it, to every device on the network.
+    # (That is precisely how the neighbouring container is published. It is the
+    # example, not the model.)
+    ports:
+      - "127.0.0.1:1026:1025"   # SMTP -- what SMTP_HOST/SMTP_PORT point at
+      - "127.0.0.1:8026:8025"   # web inbox -- where a demo actually looks
+
+    environment:
+      # Held in memory, never a volume, for the same reason the Redis service
+      # runs with persistence off: a received message is school data, and a
+      # cache or a mailbox that outlives a restart is one more place for it to
+      # sit. `docker compose down` is the whole retention policy.
+      MP_MAX_MESSAGES: "500"
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+
+    healthcheck:
+      # Mailpit ships its own readiness endpoint; `up --wait` then means "the
+      # inbox answers", not "the process started".
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+    restart: unless-stopped

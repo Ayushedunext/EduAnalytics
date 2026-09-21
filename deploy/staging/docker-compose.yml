@@ -187,6 +187,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     environment:
@@ -229,12 +231,66 @@ services:
       # STAGING_ALLOW_CIDRS, because the container is not in those ranges.
       PRINT_URL: http://web:8080/print.html
       PDF_TIMEOUT_MS: ${PDF_TIMEOUT_MS:-30000}
+
+      # The email transport (ADR-035). Scheduled report deliveries leave through
+      # it; which SCHOOLS may send is separate channel state in the platform DB
+      # and is not configured here.
+      #
+      # Points at the mailpit service below, on the compose network, for the
+      # same reason PRINT_URL points at `web` rather than the public hostname:
+      # an internal dependency should not travel out through the proxy. No
+      # credentials, because mailpit authenticates nobody -- set SMTP_USER and
+      # SMTP_PASSWORD together, from the secret store, only if this is ever
+      # pointed at a relay that really delivers.
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_FROM: ${SMTP_FROM:-analytics@staging.invalid}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-School Analytics (staging)}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/HealthCheckAWS"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ── Mailpit: the email transport, and a wall around it ────────────────────
+  #
+  # Staging runs its own mail sink for the same reason local development does,
+  # and the reason is not convenience: a staging environment that can really
+  # deliver will eventually deliver. This database holds restored ERP extracts
+  # with real children's names in them, and a scheduled report or a test agent
+  # addressed to a real parent's address would be a live send from a test
+  # system. Mailpit accepts everything and delivers nothing outside itself, so
+  # the worst case is a message in a web inbox rather than in somebody's mail.
+  #
+  # NOT PUBLISHED. No `ports:` at all -- the orchestrator reaches it over the
+  # compose network, and the inbox is deliberately unreachable from outside.
+  # Mailpit has no authentication of its own, so publishing :8025 here would put
+  # every message this platform has ever sent, school data included, on the
+  # public internet behind nothing. To read it, tunnel:
+  #
+  #   ssh -L 8025:localhost:8025 <host>   then   docker compose exec ...
+  #   (or: docker compose port, from a shell on the host)
+  #
+  # Pointing SMTP_HOST at a real relay is a deliberate act, not a default. If
+  # that day comes, the credential belongs in the secret store beside the
+  # others -- never in this file and never in a channel table (ADR-024/035).
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    environment:
+      # In memory only, never a volume: a received message is school data, and a
+      # mailbox that outlives the stack is one more place for it to sit.
+      MP_MAX_MESSAGES: "500"
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   # ── Stands in for the ERP: authenticates, then signs a launch token ────────
   idp:

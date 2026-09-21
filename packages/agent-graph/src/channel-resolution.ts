@@ -53,3 +53,28 @@ export const SANDBOX_PROVIDER = 'Sandbox';
 export function isSandboxProvider(provider: string | null): boolean {
   return provider !== null && provider.trim().toLowerCase() === SANDBOX_PROVIDER.toLowerCase();
 }
+
+/**
+ * The provider name marking an email channel as served by this deployment's
+ * configured SMTP transport (ADR-035).
+ *
+ * -- Why a name in the row, and the connection details nowhere near it -------
+ * ADR-024 refused to let a channel row hold a credential, and that has not
+ * changed. What the row says is WHICH transport applies to this school's email;
+ * WHERE that transport is and how to authenticate to it is deployment
+ * configuration (`SMTP_HOST`/`SMTP_FROM`/…, @sap/mailer), read from the
+ * environment and in production from Secrets Manager. The two facts live apart
+ * because they answer to different owners: the school's admin decides whether
+ * this school sends email at all, and the operator decides how mail leaves the
+ * building.
+ *
+ * Unlike `SANDBOX_PROVIDER`, a channel resolved to this one really delivers —
+ * `message_log.provider_ref` carries the transport's own message id and is
+ * never `sandbox-`-prefixed, which is what keeps the audit trail able to tell a
+ * delivered message from a simulated one.
+ */
+export const SMTP_PROVIDER = 'SMTP';
+
+export function isSmtpProvider(provider: string | null): boolean {
+  return provider !== null && provider.trim().toLowerCase() === SMTP_PROVIDER.toLowerCase();
+}

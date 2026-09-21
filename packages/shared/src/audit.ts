@@ -134,6 +134,8 @@ export interface ConfigChangedEvent extends AuditBase {
     | 'ai_status'
     | 'channel'
     | 'agent'
+    /** A scheduled report delivery's create/edit/pause/resume/delete (ADR-037). */
+    | 'schedule'
     | 'report_visibility'
     | 'template';
   readonly action: string;

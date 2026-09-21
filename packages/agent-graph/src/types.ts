@@ -105,7 +105,7 @@ export const FETCH_SOURCES = {
      * applies to schema at large. This is a real, tracked gap, not an
      * oversight — see docs/11's 2026-09-15 entry.
      */
-    fields: ['student_id', 'student_name', 'class', 'section', 'parent_phone', 'consecutive_days'],
+    fields: ['student_id', 'student_name', 'class', 'section', 'parent_phone', 'parent_email', 'consecutive_days'],
   },
   fee_defaulters_30_60_90: {
     label: 'Fee defaulters (30/60/90 days)',
@@ -118,7 +118,7 @@ export const FETCH_SOURCES = {
      * logic, aggregated per student rather than per band. `parent_phone` is
      * null for the same reason as the absence source: docs/11 §2 item 10.
      */
-    fields: ['student_id', 'student_name', 'class', 'section', 'balance_amount', 'days_overdue', 'parent_phone'],
+    fields: ['student_id', 'student_name', 'class', 'section', 'balance_amount', 'days_overdue', 'parent_phone', 'parent_email'],
   },
   attendance_below_threshold: {
     label: 'Attendance % dropped below threshold',
@@ -131,6 +131,40 @@ export const FETCH_SOURCES = {
     fields: ['student_id', 'student_name', 'book_title', 'days_overdue', 'parent_phone'],
   },
 } as const;
+/**
+ * Which field of a record addresses a given channel.
+ *
+ * An address is not channel-agnostic and the send path must not pretend it is:
+ * an email needs an address and a WhatsApp message needs a number, and handing
+ * one to the other fails at the provider with an error that reads like an
+ * outage rather than like a mapping mistake. This mattered not at all while
+ * every contact field was null (docs/11 §2 item 10) and matters on the first
+ * day one is not, which is exactly when nobody will be looking for it — so it
+ * is written down now, ahead of the column existing.
+ */
+export const CONTACT_FIELD_BY_CHANNEL: Readonly<Record<ChannelId, string>> = {
+  email: 'parent_email',
+  sms: 'parent_phone',
+  whatsapp: 'parent_phone',
+};
+
+/**
+ * Fields every source DECLARES and no source can currently POPULATE.
+ *
+ * docs/11 §2 item 10: the catalogued schema has no parent or guardian contact
+ * column of any kind, so the evaluator sets these to null on every record
+ * rather than letting a query quietly omit them. They stay in `fields` because
+ * that list is the vocabulary a template is written against, and dropping them
+ * would make `{{parent.phone}}` look like a typo instead of a known gap.
+ *
+ * The builder reads this to warn where a message uses one — a message holding
+ * an unfilled variable is not sent at all, so a template written around
+ * `{{parent.phone}}` today is an agent that fails every time it runs.
+ *
+ * When item 10 is answered this list empties, and nothing else changes.
+ */
+export const UNPOPULATED_FIELDS: readonly string[] = ['parent_phone', 'parent_email'];
+
 export type FetchSourceId = keyof typeof FETCH_SOURCES;
 export function isFetchSourceId(value: string): value is FetchSourceId {
   return Object.prototype.hasOwnProperty.call(FETCH_SOURCES, value);
@@ -203,6 +237,29 @@ export const messageActionDataSchema = z.object({
    * template's own approved body is the source of truth at send time. */
   template_preview: z.string().min(1),
   also_notify_staff: z.boolean().default(false),
+  /**
+   * An address belonging to the FLOW rather than to the record (ADR-036).
+   *
+   * Resolution at send time is ordered — this field, then the record's contact
+   * field, then a structured failure — so a node that leaves it empty keeps
+   * exactly today's behaviour, and every such node starts using a real contact
+   * column the day one exists (docs/11 §2 item 10) with no edit and no
+   * migration.
+   *
+   * Two quite different things need it, and only one of them is a workaround.
+   * "Email the principal when attendance drops below 60%" is addressed to a
+   * person who is not in the result set at all, and no contact column
+   * discovered later would ever supply that address — docs/07 §2 has listed
+   * staff-addressed agents since before the schema gap was found. That the same
+   * field is also, today, the only way a parent-addressed email node reaches
+   * anyone is a consequence of item 10, not the reason this exists.
+   *
+   * Email only. `validate.ts` refuses it on sms/whatsapp at publish time,
+   * because addressing on those channels is inseparable from the DLT/WABA
+   * sender registration docs/11 §2 items 4/8 still gate, and a phone number
+   * typed into a builder would look like it had unblocked something it had not.
+   */
+  recipient: z.string().email('Enter a valid email address.').optional(),
 });
 export type MessageActionData = z.infer<typeof messageActionDataSchema>;
 

@@ -1,82 +1,98 @@
 /**
  * Schedule — "send me this report, on these days, at this time, here".
  *
- * The first slice of scheduled delivery (docs/11 phase 4, "scheduled PDF
- * emails"; docs/06 §7, "scheduled report emails re-run definitions and attach
- * PDFs"). This module is the SCHEDULE ITSELF: what a reader asked for. It does
- * not send anything, and nothing in `apps/web` could — a delivery is a server
- * job with a clock, a PDF render and a messaging channel behind it, none of
- * which live in a browser tab.
+ * Contract source: ADR-037 · docs/06 §7 · docs/10 §2 ("Schedule").
  *
- * -- What is stored, and what is not -------------------------------------------
- * A REQUEST, never a report: which report to re-run, which weekdays, what time,
- * which channel, and the address to deliver to. No figure, no row and no SQL is
- * kept here, so a schedule can never carry data out of the scope it was made
- * in — when delivery is built, the run resolves scope server-side from the
- * owner's session exactly as every other read does (Invariant 2). The school
- * ids recorded on a schedule are the ones the reader had SELECTED when they
- * saved it, kept so the row can say what it covers; they are a display fact,
- * and the server will still intersect them with the token's scope at send time.
+ * -- What changed, and why the file kept its shape ----------------------------
+ * This module used to keep schedules in `localStorage` and said so in its own
+ * doc: "the moment `/api/schedules` exists, the functions below become its
+ * client and the page does not change shape." That moment is ADR-037. The
+ * exported surface is deliberately the same — `useSchedules`,
+ * `describeSchedule`, `nextRun`, `WEEKDAYS` — so the screen above it reads the
+ * way it always did, and what moved is where the list LIVES: on the server,
+ * with a queue behind it, actually sending.
  *
- * -- Why localStorage, for now -------------------------------------------------
- * The same reasoning as My View and the theme choice (myView.ts,
- * theme/dashboardTheme.ts): there is no endpoint yet, and this slice is the
- * screen. The consequence is stated ON the screen rather than hidden — a
- * schedule saved here is a draft on this device, and nothing is being sent. The
- * moment `/api/schedules` exists, the functions below become its client and the
- * page does not change shape.
+ * Three things went away with the browser store, none of them silently:
  *
- * A storage that refuses simply yields an empty list — never an error the
- * reader can do nothing about.
+ *  1. **The worked examples.** They existed because the panel was otherwise an
+ *     empty box in front of a feature that could not run; a reader can now make
+ *     a real schedule and press Send now, so a fake row claiming to be a
+ *     schedule would be the only dishonest thing on the screen.
+ *  2. **The device caveat.** A schedule is no longer a draft on this machine.
+ *  3. **Client-side ids.** The server issues them, as the old comment predicted.
+ *
+ * -- What this module still does NOT decide -----------------------------------
+ * Scope. `school_ids` is sent as a REQUEST — what the reader had selected when
+ * they saved — and the orchestrator intersects it with the session's token
+ * scope before storing it (CODING_GUIDELINES §8, ADR-037). What comes back is
+ * the intersection, which is why `school_names` is read from the response
+ * rather than resolved here.
  */
 
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  createSchedule as apiCreate,
+  deleteSchedule as apiDelete,
+  listSchedules as apiList,
+  sendScheduleNow as apiSendNow,
+  setSchedulePaused as apiSetPaused,
+  updateSchedule as apiUpdate,
+  ApiFailure,
+  type ScheduleInput,
+  type ScheduleRow,
+} from './api/client';
 
 /**
  * The two channels a person asks to be reached on.
  *
  * SMS is a channel the platform has (services/channels.ts) and is deliberately
  * NOT one of them: a report is a PDF, and there is no SMS in which a PDF
- * arrives. The catalog of channels is the server's; this is the subset that can
- * carry this payload.
+ * arrives. WhatsApp IS one of them and is shown, and refused — docs/11 §2 items
+ * 4/8 gate a verified Business account and approved templates, and docs/10 §3's
+ * rule is that a locked option is named, not hidden.
  */
 export type DeliveryChannel = 'email' | 'whatsapp';
 
-/** 0 = Sunday … 6 = Saturday — `Date#getDay`'s numbering, not a private one. */
+/** 0 = Sunday … 6 = Saturday — `Date#getDay`'s numbering, which is also cron's. */
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-/** Which endpoint a delivery would re-run: a served dashboard, or the reader's own report. */
+/** Which catalog a delivery re-runs from: a served dashboard, or the reader's own report. */
 export type ScheduleReportKind = 'predefined' | 'custom';
+
+/** The last attempt, so a row says what happened and not only what is planned. */
+export interface ScheduleDelivery {
+  readonly at: string;
+  readonly status: string;
+  readonly error: string | null;
+  readonly trigger: 'schedule' | 'manual';
+}
 
 export interface ReportSchedule {
   readonly id: string;
   readonly reportId: string;
   readonly reportKind: ScheduleReportKind;
-  /** The report's title as it read when the schedule was made — a label, never the source of truth. */
+  /** The title as it read when the schedule was made — a label; the delivery re-reads the catalog's. */
   readonly reportTitle: string;
   /** At least one; a schedule with no day is not a schedule, so the form refuses it. */
   readonly days: readonly Weekday[];
   /** 24-hour `HH:MM`, in the school's own time — see `SCHEDULE_TIME_NOTE`. */
   readonly time: string;
   readonly channel: DeliveryChannel;
-  /** An email address or a phone number in international form, per `channel`. */
   readonly recipient: string;
-  /** The scope in force when it was saved (see the header). */
+  /** The scope it was SAVED with — re-validated at send time, so a label only. */
   readonly schoolIds: readonly string[];
+  readonly schoolNames: readonly string[];
   /** Paused schedules stay on the list, stated — a pause is not a delete. */
   readonly paused: boolean;
   readonly createdAt: string;
-  /**
-   * One of the worked examples the screen opens with (`EXAMPLE_SCHEDULES`),
-   * rather than something this reader set up. Marked on the row, because a list
-   * that mixes the two without saying which is which is a list that has put
-   * words in the reader's mouth.
-   */
-  readonly example?: boolean;
+  readonly lastDelivery: ScheduleDelivery | null;
 }
 
-/** A schedule as the form hands it over: everything except the identity, the clock and the badge. */
-export type NewSchedule = Omit<ReportSchedule, 'id' | 'createdAt' | 'paused' | 'example'>;
+/** A schedule as the form hands it over: everything except what the server owns. */
+export type NewSchedule = Omit<
+  ReportSchedule,
+  'id' | 'createdAt' | 'paused' | 'schoolNames' | 'lastDelivery'
+>;
 
 export const WEEKDAYS: readonly { readonly day: Weekday; readonly short: string; readonly long: string }[] = [
   { day: 1, short: 'Mon', long: 'Monday' },
@@ -88,136 +104,47 @@ export const WEEKDAYS: readonly { readonly day: Weekday; readonly short: string;
   { day: 0, short: 'Sun', long: 'Sunday' },
 ];
 
-const STORAGE_KEY = 'sap.dashboard.schedules.v1';
-
-/**
- * What the screen opens with, before anyone has set anything up.
- *
- * Three schedules a school would plausibly want, so the page shows what a
- * filled-in one looks like instead of an empty panel and a button. They are
- * badged "Example" on every row, they are NOT written to storage, and the first
- * time the reader changes anything — adds, edits, pauses or deletes — the list
- * becomes theirs and these are gone for good (`commit` writes the real list,
- * and `readStored` only offers these when nothing has ever been written).
- *
- * The report ids are real ones from the served catalog (services/home.ts), so
- * an example that is edited rather than deleted names a report that exists.
- */
-const EXAMPLE_SCHEDULES: readonly ReportSchedule[] = [
-  {
-    id: 'example-fee-collection',
-    reportId: 'fee-collection',
-    reportKind: 'predefined',
-    reportTitle: 'Fee Collection',
-    days: [1],
-    time: '09:00',
-    channel: 'email',
-    recipient: 'principal@school.edu',
-    schoolIds: [],
-    paused: false,
-    createdAt: '2026-09-08T00:00:00.000Z',
-    example: true,
-  },
-  {
-    id: 'example-attendance',
-    reportId: 'attendance-analytics',
-    reportKind: 'predefined',
-    reportTitle: 'Attendance Analytics',
-    days: [1, 2, 3, 4, 5],
-    time: '10:30',
-    channel: 'whatsapp',
-    recipient: '+91 98765 43210',
-    schoolIds: [],
-    paused: false,
-    createdAt: '2026-09-08T00:00:00.000Z',
-    example: true,
-  },
-  {
-    id: 'example-defaulters',
-    reportId: 'fee-defaulters',
-    reportKind: 'predefined',
-    reportTitle: 'Fee Defaulters',
-    days: [5],
-    time: '16:00',
-    channel: 'email',
-    recipient: 'accounts@school.edu',
-    schoolIds: [],
-    paused: true,
-    createdAt: '2026-09-08T00:00:00.000Z',
-    example: true,
-  },
-];
-
-let schedules: readonly ReportSchedule[] = readStored();
-const listeners = new Set<() => void>();
-
 function isWeekday(value: unknown): value is Weekday {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 6;
 }
 
-/** `HH:MM`, 24-hour. Anything else is a stored value this app did not write. */
-function isTime(value: unknown): value is string {
-  return typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+/**
+ * The server's row, as this app's shape.
+ *
+ * Re-validated rather than cast, for the reason every trust boundary in this
+ * codebase is (CODING_GUIDELINES §10): an over-the-wire object is a statement
+ * about syntax. A malformed `days` here would render a row claiming a day the
+ * server never stored.
+ */
+function fromRow(row: ScheduleRow): ReportSchedule {
+  return {
+    id: row.id,
+    reportId: row.report_id,
+    reportKind: row.report_kind === 'custom' ? 'custom' : 'predefined',
+    reportTitle: row.report_title,
+    days: sortDays(row.days.filter(isWeekday)),
+    time: row.time,
+    channel: row.channel === 'whatsapp' ? 'whatsapp' : 'email',
+    recipient: row.recipient,
+    schoolIds: row.school_ids,
+    schoolNames: row.school_names,
+    paused: row.paused,
+    createdAt: row.created_at,
+    lastDelivery: row.last_delivery,
+  };
 }
 
-function readStored(): readonly ReportSchedule[] {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    /* Nothing has ever been written: the examples, which are not stored. */
-    if (raw === null) return EXAMPLE_SCHEDULES;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    /**
-     * Every entry is re-validated, not trusted — `localStorage` is the one
-     * input to this app a person can edit by hand. A half-shaped entry is
-     * dropped rather than repaired: a schedule missing its days or its
-     * recipient is not a schedule that can be guessed at.
-     */
-    const out: ReportSchedule[] = [];
-    for (const entry of parsed as unknown[]) {
-      if (typeof entry !== 'object' || entry === null) continue;
-      const e = entry as Record<string, unknown>;
-      if (typeof e['id'] !== 'string' || typeof e['reportId'] !== 'string') continue;
-      const days = Array.isArray(e['days']) ? (e['days'] as unknown[]).filter(isWeekday) : [];
-      if (days.length === 0 || !isTime(e['time'])) continue;
-      if (e['channel'] !== 'email' && e['channel'] !== 'whatsapp') continue;
-      if (typeof e['recipient'] !== 'string' || e['recipient'] === '') continue;
-      out.push({
-        id: e['id'],
-        reportId: e['reportId'],
-        reportKind: e['reportKind'] === 'custom' ? 'custom' : 'predefined',
-        reportTitle: typeof e['reportTitle'] === 'string' ? e['reportTitle'] : 'Report',
-        days: sortDays(days),
-        time: e['time'],
-        channel: e['channel'],
-        recipient: e['recipient'],
-        schoolIds: Array.isArray(e['schoolIds'])
-          ? (e['schoolIds'] as unknown[]).filter((id): id is string => typeof id === 'string')
-          : [],
-        paused: e['paused'] === true,
-        createdAt: typeof e['createdAt'] === 'string' ? e['createdAt'] : new Date().toISOString(),
-        ...(e['example'] === true ? { example: true } : {}),
-      });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-function commit(next: readonly ReportSchedule[]): void {
-  schedules = next;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    /* Storage refused: the list lives for this session only. */
-  }
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
+function toInput(schedule: NewSchedule): ScheduleInput {
+  return {
+    report_id: schedule.reportId,
+    report_kind: schedule.reportKind,
+    report_title: schedule.reportTitle,
+    days: [...schedule.days],
+    time: schedule.time,
+    channel: schedule.channel,
+    recipient: schedule.recipient,
+    school_ids: [...schedule.schoolIds],
+  };
 }
 
 /** Monday-first, so a row reads the way the picker above it is laid out. */
@@ -228,68 +155,132 @@ function sortDays(days: readonly Weekday[]): Weekday[] {
 
 export interface Schedules {
   readonly all: readonly ReportSchedule[];
-  readonly add: (schedule: NewSchedule) => void;
+  /** First load only — an action in flight must not blank the list underneath it. */
+  readonly loading: boolean;
   /**
-   * The whole schedule is replaced — the form edits a copy and hands it back
-   * complete. Editing an EXAMPLE adopts it: it becomes the reader's own row and
-   * the remaining examples go, because the panel is now a real list.
+   * The last refusal, in the server's own words.
+   *
+   * Surfaced rather than swallowed because the refusals here are ones a reader
+   * can act on — "WhatsApp needs a verified Business account", "none of those
+   * schools are in your access" — and a save that quietly did nothing is the
+   * success-shaped failure CODING_GUIDELINES §10 calls the worst bug class.
    */
-  readonly update: (schedule: ReportSchedule) => void;
-  readonly setPaused: (id: string, paused: boolean) => void;
-  readonly remove: (id: string) => void;
-  /** "Not for us" — clears the worked examples without setting anything up. */
-  readonly dismissExamples: () => void;
-}
-
-/** The reader has acted, so the examples have served their purpose. */
-function withoutExamples(list: readonly ReportSchedule[]): readonly ReportSchedule[] {
-  return list.filter((s) => s.example !== true);
+  readonly error: string | null;
+  readonly add: (schedule: NewSchedule) => Promise<boolean>;
+  readonly update: (id: string, schedule: NewSchedule) => Promise<boolean>;
+  readonly setPaused: (id: string, paused: boolean) => Promise<void>;
+  readonly remove: (id: string) => Promise<void>;
+  /** Queues the same delivery a firing would run — the row's outcome follows. */
+  readonly sendNow: (id: string) => Promise<void>;
+  readonly refresh: () => Promise<void>;
 }
 
 export function useSchedules(): Schedules {
-  const current = useSyncExternalStore(subscribe, () => schedules, () => schedules);
+  const [all, setAll] = useState<readonly ReportSchedule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const add = useCallback((schedule: NewSchedule) => {
-    commit([
-      ...withoutExamples(schedules),
-      {
-        ...schedule,
-        days: sortDays(schedule.days),
+  const refresh = useCallback(async () => {
+    try {
+      const { schedules } = await apiList();
+      setAll(schedules.map(fromRow));
+      setError(null);
+    } catch (failure) {
+      setError(messageOf(failure, 'Your schedules could not be loaded.'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  /**
+   * Every mutation re-reads the list instead of patching it locally.
+   *
+   * The server decides things this app cannot — the scope it actually captured,
+   * the id, whether a schedule is still the reader's — so a locally-patched row
+   * would be this app's guess at what was stored. One extra round trip on an
+   * action a reader takes a few times a term is a cheap price for the list
+   * always being the server's answer.
+   */
+  const add = useCallback(
+    async (schedule: NewSchedule) => {
+      try {
+        await apiCreate(toInput(schedule));
+        await refresh();
+        return true;
+      } catch (failure) {
+        setError(messageOf(failure, 'That schedule could not be saved.'));
+        return false;
+      }
+    },
+    [refresh],
+  );
+
+  const update = useCallback(
+    async (id: string, schedule: NewSchedule) => {
+      try {
+        await apiUpdate(id, toInput(schedule));
+        await refresh();
+        return true;
+      } catch (failure) {
+        setError(messageOf(failure, 'That change could not be saved.'));
+        return false;
+      }
+    },
+    [refresh],
+  );
+
+  const setPaused = useCallback(
+    async (id: string, paused: boolean) => {
+      try {
+        await apiSetPaused(id, paused);
+        await refresh();
+      } catch (failure) {
+        setError(messageOf(failure, 'That schedule could not be changed.'));
+      }
+    },
+    [refresh],
+  );
+
+  const remove = useCallback(
+    async (id: string) => {
+      try {
+        await apiDelete(id);
+        await refresh();
+      } catch (failure) {
+        setError(messageOf(failure, 'That schedule could not be deleted.'));
+      }
+    },
+    [refresh],
+  );
+
+  const sendNow = useCallback(
+    async (id: string) => {
+      try {
+        await apiSendNow(id);
+        setError(null);
         /**
-         * `crypto.randomUUID` where it exists, a timestamp otherwise. The id is
-         * a local key and a claim about nothing — when the server owns
-         * schedules it will issue its own and this one goes away.
+         * Deliberately NOT refreshed here. The delivery is queued and renders a
+         * PDF; re-reading the list a millisecond later would show the PREVIOUS
+         * attempt beside a "Sending…" that had already been replaced. The row
+         * says it is sending, and the reader refreshes when they want the
+         * outcome.
          */
-        id: typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `s${String(Date.now())}`,
-        paused: false,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-  }, []);
+      } catch (failure) {
+        setError(messageOf(failure, 'That report could not be sent.'));
+      }
+    },
+    [],
+  );
 
-  const update = useCallback((schedule: ReportSchedule) => {
-    /* The edited row loses its Example badge in the map, so the filter that
-       follows drops the OTHER examples and keeps this one — see `update` above. */
-    commit(
-      withoutExamples(
-        schedules.map((s) =>
-          s.id === schedule.id ? { ...schedule, days: sortDays(schedule.days), example: false } : s,
-        ),
-      ),
-    );
-  }, []);
+  return { all, loading, error, add, update, setPaused, remove, sendNow, refresh };
+}
 
-  const setPaused = useCallback((id: string, paused: boolean) => {
-    commit(schedules.map((s) => (s.id === id ? { ...s, paused } : s)));
-  }, []);
-
-  const remove = useCallback((id: string) => {
-    commit(schedules.filter((s) => s.id !== id));
-  }, []);
-
-  const dismissExamples = useCallback(() => { commit(withoutExamples(schedules)); }, []);
-
-  return { all: current, add, update, setPaused, remove, dismissExamples };
+function messageOf(failure: unknown, fallback: string): string {
+  return failure instanceof ApiFailure ? failure.message : fallback;
 }
 
 /**
@@ -323,17 +314,18 @@ export function formatTime(time: string): string {
  * Stated wherever a time is entered. The delivery clock is the SCHOOL's, not
  * the reader's browser: a trust director sitting in another timezone who asks
  * for 7:30 means the school's 7:30, because that is when the school day the
- * report describes actually starts.
+ * report describes actually starts. The server stores `Asia/Kolkata` on the row
+ * and BullMQ repeats against it, so this note describes what really happens.
  */
 export const SCHEDULE_TIME_NOTE = 'School time (IST) — not your device’s timezone';
 
 /**
  * The next time a schedule would fire, as a sentence.
  *
- * Computed in the browser from the reader's clock, which is exactly why it is
- * phrased as "next: Monday 7:30 AM" and not as a timestamp: it is a reading of
- * the RULE, not a promise from a scheduler. When the server owns these, the
- * next run comes back with the row and this becomes a fallback.
+ * Computed in the browser from the reader's clock, which is why it is phrased
+ * as "next: Monday 7:30 AM" and not as a timestamp: it is a reading of the
+ * RULE, and the rule is kept in the school's timezone rather than this device's.
+ * For a reader sitting in IST — nearly all of them — the two agree.
  */
 export function nextRun(days: readonly Weekday[], time: string, from: Date = new Date()): string | null {
   if (days.length === 0) return null;
@@ -350,4 +342,29 @@ export function nextRun(days: readonly Weekday[], time: string, from: Date = new
     return `${when} at ${formatTime(time)}`;
   }
   return null;
+}
+
+/**
+ * What a delivery's recorded status means, in a sentence a school admin can act
+ * on.
+ *
+ * The stored values are the platform's (`schedule_deliveries.status`), and each
+ * skip names its own reason on purpose — "not sent" with no reason is the state
+ * nobody can do anything about. This is the one place they are translated, so
+ * the row, a future history panel and anything printed cannot word them
+ * differently.
+ */
+export function describeDelivery(delivery: ScheduleDelivery): { tone: 'ok' | 'warn' | 'bad'; text: string } {
+  switch (delivery.status) {
+    case 'sent':
+      return { tone: 'ok', text: delivery.trigger === 'manual' ? 'Sent (you asked for it)' : 'Sent' };
+    case 'skipped_paused':
+      return { tone: 'warn', text: 'Skipped — the schedule was paused' };
+    case 'skipped_scope_empty':
+      return { tone: 'warn', text: 'Skipped — no school on this schedule is available any more' };
+    case 'skipped_channel_not_connected':
+      return { tone: 'warn', text: 'Skipped — email is not connected for this school' };
+    default:
+      return { tone: 'bad', text: delivery.error ?? 'Failed' };
+  }
 }

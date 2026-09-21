@@ -24,7 +24,9 @@ import '@xyflow/react/dist/style.css';
 import {
   AGENT_TEMPLATES,
   FETCH_SOURCES,
+  UNPOPULATED_FIELDS,
   findTemplate,
+  slotsNotCoveredBy,
   type AgentEdge,
   type AgentGraph,
   type AgentNode,
@@ -33,7 +35,14 @@ import {
 
 /** Fields that identify or contact a record, never a sensible condition to
  * branch on — every other field a fetch source declares is a candidate. */
-const NON_CONDITION_FIELDS = new Set(['student_id', 'student_name', 'class', 'section', 'parent_phone']);
+const NON_CONDITION_FIELDS = new Set([
+  'student_id',
+  'student_name',
+  'class',
+  'section',
+  'parent_phone',
+  'parent_email',
+]);
 import {
   ApiFailure,
   createAgent,
@@ -491,6 +500,9 @@ function AgentBuilder({
   const nodeById = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph.nodes]);
   const trigger = nodeById.get('trigger');
   const fetchNode = nodeById.get('fetch');
+  /** What this agent's data source can actually put in a message. */
+  const sourceFields: readonly string[] =
+    fetchNode?.data.kind === 'fetch_records' ? FETCH_SOURCES[fetchNode.data.source].fields : [];
   const condition = nodeById.get('condition');
   const actionTrue = nodeById.get('action-true');
   const actionFalse = nodeById.get('action-false');
@@ -540,7 +552,16 @@ function AgentBuilder({
             style={{ minWidth: 120 }}
             aria-label="Agent name"
           />
-          <span className={`pill ${agent.status === 'active' ? 'live' : agent.status === 'paused' ? 'warning' : 'soon'}`}>
+          <span
+            className={`agentStatusPill ${agent.status === 'active' ? 'is-live' : agent.status === 'paused' ? 'is-paused' : 'is-draft'}`}
+            title={
+              agent.status === 'active'
+                ? 'Running on its schedule'
+                : agent.status === 'paused'
+                  ? 'Published, but not running'
+                  : 'Not published — nothing is sent'
+            }
+          >
             {agent.status === 'active' ? 'Live' : agent.status === 'paused' ? 'Paused' : 'Draft'}
           </span>
           <span className="text-[11px] text-[var(--color-text-muted)]">
@@ -668,6 +689,7 @@ function AgentBuilder({
                   title="Action — ✓ TRUE branch"
                   variant="branchTrue"
                   data={actionTrue.data}
+                  fields={sourceFields}
                   onChange={(patch) => { updateNode('action-true', patch); }}
                 />
               )}
@@ -676,6 +698,7 @@ function AgentBuilder({
                   title="Action — ✗ FALSE branch"
                   variant="branchFalse"
                   data={actionFalse.data}
+                  fields={sourceFields}
                   onChange={(patch) => { updateNode('action-false', patch); }}
                 />
               )}
@@ -699,14 +722,46 @@ function BranchPanel({
   title,
   variant,
   data,
+  fields,
   onChange,
 }: {
   title: string;
   variant: 'branchTrue' | 'branchFalse';
   data: Extract<AgentNode['data'], { kind: 'message' }>;
+  /** The fields this agent's data source declares — the message's vocabulary. */
+  fields: readonly string[];
   onChange: (patch: Partial<Extract<AgentNode['data'], { kind: 'message' }>>) => void;
 }): ReactElement {
   const CHANNELS: readonly ChannelId[] = ['whatsapp', 'sms', 'email'];
+
+  /**
+   * Warnings are COMPUTED FROM THE MESSAGE, not printed permanently.
+   *
+   * This panel used to carry two standing blocks of amber text explaining that
+   * `{{parent.phone}}` resolves to nothing and that template approval is a
+   * follow-up. Both were true and neither was written for the person reading
+   * them: a school admin got two paragraphs of internal doc references on every
+   * agent they ever opened, including the ones with nothing wrong. Permanent
+   * warnings are also the ones people learn to skip, which is the opposite of
+   * what a warning is for.
+   *
+   * What replaces them is narrower and louder: a warning appears only when THIS
+   * message actually has the problem, and it names the variable. The fact worth
+   * keeping — a message holding an unfilled variable is not sent at all — is now
+   * said at the moment it applies.
+   */
+  const usable = fields.filter((f) => !UNPOPULATED_FIELDS.includes(f));
+  const broken = slotsNotCoveredBy(data.template_preview, usable);
+
+  /**
+   * A message written for parents, addressed to one fixed inbox. Not an error —
+   * it is exactly what a staff-addressed flow wants — but it is the difference
+   * between "every parent hears about their own child" and "one person receives
+   * four thousand messages", and nothing else on screen says which one is
+   * configured.
+   */
+  const parentFacing = /\{\{\s*parent\./.test(data.template_preview);
+  const fixedAddress = data.recipient !== undefined && data.recipient !== '';
 
   function toggleChannel(channel: ChannelId): void {
     const has = data.channels.includes(channel);
@@ -736,20 +791,65 @@ function BranchPanel({
           Also notify class teacher
         </label>
       </div>
+      {/* Addressing (ADR-036). Only for an email primary: the server's flow lint
+          refuses this field on SMS/WhatsApp, because addressing those channels
+          is inseparable from the DLT/WABA sender registration that is not set
+          up (docs/11 §2 items 4/8) — a phone number typed here would look like
+          it had unblocked a channel that still cannot send. */}
+      {data.primary === 'email' && (
+        <div className="agentField">
+          <label>Send to</label>
+          <input
+            type="email"
+            placeholder="principal@school.edu"
+            value={data.recipient ?? ''}
+            onChange={(e) => {
+              const value = e.target.value.trim();
+              onChange(value === '' ? { recipient: undefined } : { recipient: value });
+            }}
+          />
+          <p className="agentHint">
+            Where this email goes. The school data has no parent contact details yet, so an email
+            needs an address here — one message per matched student is sent to it, and every school
+            this agent runs for uses the same address.
+          </p>
+        </div>
+      )}
       <div className="agentField">
         <label>Message</label>
         <textarea
           value={data.template_preview}
           onChange={(e) => { onChange({ template_preview: e.target.value }); }}
         />
+        {/* The real vocabulary of THIS agent's source, not a generic list — a
+            variable offered here always works, which is the only way a hint
+            like this is worth reading. Derived from the source rather than
+            typed out, because the hand-written list this replaced had drifted
+            and was offering a variable no source had.
+
+            These are the flat column names. The ready-made messages are written
+            in the docs' grouped style ({{student.name}}) and keep working, so
+            the note below stops that reading as a mismatch. */}
         <p className="agentHint">
-          Variables: {'{{student.name}}'} · {'{{student.class}}'} · {'{{parent.phone}}'} · {'{{days}}'} ·{' '}
-          {'{{fee.balance_amount}}'} · {'{{fee.days_overdue}}'} — availability depends on this agent's data source.
+          You can use: {usable.map((f) => `{{${f}}}`).join(' · ')} — the shorter names already in
+          the message above work too.
         </p>
-        <p className="agentHint warn">
-          Sends on approved templates only (ADR-024) — editing this text here changes the preview; the
-          approved template library that gates real sending is a follow-up (docs/11 §2).
-        </p>
+
+        {broken.length > 0 && (
+          <p className="agentHint warn">
+            {broken.map((b) => `{{${b}}}`).join(', ')} {broken.length === 1 ? 'has' : 'have'} no
+            information behind {broken.length === 1 ? 'it' : 'them'} yet, so this message will not be
+            sent — it will be recorded as failed instead of going out with a blank in it. Remove{' '}
+            {broken.length === 1 ? 'it' : 'them'} or pick something from the list above.
+          </p>
+        )}
+
+        {parentFacing && fixedAddress && (
+          <p className="agentHint warn">
+            This message is written to a parent, but it will all go to {data.recipient} — one copy per
+            student, to that one address. Clear "Send to" if it should reach each parent instead.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -764,7 +864,19 @@ function FlowPreview({ graph }: { graph: AgentGraph }): ReactElement {
   const edges: Edge[] = useMemo(() => graph.edges.map(toFlowEdge), [graph.edges]);
 
   return (
-    <ReactFlow nodes={nodes} edges={edges} fitView nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} proOptions={{ hideAttribution: true }}>
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      fitView
+      /* Breathing room, and a ceiling on how far a small flow is blown up. The
+         container is now viewport-tall, and without a maxZoom a four-node graph
+         fills it with enormous boxes — readable is the goal, not large. */
+      fitViewOptions={{ padding: 0.18, maxZoom: 1.15 }}
+      nodesDraggable={false}
+      nodesConnectable={false}
+      elementsSelectable={false}
+      proOptions={{ hideAttribution: true }}
+    >
       <Background gap={16} />
     </ReactFlow>
   );

@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   disableAi,
+  connectChannel,
   disconnectChannel,
   getSettings,
   saveAiKey,
@@ -469,6 +470,8 @@ function ChannelsPanel({
   onChanged: (channels: ChannelRow[]) => void;
 }): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
+  /** The server's refusal, shown rather than swallowed (CODING_GUIDELINES §10). */
+  const [error, setError] = useState<string | null>(null);
 
   const bySchool = new Map<string, ChannelRow[]>();
   for (const row of settings.channels) {
@@ -482,6 +485,26 @@ function ChannelsPanel({
     setBusy(id);
     disconnectChannel(row.school_id, row.channel)
       .then((result) => { onChanged(result.channels); })
+      .finally(() => { setBusy(null); });
+  }
+
+  /**
+   * Connect — email only (ADR-035).
+   *
+   * No form, because there is nothing to fill in: the mail transport is the
+   * deployment's configuration, and what an admin is deciding here is whether
+   * this school sends email at all. The server refuses SMS and WhatsApp, so the
+   * buttons for those stay inert below rather than relying on this handler.
+   */
+  function connect(row: ChannelRow): void {
+    const id = `${row.school_id}:${row.channel}`;
+    setBusy(id);
+    setError(null);
+    connectChannel(row.school_id, row.channel)
+      .then((result) => { onChanged(result.channels); })
+      .catch((failure: unknown) => {
+        setError(failure instanceof Error ? failure.message : 'That channel could not be connected.');
+      })
       .finally(() => { setBusy(null); });
   }
 
@@ -524,17 +547,33 @@ function ChannelsPanel({
                 <>
                   <span className="pill nodata">Not connected</span>
                   {/**
-                   * Deliberately inert. Connecting needs an SMTP password, a
-                   * DLT registration or a BSP token, and the platform has
-                   * nowhere safe to put those yet — a button that flipped the
-                   * flag without them would tell a school it can send messages
-                   * it cannot. Shown rather than hidden, per "locked ≠ hidden".
+                   * Email connects for real (ADR-035): the transport is this
+                   * deployment's configuration, so there is no credential to
+                   * capture and nothing to put somewhere unsafe.
+                   *
+                   * SMS and WhatsApp stay inert, for the reason this button
+                   * always carried — connecting them needs a DLT registration
+                   * or a BSP token, and the platform has nowhere safe to put
+                   * those yet. A button that flipped the flag without them
+                   * would tell a school it can send messages it cannot. Shown
+                   * rather than hidden, per "locked ≠ hidden".
                    */}
                   <button
                     type="button"
-                    className="btn btnGhost"
-                    disabled
-                    title="Provider credential storage is not built yet (docs/07 §4)"
+                    className={row.channel === 'email' ? 'btn btnOutline' : 'btn btnGhost'}
+                    disabled={
+                      row.channel !== 'email' ||
+                      !canConfigure ||
+                      busy === `${row.school_id}:${row.channel}`
+                    }
+                    title={
+                      row.channel !== 'email'
+                        ? 'Needs provider registration that is not set up yet (docs/11 §2 items 4/8)'
+                        : canConfigure
+                          ? undefined
+                          : 'Only an admin can change messaging channels'
+                    }
+                    onClick={() => { connect(row); }}
                   >
                     Connect
                   </button>
@@ -545,10 +584,14 @@ function ChannelsPanel({
         </div>
       ))}
 
+      {error !== null && <div className="notice mt-3">{error}</div>}
+
       <p className="settingsFine">
-        SMS and WhatsApp can only send templates approved by the DLT registrar and the WhatsApp
-        Business provider — that approval is a per-school process, not a setting on this page
-        (ADR-024).
+        Email sends through the platform's own configured mail transport, so connecting it here
+        needs no credentials — what you are choosing is whether this school sends email at all
+        (ADR-035). SMS and WhatsApp can only send templates approved by the DLT registrar and the
+        WhatsApp Business provider — that approval is a per-school process, not a setting on this
+        page (ADR-024), which is why their buttons are inert.
       </p>
     </section>
   );
